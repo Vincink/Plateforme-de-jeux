@@ -37,17 +37,21 @@ export async function POST(request: Request) {
       );
     }
 
-    let gameId = fallbackGame.id;
+    let gameId = fallbackGame?.id ?? "";
 
-    const { data: dbGame } = await supabase
-      .from("games")
-      .select("id")
-      .eq("slug", fallbackGame.slug)
-      .maybeSingle();
+    if (fallbackGame?.slug) {
+      const { data: dbGame } = await supabase
+        .from("games")
+        .select("id")
+        .eq("slug", fallbackGame.slug)
+        .maybeSingle();
 
-    if (dbGame?.id) {
-      gameId = dbGame.id;
-    } else {
+      if (dbGame?.id) {
+        gameId = dbGame.id;
+      }
+    }
+
+    if (!gameId) {
       const { data: anyGame } = await supabase
         .from("games")
         .select("id")
