@@ -26,6 +26,7 @@ export interface GameCategory {
 export interface Game {
   id: string;
   category_id: string | null;
+  categorySlug?: GameCategorySlug | null;
   slug: GameSlug;
   title: string;
   tagline: string | null;
