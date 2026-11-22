@@ -404,6 +404,12 @@ export default function TvQuizScreenPage() {
             <div className="space-y-3 overflow-y-auto pr-1">
               {rankedPlayers.map(({ player, points, answerData, rank }) => {
                 const pColor = getUniquePlayerColor(player.id, players);
+                const playerExtra = player as SessionPlayer & {
+                  avatarId?: string;
+                  avatar_id?: string;
+                };
+                const avatarDisplay =
+                  playerExtra.avatarId || playerExtra.avatar_id || "🎮";
                 const choiceStyle = answerData?.letter
                   ? CHOICE_META.find((c) => c.letter === answerData.letter)
                   : undefined;
@@ -426,7 +432,7 @@ export default function TvQuizScreenPage() {
                         }}
                         className="w-10 h-10 rounded-2xl border-2 flex items-center justify-center text-xl shrink-0"
                       >
-                        {player.avatar_id || "🎮"}
+                        {avatarDisplay}
                       </span>
 
                       <div className="min-w-0">
