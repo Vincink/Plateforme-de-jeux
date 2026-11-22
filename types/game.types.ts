@@ -68,6 +68,7 @@ export interface SessionPlayer {
   session_id: string;
   nickname: string;
   avatar: string | null;
+  avatarId?: string | null;
   is_host: boolean;
   is_connected: boolean;
   joined_at?: string;
