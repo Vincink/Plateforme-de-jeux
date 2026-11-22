@@ -1,20 +1,30 @@
 import type { GameCategory, GameDefinition } from "@/types/game.types";
 
+export type CatalogGame = GameDefinition & {
+  categoryId?: string | null;
+  minPlayers?: number;
+  maxPlayers?: number | null;
+  estimatedMinutes?: number;
+  coverUrl?: string;
+  isActive?: boolean;
+};
+
 export const GAME_CATEGORIES: GameCategory[] = [
-  { id: "cat-all", slug: "multijoueur", name: "Tous les jeux", sortOrder: 0 },
-  { id: "cat-quiz", slug: "quiz", name: "Quiz", sortOrder: 1 },
-  { id: "cat-blind", slug: "blind-test", name: "Blind Test", sortOrder: 2 },
-  { id: "cat-speed", slug: "rapidite", name: "Jeux de rapidité", sortOrder: 3 },
-  { id: "cat-culture", slug: "culture-generale", name: "Culture générale", sortOrder: 4 },
-  { id: "cat-draw", slug: "dessin-devinettes", name: "Dessin et devinettes", sortOrder: 5 },
-  { id: "cat-est", slug: "estimation", name: "Jeux d'estimation", sortOrder: 6 },
-  { id: "cat-skill", slug: "adresse", name: "Jeux d'adresse", sortOrder: 7 },
-  { id: "cat-party", slug: "ambiance", name: "Jeux d'ambiance", sortOrder: 8 },
+  { id: "cat-all", slug: "multijoueur", name: "Tous les jeux", sort_order: 0 },
+  { id: "cat-quiz", slug: "quiz", name: "Quiz", sort_order: 1 },
+  { id: "cat-blind", slug: "blind-test", name: "Blind Test", sort_order: 2 },
+  { id: "cat-speed", slug: "rapidite", name: "Jeux de rapidité", sort_order: 3 },
+  { id: "cat-culture", slug: "culture-generale", name: "Culture générale", sort_order: 4 },
+  { id: "cat-draw", slug: "dessin-devinettes", name: "Dessin et devinettes", sort_order: 5 },
+  { id: "cat-est", slug: "estimation", name: "Jeux d'estimation", sort_order: 6 },
+  { id: "cat-skill", slug: "adresse", name: "Jeux d'adresse", sort_order: 7 },
+  { id: "cat-party", slug: "ambiance", name: "Jeux d'ambiance", sort_order: 8 },
 ];
 
-export const INITIAL_GAMES: GameDefinition[] = [
+export const INITIAL_GAMES: CatalogGame[] = [
   {
     id: "game-quiz",
+    category_id: "cat-quiz",
     categoryId: "cat-quiz",
     categorySlug: "quiz",
     slug: "quiz",
@@ -30,13 +40,17 @@ export const INITIAL_GAMES: GameDefinition[] = [
     coverUrl:
       "https://images.unsplash.com/photo-1516321497487-e288fb19713f?auto=format&fit=crop&w=1200&q=80",
     accentColor: "#0A84FF",
+    min_players: 1,
+    max_players: 16,
     minPlayers: 1,
     maxPlayers: 16,
     estimatedMinutes: 10,
+    is_active: true,
     isActive: true,
   },
   {
     id: "game-blind-test",
+    category_id: "cat-blind",
     categoryId: "cat-blind",
     categorySlug: "blind-test",
     slug: "blind-test",
@@ -52,13 +66,17 @@ export const INITIAL_GAMES: GameDefinition[] = [
     coverUrl:
       "https://images.unsplash.com/photo-1511671782779-c97d3d27a1d4?auto=format&fit=crop&w=1200&q=80",
     accentColor: "#FF375F",
+    min_players: 2,
+    max_players: 16,
     minPlayers: 2,
     maxPlayers: 16,
     estimatedMinutes: 12,
+    is_active: true,
     isActive: true,
   },
   {
     id: "game-speed-rush",
+    category_id: "cat-speed",
     categoryId: "cat-speed",
     categorySlug: "rapidite",
     slug: "speed-rush",
@@ -74,9 +92,12 @@ export const INITIAL_GAMES: GameDefinition[] = [
     coverUrl:
       "https://images.unsplash.com/photo-1550745165-9bc0b252726f?auto=format&fit=crop&w=1200&q=80",
     accentColor: "#30D158",
+    min_players: 1,
+    max_players: 16,
     minPlayers: 1,
     maxPlayers: 16,
     estimatedMinutes: 8,
+    is_active: true,
     isActive: true,
   },
 ];
