@@ -4,9 +4,8 @@ import React, { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { QrCode, Users, Tv, Sparkles } from "lucide-react";
 import { clientEnv } from "@/lib/env";
-import { INITIAL_GAMES } from "@/features/games/catalog";
+import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
 import type {
-  Game,
   GameSession,
   PlayerScore,
   SessionPlayer,
@@ -51,7 +50,7 @@ export default function TvSessionPage() {
     },
   ]);
 
-  const currentGame: Game | undefined = useMemo(() => {
+  const currentGame: CatalogGame | undefined = useMemo(() => {
     const slug = (session?.state?.gameSlug as string | undefined) ?? "quiz";
     return INITIAL_GAMES.find((g) => g.slug === slug) ?? INITIAL_GAMES[0];
   }, [session]);
