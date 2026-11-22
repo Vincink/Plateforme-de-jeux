@@ -8,6 +8,7 @@ import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import type { GameSession, SessionPlayer } from "@/types/game.types";
 
 const GRAND_QUIZ_GAME_ID = "6e6d7179-3a56-4d94-9c1d-19ac06a34aaa";
+const HUB_ALIAS_CODE = "SALON";
 
 export default function TvLobbyPage() {
   const params = useParams<{ sessionCode: string }>();
@@ -30,6 +31,16 @@ export default function TvLobbyPage() {
 
     let isMounted = true;
     let playersChannel: ReturnType<typeof supabase.channel> | null = null;
+    const isSalonHub = sessionCode === HUB_ALIAS_CODE;
+
+    const redirectToActiveSessionIfNeeded = (candidate: GameSession | null) => {
+      if (!isMounted || !isSalonHub || !candidate?.code) return;
+      const targetCode = candidate.code.toUpperCase();
+      if (!targetCode || targetCode === HUB_ALIAS_CODE) return;
+      if (candidate.status === "lobby" || candidate.status === "playing") {
+        router.replace(`/tv/${targetCode}`);
+      }
+    };
 
     const loadGameTitle = async (gameId: string | null | undefined) => {
       if (!gameId) {
@@ -83,6 +94,24 @@ export default function TvLobbyPage() {
     };
 
     const fetchInitial = async () => {
+      if (isSalonHub) {
+        const { data: activeList } = await supabase
+          .from("game_sessions")
+          .select("*")
+          .in("status", ["lobby", "playing"])
+          .order("updated_at", { ascending: false })
+          .limit(5);
+
+        const activeSession = ((activeList as GameSession[] | null) ?? []).find(
+          (row) => (row.code ?? "").toUpperCase() !== HUB_ALIAS_CODE
+        );
+
+        if (activeSession) {
+          redirectToActiveSessionIfNeeded(activeSession);
+          return;
+        }
+      }
+
       const { data } = await supabase
         .from("game_sessions")
         .select("*")
@@ -100,25 +129,48 @@ export default function TvLobbyPage() {
 
     void fetchInitial();
 
-    const sessionChannel = supabase
-      .channel(`tv-lobby-session-${sessionCode}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "game_sessions",
-          filter: `code=eq.${sessionCode}`,
-        },
-        (payload) => {
-          if (!isMounted) return;
-          const nextRow = payload.new as GameSession | null;
-          if (!nextRow) return;
-          setSession(nextRow);
-          bindSession(nextRow);
-        }
-      )
-      .subscribe();
+    const sessionChannel = isSalonHub
+      ? supabase
+          .channel("tv-hub-all-sessions")
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "game_sessions",
+            },
+            (payload) => {
+              if (!isMounted) return;
+              const nextRow = payload.new as GameSession | null;
+              if (!nextRow) return;
+              if ((nextRow.code ?? "").toUpperCase() === HUB_ALIAS_CODE) {
+                setSession(nextRow);
+                bindSession(nextRow);
+                return;
+              }
+              redirectToActiveSessionIfNeeded(nextRow);
+            }
+          )
+          .subscribe()
+      : supabase
+          .channel(`tv-lobby-session-${sessionCode}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "game_sessions",
+              filter: `code=eq.${sessionCode}`,
+            },
+            (payload) => {
+              if (!isMounted) return;
+              const nextRow = payload.new as GameSession | null;
+              if (!nextRow) return;
+              setSession(nextRow);
+              bindSession(nextRow);
+            }
+          )
+          .subscribe();
 
     return () => {
       isMounted = false;
@@ -127,10 +179,10 @@ export default function TvLobbyPage() {
         void supabase.removeChannel(playersChannel);
       }
     };
-  }, [supabase, sessionCode]);
+  }, [supabase, sessionCode, router]);
 
   useEffect(() => {
-    if (!session || !sessionCode) return;
+    if (!session || !sessionCode || sessionCode === HUB_ALIAS_CODE) return;
 
     const isQuizPlaying =
       session.game_id === GRAND_QUIZ_GAME_ID && session.status === "playing";
