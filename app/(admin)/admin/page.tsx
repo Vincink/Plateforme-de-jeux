@@ -30,6 +30,13 @@ import type {
   SessionStatus,
 } from "@/types/game.types";
 
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function isUuid(value: string | undefined | null): value is string {
+  return typeof value === "string" && UUID_REGEX.test(value);
+}
+
 function generateSessionCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
@@ -80,20 +87,40 @@ export default function AdminConsolePage() {
   const selectedGame =
     games.find((g) => g.id === selectedGameId) ?? games[0];
 
+  const resolveValidGameUuid = (candidateGame?: CatalogGame | null): string | null => {
+    if (isUuid(candidateGame?.id)) {
+      return candidateGame.id;
+    }
+    const matchedBySlug = candidateGame?.slug
+      ? games.find((g) => g.slug === candidateGame.slug && isUuid(g.id))
+      : undefined;
+    if (matchedBySlug?.id) {
+      return matchedBySlug.id;
+    }
+    const firstDbUuidGame = games.find((g) => isUuid(g.id));
+    return firstDbUuidGame?.id ?? null;
+  };
+
   const syncSessionToDb = async (params: {
     id?: string | null;
     code: string;
-    gameId: string;
+    game?: CatalogGame | null;
     nextStatus: SessionStatus;
     round: number;
     qrVisible: boolean;
   }) => {
     if (!supabase) {
-      setDbError("Client Supabase non initialisé (vérifier NEXT_PUBLIC_SUPABASE_URL / ANON_KEY).");
+      setDbError(
+        "Client Supabase non initialisé (vérifier NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)."
+      );
       return;
     }
-    if (!params.gameId) {
-      setDbError("Aucun jeu sélectionné.");
+
+    const validGameUuid = resolveValidGameUuid(params.game ?? selectedGame);
+    if (!validGameUuid) {
+      setDbError(
+        "Aucun UUID de jeu trouvé dans la table 'games' Supabase. Vérifie les permissions SELECT sur 'games'."
+      );
       return;
     }
 
@@ -102,7 +129,7 @@ export default function AdminConsolePage() {
     try {
       const payload = {
         code: params.code,
-        game_id: params.gameId,
+        game_id: validGameUuid,
         status: params.nextStatus,
         current_round: params.round,
         show_qr: params.qrVisible,
@@ -137,8 +164,6 @@ export default function AdminConsolePage() {
     let cancelled = false;
 
     const init = async () => {
-      let resolvedGameId = INITIAL_GAMES[0]?.id ?? "";
-
       if (!supabase) {
         if (!cancelled) {
           setDbError("Client Supabase non initialisé.");
@@ -152,27 +177,30 @@ export default function AdminConsolePage() {
         .order("title", { ascending: true });
 
       if (gamesError && !cancelled) {
-        setDbError(`Lecture jeux impossible : ${gamesError.message}`);
+        setDbError(`Lecture table 'games' impossible : ${gamesError.message}`);
       }
 
-      const rows = Array.isArray(dbGames) ? dbGames : [];
-      const firstId = rows.length > 0 ? rows[0]?.id : undefined;
+      const rows = Array.isArray(dbGames) ? (dbGames as CatalogGame[]) : [];
+      const validRows = rows.filter((g) => isUuid(g.id));
 
-      if (!cancelled && rows.length > 0 && typeof firstId === "string" && firstId.length > 0) {
-        setGames(rows as CatalogGame[]);
-        resolvedGameId = firstId;
-        setSelectedGameId(firstId);
-      }
-
-      if (!cancelled && resolvedGameId) {
-        await syncSessionToDb({
-          id: null,
-          code: sessionCode,
-          gameId: resolvedGameId,
-          nextStatus: status,
-          round: currentRound,
-          qrVisible: showQrOnTv,
-        });
+      if (!cancelled && validRows.length > 0) {
+        setGames(validRows);
+        const firstUuidGame = validRows[0];
+        if (firstUuidGame) {
+          setSelectedGameId(firstUuidGame.id);
+          await syncSessionToDb({
+            id: null,
+            code: sessionCode,
+            game: firstUuidGame,
+            nextStatus: status,
+            round: currentRound,
+            qrVisible: showQrOnTv,
+          });
+        }
+      } else if (!cancelled) {
+        setDbError(
+          "Impossible de récupérer les UUID des jeux depuis Supabase ('public.games')."
+        );
       }
     };
 
@@ -184,9 +212,6 @@ export default function AdminConsolePage() {
   }, []);
 
   const handleCreateNewSession = async () => {
-    const targetGameId = selectedGame?.id ?? selectedGameId;
-    if (!targetGameId) return;
-
     const newCode = generateSessionCode();
     setSessionId(null);
     setSessionCode(newCode);
@@ -197,7 +222,7 @@ export default function AdminConsolePage() {
     await syncSessionToDb({
       id: null,
       code: newCode,
-      gameId: targetGameId,
+      game: selectedGame,
       nextStatus: "lobby",
       round: 1,
       qrVisible: showQrOnTv,
@@ -205,12 +230,11 @@ export default function AdminConsolePage() {
   };
 
   const handleStatusChange = async (nextStatus: SessionStatus) => {
-    const targetGameId = selectedGame?.id ?? selectedGameId;
     setStatus(nextStatus);
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
-      gameId: targetGameId,
+      game: selectedGame,
       nextStatus,
       round: currentRound,
       qrVisible: showQrOnTv,
@@ -218,13 +242,12 @@ export default function AdminConsolePage() {
   };
 
   const handleNextRound = async () => {
-    const targetGameId = selectedGame?.id ?? selectedGameId;
     const nextRound = currentRound + 1;
     setCurrentRound(nextRound);
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
-      gameId: targetGameId,
+      game: selectedGame,
       nextStatus: status,
       round: nextRound,
       qrVisible: showQrOnTv,
@@ -232,13 +255,12 @@ export default function AdminConsolePage() {
   };
 
   const handleToggleQr = async () => {
-    const targetGameId = selectedGame?.id ?? selectedGameId;
     const nextQr = !showQrOnTv;
     setShowQrOnTv(nextQr);
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
-      gameId: targetGameId,
+      game: selectedGame,
       nextStatus: status,
       round: currentRound,
       qrVisible: nextQr,
@@ -246,11 +268,12 @@ export default function AdminConsolePage() {
   };
 
   const handleSelectGame = async (gameId: string) => {
+    const targetGame = games.find((g) => g.id === gameId) ?? null;
     setSelectedGameId(gameId);
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
-      gameId,
+      game: targetGame,
       nextStatus: status,
       round: currentRound,
       qrVisible: showQrOnTv,
