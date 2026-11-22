@@ -208,17 +208,47 @@ export function getPlayerColorBySlot(slotIndex: number): PlayerColorTheme {
   return PLAYER_COLORS.at(safeIndex) ?? FALLBACK_COLOR;
 }
 
-export function getUniquePlayerColor(
-  playerId?: string | null,
-  _roster: ReadonlyArray<{ id: string }> = []
+export function getNextAvailableColorIndex(
+  existingPlayers: ReadonlyArray<{ color_index?: number | null }>
+): number {
+  const used = new Set<number>();
+  for (const p of existingPlayers) {
+    if (typeof p.color_index === "number" && Number.isFinite(p.color_index)) {
+      used.add(((p.color_index % PLAYER_COLORS.length) + PLAYER_COLORS.length) % PLAYER_COLORS.length);
+    }
+  }
+  for (let i = 0; i < PLAYER_COLORS.length; i++) {
+    if (!used.has(i)) return i;
+  }
+  return existingPlayers.length % PLAYER_COLORS.length;
+}
+
+export function resolvePlayerColor(
+  player?: { id?: string | null; color_index?: number | null } | null,
+  fallbackId?: string | null
 ): PlayerColorTheme {
-  void _roster;
-  if (!playerId || playerId.trim().length === 0) {
-    return FALLBACK_COLOR;
+  if (
+    typeof player?.color_index === "number" &&
+    Number.isFinite(player.color_index)
+  ) {
+    return getPlayerColorBySlot(player.color_index);
   }
 
-  const index = hashString(playerId.trim()) % PLAYER_COLORS.length;
-  return PLAYER_COLORS.at(index) ?? FALLBACK_COLOR;
+  const effectiveId = player?.id ?? fallbackId;
+  if (effectiveId && effectiveId.trim().length > 0) {
+    const index = hashString(effectiveId.trim()) % PLAYER_COLORS.length;
+    return PLAYER_COLORS.at(index) ?? FALLBACK_COLOR;
+  }
+
+  return FALLBACK_COLOR;
+}
+
+export function getUniquePlayerColor(
+  playerId?: string | null,
+  roster: ReadonlyArray<{ id: string; color_index?: number | null }> = []
+): PlayerColorTheme {
+  const matched = playerId ? roster.find((p) => p.id === playerId) : undefined;
+  return resolvePlayerColor(matched, playerId);
 }
 
 export function getPlayerColor(
@@ -226,7 +256,7 @@ export function getPlayerColor(
   fallbackIndex = 0
 ): PlayerColorTheme {
   if (playerId && playerId.trim().length > 0) {
-    return getUniquePlayerColor(playerId);
+    return resolvePlayerColor({ id: playerId }, playerId);
   }
   return getPlayerColorBySlot(fallbackIndex);
 }
