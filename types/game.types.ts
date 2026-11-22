@@ -1,99 +1,88 @@
-export type GameSlug = "quiz" | "blind-test" | "speed-rush";
-
-export type QuestionType = "mcq" | "audio_buzzer" | "speed_mcq";
-
-export type SessionStatus =
-  | "lobby"
-  | "starting"
-  | "playing"
-  | "paused"
-  | "round_result"
-  | "finished";
-
-export type GameCategorySlug =
-  | "blind-test"
+export type GameSlug =
   | "quiz"
-  | "culture-generale"
-  | "dessin-devinettes"
-  | "rapidite"
-  | "estimation"
-  | "adresse"
-  | "multijoueur"
-  | "ambiance";
+  | "blind-test"
+  | "petit-bac"
+  | "zero-a-1000"
+  | "manille"
+  | (string & {});
 
 export interface GameCategory {
   id: string;
-  slug: GameCategorySlug;
+  slug: string;
   name: string;
-  sortOrder: number;
+  sort_order: number;
+  created_at?: string;
 }
 
-export interface GameDefinition {
+export interface Game {
   id: string;
-  categoryId: string;
-  categorySlug: GameCategorySlug;
+  category_id: string | null;
   slug: GameSlug;
   title: string;
-  tagline: string;
-  description: string;
-  rules: string[];
-  coverUrl: string;
-  accentColor: string;
-  minPlayers: number;
-  maxPlayers: number;
-  estimatedMinutes: number;
-  isActive: boolean;
+  tagline: string | null;
+  description: string | null;
+  min_players: number;
+  max_players: number | null;
+  rules: Record<string, unknown> | null;
+  is_active: boolean;
+  created_at?: string;
 }
 
-export interface PlayerSession {
+export interface GameContent {
   id: string;
-  sessionId: string;
-  nickname: string;
-  avatarId: string;
-  playerToken: string;
-  isConnected: boolean;
-  isKicked: boolean;
-  joinedAt: string;
+  game_id: string;
+  category: string | null;
+  question: string;
+  options: string[] | null;
+  answer: string;
+  media_url: string | null;
+  difficulty: "easy" | "medium" | "hard" | string | null;
+  metadata: Record<string, unknown> | null;
+  created_at?: string;
 }
 
-export interface PlayerScore {
-  sessionId: string;
-  playerId: string;
-  nickname: string;
-  avatarId: string;
-  totalScore: number;
-  streak: number;
-}
-
-export interface SessionSettings {
-  sessionId: string;
-  questionDurationSec: number;
-  totalQuestions: number;
-  allowLateJoin: boolean;
-  soundEffects: boolean;
-}
+export type SessionStatus = "lobby" | "playing" | "paused" | "finished";
 
 export interface GameSession {
   id: string;
+  game_id: string;
   code: string;
-  gameId: string;
-  gameSlug: GameSlug;
-  hostId: string | null;
   status: SessionStatus;
-  currentQuestionIndex: number;
-  questionStartedAt: string | null;
-  buzzerLockedByPlayerId: string | null;
-  showQr: boolean;
-  createdAt: string;
+  current_round: number;
+  state: Record<string, unknown> | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
-export interface PublicQuestion {
+export interface SessionPlayer {
   id: string;
-  gameId: string;
-  type: QuestionType;
-  prompt: string;
-  mediaUrl: string | null;
-  options: string[];
-  pointsBase: number;
-  timeLimitSec: number;
+  session_id: string;
+  nickname: string;
+  avatar: string | null;
+  is_host: boolean;
+  is_connected: boolean;
+  joined_at?: string;
+}
+
+export interface PlayerScore {
+  id: string;
+  session_id: string;
+  player_id: string;
+  score: number;
+  updated_at?: string;
+}
+
+export interface PlayerAction {
+  id: string;
+  session_id: string;
+  player_id: string;
+  action_type: string;
+  payload: Record<string, unknown> | null;
+  created_at?: string;
+}
+
+export interface PlayerChoice {
+  playerId: string;
+  value: string;
+  timestamp?: number;
 }
