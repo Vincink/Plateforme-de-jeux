@@ -28,6 +28,8 @@ export interface Game {
   created_at?: string;
 }
 
+export type GameDefinition = Game;
+
 export interface GameContent {
   id: string;
   game_id: string;
@@ -63,6 +65,8 @@ export interface SessionPlayer {
   is_connected: boolean;
   joined_at?: string;
 }
+
+export type PlayerSession = SessionPlayer;
 
 export interface PlayerScore {
   id: string;
