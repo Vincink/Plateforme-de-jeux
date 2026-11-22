@@ -511,111 +511,9 @@ export default function AdminConsolePage() {
           </div>
         ) : null}
 
-        {/* Layout 2 colonnes : Joueurs à gauche, Contrôles & Jeux à droite */}
+        {/* Layout 2 colonnes : Contrôles & Jeux à gauche, Joueurs à droite */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Colonne gauche : Joueurs connectés & Modération */}
-          <aside className="lg:col-span-5 xl:col-span-4 lg:sticky lg:top-6 bg-white/5 border border-white/10 rounded-3xl p-5 space-y-4">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <Users className="w-5 h-5 text-emerald-400" />
-                <span>Joueurs ({players.length})</span>
-              </h2>
-              <div className="flex items-center gap-1.5 text-xs text-neutral-400">
-                <Trophy className="w-4 h-4 text-amber-400" />
-                <span>Scores</span>
-              </div>
-            </div>
-
-            {players.length === 0 ? (
-              <p className="text-sm text-neutral-400 py-8 text-center">
-                Aucun joueur connecté pour le moment.
-              </p>
-            ) : (
-              <div className="space-y-3 max-h-[calc(100vh-14rem)] overflow-y-auto pr-1">
-                {players.map((player) => {
-                  const color = getUniquePlayerColor(player.id, players);
-
-                  return (
-                    <div
-                      key={player.id}
-                      style={{
-                        backgroundColor: color.bgHex,
-                        borderColor: color.borderHex,
-                        color: color.textHex,
-                      }}
-                      className="p-3.5 rounded-2xl border-2 space-y-3 shadow-md"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <span
-                            style={{ backgroundColor: color.badgeBgHex }}
-                            className="text-xl flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
-                          >
-                            {player.avatar ?? "🎮"}
-                          </span>
-                          <div className="min-w-0">
-                            <div className="font-bold truncate flex items-center gap-1.5">
-                              <span className="truncate">{player.nickname}</span>
-                              {player.is_host && (
-                                <span
-                                  style={{ backgroundColor: color.badgeBgHex }}
-                                  className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full shrink-0"
-                                >
-                                  Hôte
-                                </span>
-                              )}
-                            </div>
-                            <span className="text-[11px] opacity-90 block">
-                              {player.is_connected ? "Connecté" : "Déconnecté"}
-                            </span>
-                          </div>
-                        </div>
-
-                        {!player.is_host && (
-                          <button
-                            type="button"
-                            onClick={() => void handleKickPlayer(player.id)}
-                            className="px-2.5 py-1.5 rounded-xl bg-black/35 hover:bg-black/55 text-xs font-bold transition shrink-0"
-                          >
-                            Exclure
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Contrôles score -1 / +1 */}
-                      <div
-                        style={{ backgroundColor: color.badgeBgHex }}
-                        className="flex items-center justify-between rounded-xl px-3 py-1.5"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => void handleAdjustScore(player.id, -1)}
-                          className="px-3 py-1 rounded-lg bg-black/30 hover:bg-black/50 text-sm font-black transition"
-                        >
-                          -1
-                        </button>
-                        <span
-                          style={{ color: color.scoreHex }}
-                          className="font-mono text-lg font-black text-center"
-                        >
-                          {getPlayerScoreValue(player.id)} pts
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => void handleAdjustScore(player.id, 1)}
-                          className="px-3 py-1 rounded-lg bg-black/30 hover:bg-black/50 text-sm font-black transition"
-                        >
-                          +1
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </aside>
-
-          {/* Colonne droite : État de partie, Écran TV et Catalogue */}
+          {/* Colonne gauche : État de partie, Écran TV et Catalogue */}
           <main className="lg:col-span-7 xl:col-span-8 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {/* État de la partie */}
@@ -794,6 +692,108 @@ export default function AdminConsolePage() {
               </div>
             </section>
           </main>
+
+          {/* Colonne droite : Joueurs connectés & Modération */}
+          <aside className="lg:col-span-5 xl:col-span-4 lg:sticky lg:top-6 bg-white/5 border border-white/10 rounded-3xl p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                <Users className="w-5 h-5 text-emerald-400" />
+                <span>Joueurs ({players.length})</span>
+              </h2>
+              <div className="flex items-center gap-1.5 text-xs text-neutral-400">
+                <Trophy className="w-4 h-4 text-amber-400" />
+                <span>Scores</span>
+              </div>
+            </div>
+
+            {players.length === 0 ? (
+              <p className="text-sm text-neutral-400 py-8 text-center">
+                Aucun joueur connecté pour le moment.
+              </p>
+            ) : (
+              <div className="space-y-3 max-h-[calc(100vh-14rem)] overflow-y-auto pr-1">
+                {players.map((player) => {
+                  const color = getUniquePlayerColor(player.id, players);
+
+                  return (
+                    <div
+                      key={player.id}
+                      style={{
+                        backgroundColor: color.bgHex,
+                        borderColor: color.borderHex,
+                        color: color.textHex,
+                      }}
+                      className="p-3.5 rounded-2xl border-2 space-y-3 shadow-md"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span
+                            style={{ backgroundColor: color.badgeBgHex }}
+                            className="text-xl flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+                          >
+                            {player.avatar ?? "🎮"}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="font-bold truncate flex items-center gap-1.5">
+                              <span className="truncate">{player.nickname}</span>
+                              {player.is_host && (
+                                <span
+                                  style={{ backgroundColor: color.badgeBgHex }}
+                                  className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full shrink-0"
+                                >
+                                  Hôte
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[11px] opacity-90 block">
+                              {player.is_connected ? "Connecté" : "Déconnecté"}
+                            </span>
+                          </div>
+                        </div>
+
+                        {!player.is_host && (
+                          <button
+                            type="button"
+                            onClick={() => void handleKickPlayer(player.id)}
+                            className="px-2.5 py-1.5 rounded-xl bg-black/35 hover:bg-black/55 text-xs font-bold transition shrink-0"
+                          >
+                            Exclure
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Contrôles score -1 / +1 */}
+                      <div
+                        style={{ backgroundColor: color.badgeBgHex }}
+                        className="flex items-center justify-between rounded-xl px-3 py-1.5"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => void handleAdjustScore(player.id, -1)}
+                          className="px-3 py-1 rounded-lg bg-black/30 hover:bg-black/50 text-sm font-black transition"
+                        >
+                          -1
+                        </button>
+                        <span
+                          style={{ color: color.scoreHex }}
+                          className="font-mono text-lg font-black text-center"
+                        >
+                          {getPlayerScoreValue(player.id)} pts
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void handleAdjustScore(player.id, 1)}
+                          className="px-3 py-1 rounded-lg bg-black/30 hover:bg-black/50 text-sm font-black transition"
+                        >
+                          +1
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </aside>
         </div>
       </div>
     </div>
