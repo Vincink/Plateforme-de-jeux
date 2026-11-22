@@ -135,10 +135,11 @@ export default function AdminConsolePage() {
           .select("id, slug, title, tagline, min_players, max_players, is_active")
           .order("title", { ascending: true });
 
-        if (!cancelled && dbGames && dbGames.length > 0) {
+        const firstGame = dbGames?.[0];
+        if (!cancelled && dbGames && dbGames.length > 0 && firstGame?.id) {
           setGames(dbGames as CatalogGame[]);
-          resolvedGameId = dbGames[0].id;
-          setSelectedGameId(dbGames[0].id);
+          resolvedGameId = firstGame.id;
+          setSelectedGameId(firstGame.id);
         }
       }
 
