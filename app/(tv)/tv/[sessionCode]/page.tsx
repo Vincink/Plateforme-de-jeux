@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { QrCode, Users, Tv, Sparkles } from "lucide-react";
 import { QRCodeCanvas } from "qrcode.react";
@@ -30,6 +30,7 @@ export default function TvSessionPage() {
   const params = useParams<{ sessionCode: string }>();
   const sessionCode = (params?.sessionCode ?? "").toUpperCase();
 
+  const [origin, setOrigin] = useState<string>("");
   const [session, setSession] = useState<GameSession | null>(null);
   const [players, setPlayers] = useState<SessionPlayer[]>([
     {
@@ -51,12 +52,21 @@ export default function TvSessionPage() {
     },
   ]);
 
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      setOrigin(window.location.origin);
+    }
+  }, []);
+
   const currentGame: CatalogGame | undefined = useMemo(() => {
     const slug = (session?.state?.gameSlug as string | undefined) ?? "quiz";
     return INITIAL_GAMES.find((g) => g.slug === slug) ?? INITIAL_GAMES[0];
   }, [session]);
 
-  const joinUrl = `${clientEnv.appUrl}/play/${sessionCode}`;
+  const baseUrl = clientEnv.appUrl?.trim() || origin;
+  const joinUrl = baseUrl
+    ? `${baseUrl.replace(/\/$/, "")}/play/${sessionCode}`
+    : `/play/${sessionCode}`;
 
   const cycleDemoStatus = () => {
     const order: SessionStatus[] = [
@@ -101,7 +111,7 @@ export default function TvSessionPage() {
       />
 
       {/* Top TV Bar */}
-      <header className="relative z-10 flex flex-wrap items-center justify-between gap-6 border-b border-white/10 pb-5">
+      <header className="relative z-10 flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-5">
         <div className="flex items-center gap-4">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10">
             <Tv className="h-6 w-6 text-amber-400" />
@@ -111,22 +121,22 @@ export default function TvSessionPage() {
               <Sparkles className="h-3.5 w-3.5 text-amber-400" />
               <span>Écran Principal TV</span>
             </div>
-            <h1 className="text-3xl font-bold tracking-tight md:text-4xl">
+            <h1 className="text-2xl font-bold tracking-tight md:text-4xl">
               {currentGame?.title ?? "Plateforme de Jeux"}
             </h1>
           </div>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex shrink-0 items-center gap-3">
           <button
             type="button"
             onClick={cycleDemoStatus}
-            className="rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-wider transition hover:bg-white/15"
+            className="whitespace-nowrap rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-wider transition hover:bg-white/15"
           >
             État : {status} • Manche {round}
           </button>
 
-          <div className="rounded-2xl border border-white/15 bg-white/5 px-5 py-2.5 text-right">
+          <div className="shrink-0 rounded-2xl border border-white/15 bg-white/5 px-5 py-2.5 text-right">
             <div className="text-[11px] uppercase tracking-widest text-neutral-400">
               Code Salle
             </div>
