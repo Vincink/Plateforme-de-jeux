@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { canAcceptBuzz, evaluatePlayerChoice } from "@/features/games/engine";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
-import type { GameContent, GameSession, GameSlug, PlayerAction } from "@/types/game.types";
+import type {
+  GameContent,
+  GameSession,
+  GameSlug,
+  PlayerAction,
+} from "@/types/game.types";
 
 export async function POST(
   request: Request,
@@ -82,22 +87,23 @@ export async function POST(
 
     const gameSlug = (gameRow?.slug ?? "quiz") as GameSlug;
 
-    const mappedSession: GameSession = {
+    const mappedSession = {
       id: sessionRow.id,
       code: sessionRow.code,
-      gameId: sessionRow.game_id,
-      hostUserId: sessionRow.host_user_id,
+      game_id: sessionRow.game_id,
+      host_user_id: sessionRow.host_user_id,
       status: sessionRow.status,
-      currentRound: sessionRow.current_round,
-      totalRounds: sessionRow.total_rounds,
-      roundStartedAt: sessionRow.round_started_at,
-      roundDurationSec: sessionRow.round_duration_sec,
-      showQr: sessionRow.show_qr,
-      activeContentId: sessionRow.active_content_id,
-      buzzedPlayerId: sessionRow.buzzed_player_id,
-      createdAt: sessionRow.created_at,
-      updatedAt: sessionRow.updated_at,
-    };
+      current_round: sessionRow.current_round,
+      total_rounds: sessionRow.total_rounds,
+      round_started_at: sessionRow.round_started_at,
+      round_duration_sec: sessionRow.round_duration_sec,
+      show_qr: sessionRow.show_qr,
+      active_content_id: sessionRow.active_content_id,
+      buzzed_player_id: sessionRow.buzzed_player_id,
+      state: sessionRow.state ?? null,
+      created_at: sessionRow.created_at,
+      updated_at: sessionRow.updated_at,
+    } as GameSession;
 
     const { data: existingScoreRow } = await supabase
       .from("player_scores")
@@ -124,21 +130,20 @@ export async function POST(
       const mappedBuzzActions: PlayerAction[] = (roundActionsRows ?? []).map(
         (a) => ({
           id: a.id,
-          sessionId: a.session_id,
-          playerId: a.player_id,
-          roundNumber: a.round_number,
-          actionType: a.action_type,
+          session_id: a.session_id,
+          player_id: a.player_id,
+          action_type: a.action_type,
           payload: a.payload ?? {},
-          responseTimeMs: a.response_time_ms,
-          isCorrect: a.is_correct,
-          pointsAwarded: a.points_awarded,
-          createdAt: a.created_at,
+          created_at: a.created_at,
         })
       );
 
       if (!canAcceptBuzz(mappedSession, mappedBuzzActions)) {
         return NextResponse.json(
-          { message: "Le buzzer est déjà verrouillé ou la manche n'est pas active." },
+          {
+            message:
+              "Le buzzer est déjà verrouillé ou la manche n'est pas active.",
+          },
           { status: 409 }
         );
       }
@@ -161,20 +166,20 @@ export async function POST(
           .maybeSingle();
 
         if (contentRow) {
-          const content: GameContent = {
+          const content = {
             id: contentRow.id,
-            gameId: contentRow.game_id,
-            roundType: contentRow.round_type,
-            prompt: contentRow.prompt,
+            game_id: contentRow.game_id,
+            category: contentRow.category ?? contentRow.round_type ?? null,
+            question: contentRow.question ?? contentRow.prompt ?? "",
             options: Array.isArray(contentRow.options)
               ? contentRow.options
               : [],
-            correctAnswer: contentRow.correct_answer ?? "",
-            mediaUrl: contentRow.media_url,
-            timeLimitSec: contentRow.time_limit_sec ?? 15,
-            points: contentRow.points ?? 1000,
-            sortOrder: contentRow.sort_order ?? 0,
-          };
+            answer: contentRow.answer ?? contentRow.correct_answer ?? "",
+            media_url: contentRow.media_url ?? null,
+            difficulty: contentRow.difficulty ?? null,
+            metadata: contentRow.metadata ?? null,
+            created_at: contentRow.created_at,
+          } as GameContent;
 
           const evaluated = evaluatePlayerChoice({
             gameSlug,
@@ -210,7 +215,8 @@ export async function POST(
       return NextResponse.json(
         {
           message:
-            actionErr?.message ?? "Impossible d'enregistrer l'action du joueur.",
+            actionErr?.message ??
+            "Impossible d'enregistrer l'action du joueur.",
         },
         { status: 500 }
       );
