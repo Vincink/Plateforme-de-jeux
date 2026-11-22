@@ -64,30 +64,15 @@ export default function AdminConsolePage() {
   const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
   const [dbError, setDbError] = useState<string | null>(null);
 
-  const [players, setPlayers] = useState<PlayerSession[]>([
-    {
-      id: "p-1",
-      session_id: "demo",
-      nickname: "Vincent",
-      avatar: "🎮",
-      is_host: true,
-      is_connected: true,
-    },
-  ]);
-
-  const [scores, setScores] = useState<PlayerScore[]>([
-    {
-      id: "s-1",
-      session_id: "demo",
-      player_id: "p-1",
-      score: 0,
-    },
-  ]);
+  const [players, setPlayers] = useState<PlayerSession[]>([]);
+  const [scores, setScores] = useState<PlayerScore[]>([]);
 
   const selectedGame =
     games.find((g) => g.id === selectedGameId) ?? games[0];
 
-  const resolveValidGameUuid = (candidateGame?: CatalogGame | null): string | null => {
+  const resolveValidGameUuid = (
+    candidateGame?: CatalogGame | null
+  ): string | null => {
     if (isUuid(candidateGame?.id)) {
       return candidateGame.id;
     }
@@ -100,6 +85,81 @@ export default function AdminConsolePage() {
     const firstDbUuidGame = games.find((g) => isUuid(g.id));
     return firstDbUuidGame?.id ?? null;
   };
+
+  const loadPlayersAndScoresForSession = async (targetSessionId: string) => {
+    if (!supabase || !isUuid(targetSessionId)) return;
+
+    const [{ data: playersData, error: pErr }, { data: scoresData, error: sErr }] =
+      await Promise.all([
+        supabase
+          .from("session_players")
+          .select("*")
+          .eq("session_id", targetSessionId),
+        supabase
+          .from("player_scores")
+          .select("*")
+          .eq("session_id", targetSessionId),
+      ]);
+
+    if (pErr) {
+      setDbError(`Lecture joueurs impossible : ${pErr.message}`);
+    } else if (playersData) {
+      setPlayers(playersData as PlayerSession[]);
+    }
+
+    if (sErr) {
+      setDbError(`Lecture scores impossible : ${sErr.message}`);
+    } else if (scoresData) {
+      setScores(scoresData as PlayerScore[]);
+    }
+  };
+
+  useEffect(() => {
+    if (!supabase || !sessionId || !isUuid(sessionId)) return;
+
+    let active = true;
+
+    const refresh = async () => {
+      if (!active) return;
+      await loadPlayersAndScoresForSession(sessionId);
+    };
+
+    void refresh();
+
+    const channel = supabase
+      .channel(`admin-session-${sessionId}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "session_players",
+          filter: `session_id=eq.${sessionId}`,
+        },
+        () => {
+          void refresh();
+        }
+      )
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "player_scores",
+          filter: `session_id=eq.${sessionId}`,
+        },
+        () => {
+          void refresh();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      void supabase.removeChannel(channel);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supabase, sessionId]);
 
   const syncSessionToDb = async (params: {
     id?: string | null;
@@ -153,6 +213,9 @@ export default function AdminConsolePage() {
           setDbError(`Création session impossible : ${error.message}`);
         } else if (data?.id) {
           setSessionId(data.id);
+          setPlayers([]);
+          setScores([]);
+          await loadPlayersAndScoresForSession(data.id);
         }
       }
     } finally {
@@ -217,7 +280,8 @@ export default function AdminConsolePage() {
     setSessionCode(newCode);
     setStatus("lobby");
     setCurrentRound(1);
-    setScores((prev) => prev.map((s) => ({ ...s, score: 0 })));
+    setPlayers([]);
+    setScores([]);
 
     await syncSessionToDb({
       id: null,
@@ -298,23 +362,86 @@ export default function AdminConsolePage() {
     );
   };
 
-  const handleKickPlayer = (playerId: string) => {
+  const getPlayerScoreValue = (playerId: string): number => {
+    const match = scores.find((s) => s.player_id === playerId);
+    if (!match) return 0;
+    const record = match as unknown as {
+      total_score?: number;
+      score?: number;
+    };
+    return record.total_score ?? record.score ?? 0;
+  };
+
+  const handleKickPlayer = async (playerId: string) => {
     setPlayers((prev) => prev.filter((p) => p.id !== playerId));
     setScores((prev) => prev.filter((s) => s.player_id !== playerId));
+
+    if (!supabase || !sessionId || !isUuid(sessionId)) return;
+
+    const [{ error: sErr }, { error: pErr }] = await Promise.all([
+      supabase
+        .from("player_scores")
+        .delete()
+        .eq("session_id", sessionId)
+        .eq("player_id", playerId),
+      supabase
+        .from("session_players")
+        .delete()
+        .eq("session_id", sessionId)
+        .eq("id", playerId),
+    ]);
+
+    if (sErr || pErr) {
+      setDbError(
+        `Exclusion joueur impossible : ${sErr?.message ?? pErr?.message}`
+      );
+    }
   };
 
-  const handleAdjustScore = (playerId: string, delta: number) => {
-    setScores((prev) =>
-      prev.map((s) =>
-        s.player_id === playerId
-          ? { ...s, score: Math.max(0, s.score + delta) }
-          : s
-      )
+  const handleAdjustScore = async (playerId: string, delta: number) => {
+    const current = getPlayerScoreValue(playerId);
+    const nextScore = Math.max(0, current + delta);
+
+    setScores((prev) => {
+      const exists = prev.some((s) => s.player_id === playerId);
+      if (exists) {
+        return prev.map((s) =>
+          s.player_id === playerId
+            ? ({ ...s, total_score: nextScore, score: nextScore } as PlayerScore)
+            : s
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: `score-${playerId}`,
+          session_id: sessionId ?? sessionCode,
+          player_id: playerId,
+          total_score: nextScore,
+          score: nextScore,
+        } as unknown as PlayerScore,
+      ];
+    });
+
+    if (!supabase || !sessionId || !isUuid(sessionId)) return;
+
+    const targetPlayer = players.find((p) => p.id === playerId);
+    const { error } = await supabase.from("player_scores").upsert(
+      {
+        session_id: sessionId,
+        player_id: playerId,
+        nickname: targetPlayer?.nickname ?? "Joueur",
+        avatar_id:
+          (targetPlayer as unknown as { avatar_id?: string })?.avatar_id ??
+          "gamepad",
+        total_score: nextScore,
+      },
+      { onConflict: "session_id,player_id" }
     );
-  };
 
-  const getPlayerScore = (playerId: string): number => {
-    return scores.find((s) => s.player_id === playerId)?.score ?? 0;
+    if (error) {
+      setDbError(`Mise à jour score impossible : ${error.message}`);
+    }
   };
 
   return (
@@ -579,7 +706,7 @@ export default function AdminConsolePage() {
                   className="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
                 >
                   <div className="flex items-center gap-3">
-                    <span className="text-2xl">{player.avatar ?? "👤"}</span>
+                    <span className="text-2xl">{player.avatar ?? "🎮"}</span>
                     <div>
                       <div className="font-medium flex items-center gap-2">
                         <span>{player.nickname}</span>
@@ -599,17 +726,17 @@ export default function AdminConsolePage() {
                     <div className="flex items-center gap-2 bg-black/40 border border-white/10 rounded-xl px-3 py-1.5">
                       <button
                         type="button"
-                        onClick={() => handleAdjustScore(player.id, -1)}
+                        onClick={() => void handleAdjustScore(player.id, -1)}
                         className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-sm font-bold"
                       >
                         -1
                       </button>
                       <span className="font-mono font-bold min-w-[3ch] text-center">
-                        {getPlayerScore(player.id)}
+                        {getPlayerScoreValue(player.id)}
                       </span>
                       <button
                         type="button"
-                        onClick={() => handleAdjustScore(player.id, 1)}
+                        onClick={() => void handleAdjustScore(player.id, 1)}
                         className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-sm font-bold"
                       >
                         +1
@@ -619,7 +746,7 @@ export default function AdminConsolePage() {
                     {!player.is_host && (
                       <button
                         type="button"
-                        onClick={() => handleKickPlayer(player.id)}
+                        onClick={() => void handleKickPlayer(player.id)}
                         className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs font-medium transition"
                       >
                         Exclure
