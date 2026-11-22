@@ -104,11 +104,28 @@ export default function PlayerControllerPage() {
       ]);
 
       if (!isMounted) return;
-      if (playersData) {
-        setPlayers(playersData as SessionPlayer[]);
-      }
+      const nextPlayers = (playersData as SessionPlayer[] | null) ?? [];
+      setPlayers(nextPlayers);
+
       if (scoresData) {
         setScores(scoresData as PlayerScore[]);
+      }
+
+      try {
+        const saved = localStorage.getItem(`player_identity_${sessionCode}`);
+        if (saved) {
+          const parsed = JSON.parse(saved) as Partial<PlayerIdentity>;
+          if (
+            parsed?.playerId &&
+            !nextPlayers.some((p) => p.id === parsed.playerId)
+          ) {
+            localStorage.removeItem(`player_identity_${sessionCode}`);
+            setIdentity(null);
+            setStatusMessage("Tu as été exclu de la partie.");
+          }
+        }
+      } catch {
+        // Ignore storage errors
       }
     };
 
