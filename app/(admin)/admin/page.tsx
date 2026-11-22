@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Play,
@@ -20,8 +20,10 @@ import {
   Sparkles,
   ExternalLink,
 } from "lucide-react";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
 import type {
+  GameSession,
   PlayerScore,
   PlayerSession,
   SessionStatus,
@@ -37,10 +39,13 @@ function generateSessionCode(): string {
 }
 
 export default function AdminConsolePage() {
+  const supabase = getSupabaseBrowserClient();
+
   const [games, setGames] = useState<CatalogGame[]>(INITIAL_GAMES);
   const [selectedGameSlug, setSelectedGameSlug] = useState<string>(
     INITIAL_GAMES[0]?.slug ?? "quiz"
   );
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionCode, setSessionCode] = useState<string>(() =>
     generateSessionCode()
   );
@@ -48,6 +53,7 @@ export default function AdminConsolePage() {
   const [currentRound, setCurrentRound] = useState<number>(1);
   const [showQrOnTv, setShowQrOnTv] = useState<boolean>(true);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
+  const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
 
   const [players, setPlayers] = useState<PlayerSession[]>([
     {
@@ -72,11 +78,133 @@ export default function AdminConsolePage() {
   const selectedGame =
     games.find((g) => g.slug === selectedGameSlug) ?? games[0];
 
-  const handleCreateNewSession = () => {
-    setSessionCode(generateSessionCode());
+  const syncSessionToDb = async (params: {
+    id?: string | null;
+    code: string;
+    gameSlug: string;
+    nextStatus: SessionStatus;
+    round: number;
+    qrVisible: boolean;
+  }) => {
+    if (!supabase) return;
+
+    setIsSavingSession(true);
+    try {
+      const payload = {
+        code: params.code,
+        game_id: params.gameSlug,
+        status: params.nextStatus,
+        current_round: params.round,
+        state: {
+          gameSlug: params.gameSlug,
+          showQrOnTv: params.qrVisible,
+        },
+        updated_at: new Date().toISOString(),
+      };
+
+      if (params.id) {
+        const { error } = await supabase
+          .from("game_sessions")
+          .update(payload)
+          .eq("id", params.id);
+        if (error) {
+          console.error("Erreur mise à jour session:", error.message);
+        }
+      } else {
+        const { data, error } = await supabase
+          .from("game_sessions")
+          .insert(payload)
+          .select()
+          .single<GameSession>();
+        if (error) {
+          console.error("Erreur création session:", error.message);
+        } else if (data?.id) {
+          setSessionId(data.id);
+        }
+      }
+    } finally {
+      setIsSavingSession(false);
+    }
+  };
+
+  useEffect(() => {
+    void syncSessionToDb({
+      id: null,
+      code: sessionCode,
+      gameSlug: selectedGameSlug,
+      nextStatus: status,
+      round: currentRound,
+      qrVisible: showQrOnTv,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleCreateNewSession = async () => {
+    const newCode = generateSessionCode();
+    setSessionId(null);
+    setSessionCode(newCode);
     setStatus("lobby");
     setCurrentRound(1);
     setScores((prev) => prev.map((s) => ({ ...s, score: 0 })));
+
+    await syncSessionToDb({
+      id: null,
+      code: newCode,
+      gameSlug: selectedGameSlug,
+      nextStatus: "lobby",
+      round: 1,
+      qrVisible: showQrOnTv,
+    });
+  };
+
+  const handleStatusChange = async (nextStatus: SessionStatus) => {
+    setStatus(nextStatus);
+    await syncSessionToDb({
+      id: sessionId,
+      code: sessionCode,
+      gameSlug: selectedGameSlug,
+      nextStatus,
+      round: currentRound,
+      qrVisible: showQrOnTv,
+    });
+  };
+
+  const handleNextRound = async () => {
+    const nextRound = currentRound + 1;
+    setCurrentRound(nextRound);
+    await syncSessionToDb({
+      id: sessionId,
+      code: sessionCode,
+      gameSlug: selectedGameSlug,
+      nextStatus: status,
+      round: nextRound,
+      qrVisible: showQrOnTv,
+    });
+  };
+
+  const handleToggleQr = async () => {
+    const nextQr = !showQrOnTv;
+    setShowQrOnTv(nextQr);
+    await syncSessionToDb({
+      id: sessionId,
+      code: sessionCode,
+      gameSlug: selectedGameSlug,
+      nextStatus: status,
+      round: currentRound,
+      qrVisible: nextQr,
+    });
+  };
+
+  const handleSelectGame = async (slug: string) => {
+    setSelectedGameSlug(slug);
+    await syncSessionToDb({
+      id: sessionId,
+      code: sessionCode,
+      gameSlug: slug,
+      nextStatus: status,
+      round: currentRound,
+      qrVisible: showQrOnTv,
+    });
   };
 
   const handleCopyCode = async () => {
@@ -166,9 +294,10 @@ export default function AdminConsolePage() {
             <button
               type="button"
               onClick={handleCreateNewSession}
-              className="px-4 py-2.5 rounded-2xl bg-white text-black font-semibold text-sm hover:bg-neutral-200 transition"
+              disabled={isSavingSession}
+              className="px-4 py-2.5 rounded-2xl bg-white text-black font-semibold text-sm hover:bg-neutral-200 disabled:opacity-60 transition"
             >
-              Nouvelle Salle
+              {isSavingSession ? "Enregistrement..." : "Nouvelle Salle"}
             </button>
           </div>
         </header>
@@ -205,7 +334,7 @@ export default function AdminConsolePage() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <button
                 type="button"
-                onClick={() => setStatus("playing")}
+                onClick={() => void handleStatusChange("playing")}
                 className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-black font-semibold transition"
               >
                 <Play className="w-4 h-4" />
@@ -214,7 +343,7 @@ export default function AdminConsolePage() {
 
               <button
                 type="button"
-                onClick={() => setStatus("paused")}
+                onClick={() => void handleStatusChange("paused")}
                 className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 font-semibold transition"
               >
                 <Pause className="w-4 h-4" />
@@ -223,7 +352,7 @@ export default function AdminConsolePage() {
 
               <button
                 type="button"
-                onClick={() => setCurrentRound((r) => r + 1)}
+                onClick={() => void handleNextRound()}
                 className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-semibold transition"
               >
                 <RotateCcw className="w-4 h-4" />
@@ -232,7 +361,7 @@ export default function AdminConsolePage() {
 
               <button
                 type="button"
-                onClick={() => setStatus("finished")}
+                onClick={() => void handleStatusChange("finished")}
                 className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-semibold transition"
               >
                 <Square className="w-4 h-4" />
@@ -255,7 +384,7 @@ export default function AdminConsolePage() {
 
             <button
               type="button"
-              onClick={() => setShowQrOnTv((prev) => !prev)}
+              onClick={() => void handleToggleQr()}
               className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 font-medium transition"
             >
               {showQrOnTv ? (
@@ -291,7 +420,7 @@ export default function AdminConsolePage() {
               return (
                 <div
                   key={game.id}
-                  onClick={() => setSelectedGameSlug(game.slug)}
+                  onClick={() => void handleSelectGame(game.slug)}
                   className={`cursor-pointer rounded-2xl p-4 border transition flex flex-col justify-between gap-4 ${
                     isSelected
                       ? "bg-white/15 border-white/40"
