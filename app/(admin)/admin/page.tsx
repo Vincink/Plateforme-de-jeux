@@ -42,8 +42,8 @@ export default function AdminConsolePage() {
   const supabase = getSupabaseBrowserClient();
 
   const [games, setGames] = useState<CatalogGame[]>(INITIAL_GAMES);
-  const [selectedGameSlug, setSelectedGameSlug] = useState<string>(
-    INITIAL_GAMES[0]?.slug ?? "quiz"
+  const [selectedGameId, setSelectedGameId] = useState<string>(
+    INITIAL_GAMES[0]?.id ?? ""
   );
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionCode, setSessionCode] = useState<string>(() =>
@@ -76,30 +76,26 @@ export default function AdminConsolePage() {
   ]);
 
   const selectedGame =
-    games.find((g) => g.slug === selectedGameSlug) ?? games[0];
+    games.find((g) => g.id === selectedGameId) ?? games[0];
 
   const syncSessionToDb = async (params: {
     id?: string | null;
     code: string;
-    gameSlug: string;
+    gameId: string;
     nextStatus: SessionStatus;
     round: number;
     qrVisible: boolean;
   }) => {
-    if (!supabase) return;
+    if (!supabase || !params.gameId) return;
 
     setIsSavingSession(true);
     try {
       const payload = {
         code: params.code,
-        game_id: params.gameSlug,
+        game_id: params.gameId,
         status: params.nextStatus,
         current_round: params.round,
-        state: {
-          gameSlug: params.gameSlug,
-          showQrOnTv: params.qrVisible,
-        },
-        updated_at: new Date().toISOString(),
+        show_qr: params.qrVisible,
       };
 
       if (params.id) {
@@ -128,18 +124,47 @@ export default function AdminConsolePage() {
   };
 
   useEffect(() => {
-    void syncSessionToDb({
-      id: null,
-      code: sessionCode,
-      gameSlug: selectedGameSlug,
-      nextStatus: status,
-      round: currentRound,
-      qrVisible: showQrOnTv,
-    });
+    let cancelled = false;
+
+    const init = async () => {
+      let resolvedGameId = INITIAL_GAMES[0]?.id ?? "";
+
+      if (supabase) {
+        const { data: dbGames } = await supabase
+          .from("games")
+          .select("id, slug, title, tagline, min_players, max_players, is_active")
+          .order("title", { ascending: true });
+
+        if (!cancelled && dbGames && dbGames.length > 0) {
+          setGames(dbGames as CatalogGame[]);
+          resolvedGameId = dbGames[0].id;
+          setSelectedGameId(dbGames[0].id);
+        }
+      }
+
+      if (!cancelled && resolvedGameId) {
+        await syncSessionToDb({
+          id: null,
+          code: sessionCode,
+          gameId: resolvedGameId,
+          nextStatus: status,
+          round: currentRound,
+          qrVisible: showQrOnTv,
+        });
+      }
+    };
+
+    void init();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleCreateNewSession = async () => {
+    const targetGameId = selectedGame?.id ?? selectedGameId;
+    if (!targetGameId) return;
+
     const newCode = generateSessionCode();
     setSessionId(null);
     setSessionCode(newCode);
@@ -150,7 +175,7 @@ export default function AdminConsolePage() {
     await syncSessionToDb({
       id: null,
       code: newCode,
-      gameSlug: selectedGameSlug,
+      gameId: targetGameId,
       nextStatus: "lobby",
       round: 1,
       qrVisible: showQrOnTv,
@@ -158,11 +183,12 @@ export default function AdminConsolePage() {
   };
 
   const handleStatusChange = async (nextStatus: SessionStatus) => {
+    const targetGameId = selectedGame?.id ?? selectedGameId;
     setStatus(nextStatus);
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
-      gameSlug: selectedGameSlug,
+      gameId: targetGameId,
       nextStatus,
       round: currentRound,
       qrVisible: showQrOnTv,
@@ -170,12 +196,13 @@ export default function AdminConsolePage() {
   };
 
   const handleNextRound = async () => {
+    const targetGameId = selectedGame?.id ?? selectedGameId;
     const nextRound = currentRound + 1;
     setCurrentRound(nextRound);
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
-      gameSlug: selectedGameSlug,
+      gameId: targetGameId,
       nextStatus: status,
       round: nextRound,
       qrVisible: showQrOnTv,
@@ -183,24 +210,25 @@ export default function AdminConsolePage() {
   };
 
   const handleToggleQr = async () => {
+    const targetGameId = selectedGame?.id ?? selectedGameId;
     const nextQr = !showQrOnTv;
     setShowQrOnTv(nextQr);
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
-      gameSlug: selectedGameSlug,
+      gameId: targetGameId,
       nextStatus: status,
       round: currentRound,
       qrVisible: nextQr,
     });
   };
 
-  const handleSelectGame = async (slug: string) => {
-    setSelectedGameSlug(slug);
+  const handleSelectGame = async (gameId: string) => {
+    setSelectedGameId(gameId);
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
-      gameSlug: slug,
+      gameId,
       nextStatus: status,
       round: currentRound,
       qrVisible: showQrOnTv,
@@ -416,11 +444,11 @@ export default function AdminConsolePage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {games.map((game) => {
-              const isSelected = game.slug === selectedGameSlug;
+              const isSelected = game.id === selectedGame?.id;
               return (
                 <div
                   key={game.id}
-                  onClick={() => void handleSelectGame(game.slug)}
+                  onClick={() => void handleSelectGame(game.id)}
                   className={`cursor-pointer rounded-2xl p-4 border transition flex flex-col justify-between gap-4 ${
                     isSelected
                       ? "bg-white/15 border-white/40"
