@@ -6,6 +6,7 @@ import { QrCode, Users, Tv, Sparkles } from "lucide-react";
 import { QRCodeCanvas } from "qrcode.react";
 import { clientEnv } from "@/lib/env";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { getPlayerColor } from "@/lib/colorsplayer";
 import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
 import type {
   GameSession,
@@ -382,7 +383,8 @@ export default function TvSessionPage() {
             </div>
           ) : (
             <div className="my-auto grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {sortedPlayers.map((player) => {
+              {sortedPlayers.map((player, index) => {
+                const color = getPlayerColor(player.id, index);
                 const avatarKey = player.avatarId ?? "";
                 const avatarSymbol =
                   (avatarKey ? AVATAR_EMOJIS[avatarKey] : undefined) ??
@@ -392,18 +394,29 @@ export default function TvSessionPage() {
                 return (
                   <div
                     key={player.id}
-                    className="flex items-center justify-between gap-4 rounded-2xl border border-white/15 bg-black/45 p-5"
+                    style={{
+                      backgroundColor: color.bgHex,
+                      borderColor: color.borderHex,
+                      color: color.textHex,
+                    }}
+                    className="flex items-center justify-between gap-4 rounded-2xl border-2 p-5 shadow-lg transition"
                   >
                     <div className="flex min-w-0 items-center gap-4">
-                      <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/10 text-4xl">
+                      <span
+                        style={{ backgroundColor: color.badgeBgHex }}
+                        className="flex h-16 w-16 items-center justify-center rounded-2xl text-4xl"
+                      >
                         {avatarSymbol}
                       </span>
-                      <span className="truncate text-2xl font-extrabold md:text-3xl">
+                      <span className="truncate text-2xl font-black md:text-3xl">
                         {player.nickname}
                       </span>
                     </div>
 
-                    <span className="shrink-0 font-mono text-3xl font-black text-amber-400 md:text-4xl">
+                    <span
+                      style={{ color: color.scoreHex }}
+                      className="shrink-0 font-mono text-3xl font-black md:text-4xl"
+                    >
                       {getPlayerScore(player.id)} pts
                     </span>
                   </div>
