@@ -11,7 +11,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import { getPlayerColor } from "@/lib/colorsplayer";
+import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import type {
   GameContent,
   GameSession,
@@ -97,7 +97,8 @@ export default function PlayerControllerPage() {
         supabase
           .from("session_players")
           .select("*")
-          .eq("session_id", targetSessionId),
+          .eq("session_id", targetSessionId)
+          .order("id", { ascending: true }),
         supabase
           .from("player_scores")
           .select("*")
@@ -275,9 +276,24 @@ export default function PlayerControllerPage() {
     return scoreRecord.total_score ?? scoreRecord.score ?? 0;
   }, [identity, scores]);
 
+  const currentPlayerRecord = useMemo(() => {
+    if (!identity) return undefined;
+    return players.find(
+      (p) =>
+        p.id === identity.playerId ||
+        (Boolean(identity.playerToken) &&
+          (p as unknown as { player_token?: string }).player_token ===
+            identity.playerToken)
+    );
+  }, [identity, players]);
+
   const myColor = useMemo(
-    () => getPlayerColor(identity?.playerId, 0),
-    [identity?.playerId]
+    () =>
+      getUniquePlayerColor(
+        currentPlayerRecord?.id ?? identity?.playerId,
+        players
+      ),
+    [currentPlayerRecord?.id, identity?.playerId, players]
   );
 
   const handleJoinGame = async (e: React.FormEvent) => {
@@ -372,7 +388,8 @@ export default function PlayerControllerPage() {
             supabase
               .from("session_players")
               .select("*")
-              .eq("session_id", targetSession.id),
+              .eq("session_id", targetSession.id)
+              .order("id", { ascending: true }),
             supabase
               .from("player_scores")
               .select("*")
@@ -586,8 +603,8 @@ export default function PlayerControllerPage() {
                   Joueurs ({players.length})
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {players.map((p, idx) => {
-                    const pColor = getPlayerColor(p.id, idx);
+                  {players.map((p) => {
+                    const pColor = getUniquePlayerColor(p.id, players);
                     return (
                       <span
                         key={p.id}
