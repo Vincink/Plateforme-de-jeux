@@ -5,8 +5,17 @@ import { motion } from "framer-motion";
 import { Trophy, Flame } from "lucide-react";
 import type { PlayerScore } from "@/types/game.types";
 
+type LeaderboardEntry = PlayerScore & {
+  totalScore?: number;
+  avatarId?: string;
+  avatar?: string | null;
+  playerId?: string;
+  nickname?: string;
+  streak?: number;
+};
+
 interface LiveLeaderboardProps {
-  scores: PlayerScore[];
+  scores: LeaderboardEntry[];
   title?: string;
   isFinalPodium?: boolean;
 }
@@ -22,12 +31,18 @@ const AVATAR_EMOJIS: Record<string, string> = {
   star: "⭐",
 };
 
+function getScoreValue(entry: LeaderboardEntry): number {
+  return entry.totalScore ?? entry.score ?? 0;
+}
+
 export function LiveLeaderboard({
   scores,
   title = "Classement en direct",
   isFinalPodium = false,
 }: LiveLeaderboardProps) {
-  const sorted = [...scores].sort((a, b) => b.totalScore - a.totalScore);
+  const sorted = [...scores].sort(
+    (a, b) => getScoreValue(b) - getScoreValue(a)
+  );
 
   return (
     <div className="tvos-glass rounded-tvos-lg p-7">
@@ -56,12 +71,24 @@ export function LiveLeaderboard({
           {sorted.map((entry, index) => {
             const rank = index + 1;
             const medal =
-              rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : `#${rank}`;
-            const avatar = AVATAR_EMOJIS[entry.avatarId] ?? "🎮";
+              rank === 1
+                ? "🥇"
+                : rank === 2
+                  ? "🥈"
+                  : rank === 3
+                    ? "🥉"
+                    : `#${rank}`;
+            const avatarKey = entry.avatarId ?? "";
+            const avatar =
+              (avatarKey ? AVATAR_EMOJIS[avatarKey] : undefined) ??
+              entry.avatar ??
+              "🎮";
+            const playerKey = entry.playerId ?? entry.player_id ?? entry.id;
+            const streakCount = entry.streak ?? 0;
 
             return (
               <motion.li
-                key={entry.playerId}
+                key={playerKey}
                 layout
                 initial={{ opacity: 0, y: 12 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -81,12 +108,12 @@ export function LiveLeaderboard({
                   </span>
                   <div>
                     <p className="text-lg font-bold text-white">
-                      {entry.nickname}
+                      {entry.nickname ?? `Joueur ${rank}`}
                     </p>
-                    {entry.streak > 1 ? (
+                    {streakCount > 1 ? (
                       <p className="inline-flex items-center gap-1 text-xs font-semibold text-amber-300">
                         <Flame className="h-3.5 w-3.5 fill-current" />
-                        Série de {entry.streak}
+                        Série de {streakCount}
                       </p>
                     ) : null}
                   </div>
@@ -94,7 +121,7 @@ export function LiveLeaderboard({
 
                 <div className="text-right">
                   <span className="font-mono text-2xl font-black text-white">
-                    {entry.totalScore}
+                    {getScoreValue(entry)}
                   </span>
                   <span className="ml-1.5 text-xs font-semibold uppercase tracking-wider text-white/55">
                     pts
