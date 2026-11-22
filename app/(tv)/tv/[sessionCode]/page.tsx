@@ -240,8 +240,21 @@ export default function TvSessionPage() {
   };
 
   const getPlayerScore = (playerId: string): number => {
-    return scores.find((s) => s.player_id === playerId)?.score ?? 0;
+    const match = scores.find((s) => s.player_id === playerId);
+    if (!match) return 0;
+    const scoreRecord = match as unknown as {
+      total_score?: number;
+      score?: number;
+    };
+    return scoreRecord.total_score ?? scoreRecord.score ?? 0;
   };
+
+  const sortedPlayers = useMemo(() => {
+    return [...players].sort(
+      (a, b) => getPlayerScore(b.id) - getPlayerScore(a.id)
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [players, scores]);
 
   const status = session?.status ?? "lobby";
   const round = session?.current_round ?? 1;
@@ -355,7 +368,7 @@ export default function TvSessionPage() {
             <div className="flex items-center gap-3">
               <Users className="h-9 w-9 shrink-0 text-emerald-400" />
               <h2 className="text-3xl font-black md:text-4xl">
-                Joueurs ({players.length})
+                Joueurs ({sortedPlayers.length})
               </h2>
             </div>
             <span className="text-base font-extrabold uppercase tracking-wider text-neutral-300 md:text-lg">
@@ -363,13 +376,13 @@ export default function TvSessionPage() {
             </span>
           </div>
 
-          {players.length === 0 ? (
+          {sortedPlayers.length === 0 ? (
             <div className="my-auto flex flex-1 items-center justify-center py-12 text-center text-2xl font-bold text-neutral-200 md:text-4xl">
               En attente des joueurs...
             </div>
           ) : (
             <div className="my-auto grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {players.map((player) => {
+              {sortedPlayers.map((player) => {
                 const avatarKey = player.avatarId ?? "";
                 const avatarSymbol =
                   (avatarKey ? AVATAR_EMOJIS[avatarKey] : undefined) ??
