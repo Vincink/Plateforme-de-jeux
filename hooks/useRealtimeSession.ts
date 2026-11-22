@@ -9,11 +9,55 @@ import type {
   PlayerSession,
 } from "@/types/game.types";
 
+type RealtimeSession = GameSession & {
+  gameId?: string;
+  hostUserId?: string | null;
+  currentRound?: number;
+  totalRounds?: number;
+  roundStartedAt?: string | null;
+  roundDurationSec?: number;
+  showQr?: boolean;
+  activeContentId?: string | null;
+  buzzedPlayerId?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+type RealtimePlayer = PlayerSession & {
+  sessionId?: string;
+  avatarId?: string;
+  playerToken?: string;
+  isConnected?: boolean;
+  joinedAt?: string;
+  lastSeenAt?: string | null;
+};
+
+type RealtimeScore = PlayerScore & {
+  sessionId?: string;
+  playerId?: string;
+  nickname?: string;
+  avatarId?: string;
+  totalScore?: number;
+  streak?: number;
+  updatedAt?: string;
+};
+
+type RealtimeAction = PlayerAction & {
+  sessionId?: string;
+  playerId?: string;
+  roundNumber?: number;
+  actionType?: string;
+  responseTimeMs?: number | null;
+  isCorrect?: boolean | null;
+  pointsAwarded?: number;
+  createdAt?: string;
+};
+
 interface RealtimeSessionState {
-  session: GameSession | null;
-  players: PlayerSession[];
-  scores: PlayerScore[];
-  actions: PlayerAction[];
+  session: RealtimeSession | null;
+  players: RealtimePlayer[];
+  scores: RealtimeScore[];
+  actions: RealtimeAction[];
   isLoading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
@@ -22,10 +66,10 @@ interface RealtimeSessionState {
 export function useRealtimeSession(sessionCode: string): RealtimeSessionState {
   const normalizedCode = sessionCode.trim().toUpperCase();
 
-  const [session, setSession] = useState<GameSession | null>(null);
-  const [players, setPlayers] = useState<PlayerSession[]>([]);
-  const [scores, setScores] = useState<PlayerScore[]>([]);
-  const [actions, setActions] = useState<PlayerAction[]>([]);
+  const [session, setSession] = useState<RealtimeSession | null>(null);
+  const [players, setPlayers] = useState<RealtimePlayer[]>([]);
+  const [scores, setScores] = useState<RealtimeScore[]>([]);
+  const [actions, setActions] = useState<RealtimeAction[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,12 +107,14 @@ export function useRealtimeSession(sessionCode: string): RealtimeSessionState {
         return;
       }
 
-      const mappedSession: GameSession = {
+      const mappedSession: RealtimeSession = {
         id: sessionRow.id,
         code: sessionRow.code,
+        game_id: sessionRow.game_id,
         gameId: sessionRow.game_id,
         hostUserId: sessionRow.host_user_id,
         status: sessionRow.status,
+        current_round: sessionRow.current_round,
         currentRound: sessionRow.current_round,
         totalRounds: sessionRow.total_rounds,
         roundStartedAt: sessionRow.round_started_at,
@@ -76,6 +122,7 @@ export function useRealtimeSession(sessionCode: string): RealtimeSessionState {
         showQr: sessionRow.show_qr,
         activeContentId: sessionRow.active_content_id,
         buzzedPlayerId: sessionRow.buzzed_player_id,
+        state: sessionRow.state ?? {},
         createdAt: sessionRow.created_at,
         updatedAt: sessionRow.updated_at,
       };
@@ -105,11 +152,15 @@ export function useRealtimeSession(sessionCode: string): RealtimeSessionState {
         setPlayers(
           playersRes.data.map((p) => ({
             id: p.id,
+            session_id: p.session_id,
             sessionId: p.session_id,
             nickname: p.nickname,
+            avatar: p.avatar ?? "🎮",
             avatarId: p.avatar_id,
             playerToken: p.player_token,
-            isConnected: p.is_connected,
+            is_host: Boolean(p.is_host),
+            is_connected: Boolean(p.is_connected),
+            isConnected: Boolean(p.is_connected),
             joinedAt: p.joined_at,
             lastSeenAt: p.last_seen_at,
           }))
@@ -119,12 +170,16 @@ export function useRealtimeSession(sessionCode: string): RealtimeSessionState {
       if (scoresRes.data) {
         setScores(
           scoresRes.data.map((s) => ({
+            id: s.id ?? `${s.session_id}-${s.player_id}`,
+            session_id: s.session_id,
             sessionId: s.session_id,
+            player_id: s.player_id,
             playerId: s.player_id,
             nickname: s.nickname,
             avatarId: s.avatar_id,
-            totalScore: s.total_score,
-            streak: s.streak,
+            score: s.total_score ?? s.score ?? 0,
+            totalScore: s.total_score ?? s.score ?? 0,
+            streak: s.streak ?? 0,
             updatedAt: s.updated_at,
           }))
         );
@@ -134,14 +189,18 @@ export function useRealtimeSession(sessionCode: string): RealtimeSessionState {
         setActions(
           actionsRes.data.map((a) => ({
             id: a.id,
+            session_id: a.session_id,
             sessionId: a.session_id,
+            player_id: a.player_id,
             playerId: a.player_id,
+            round_number: a.round_number,
             roundNumber: a.round_number,
+            action_type: a.action_type,
             actionType: a.action_type,
             payload: a.payload ?? {},
             responseTimeMs: a.response_time_ms,
             isCorrect: a.is_correct,
-            pointsAwarded: a.points_awarded,
+            pointsAwarded: a.points_awarded ?? 0,
             createdAt: a.created_at,
           }))
         );
