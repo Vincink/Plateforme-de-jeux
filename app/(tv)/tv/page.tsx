@@ -77,6 +77,10 @@ export default function TvCatalogPage() {
     }
   };
 
+  const rulesList = Array.isArray(selectedGame?.rules)
+    ? (selectedGame.rules as string[])
+    : [];
+
   return (
     <main className="relative min-h-screen overflow-hidden bg-tvos-bg text-white">
       <div
@@ -172,7 +176,7 @@ export default function TvCatalogPage() {
                 <FocusCard
                   key={game.id}
                   title={game.title}
-                  subtitle={game.tagline}
+                  subtitle={game.tagline ?? ""}
                   badge={
                     GAME_CATEGORIES.find((c) => c.slug === game.categorySlug)
                       ?.name
@@ -262,19 +266,21 @@ export default function TvCatalogPage() {
                       {selectedGame.description}
                     </p>
 
-                    <div className="mt-6">
-                      <h3 className="text-sm font-semibold uppercase tracking-wider text-white/60">
-                        Règles du jeu
-                      </h3>
-                      <ul className="mt-3 space-y-2 text-sm text-white/85">
-                        {selectedGame.rules.map((rule, i) => (
-                          <li key={i} className="flex items-start gap-2.5">
-                            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-tvos-accent" />
-                            <span>{rule}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
+                    {rulesList.length > 0 ? (
+                      <div className="mt-6">
+                        <h3 className="text-sm font-semibold uppercase tracking-wider text-white/60">
+                          Règles du jeu
+                        </h3>
+                        <ul className="mt-3 space-y-2 text-sm text-white/85">
+                          {rulesList.map((rule, i) => (
+                            <li key={i} className="flex items-start gap-2.5">
+                              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-tvos-accent" />
+                              <span>{rule}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
                   </div>
 
                   {errorMessage ? (
