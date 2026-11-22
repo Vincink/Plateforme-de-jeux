@@ -22,6 +22,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { getPlayerColor } from "@/lib/colorsplayer";
 import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
 import type {
   GameSession,
@@ -699,62 +700,85 @@ export default function AdminConsolePage() {
               Aucun joueur connecté pour le moment.
             </p>
           ) : (
-            <div className="divide-y divide-white/10">
-              {players.map((player) => (
-                <div
-                  key={player.id}
-                  className="py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
-                >
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">{player.avatar ?? "🎮"}</span>
-                    <div>
-                      <div className="font-medium flex items-center gap-2">
-                        <span>{player.nickname}</span>
-                        {player.is_host && (
-                          <span className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300">
-                            Hôte
-                          </span>
-                        )}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {players.map((player, index) => {
+                const color = getPlayerColor(player.id, index);
+
+                return (
+                  <div
+                    key={player.id}
+                    style={{
+                      backgroundColor: color.bgHex,
+                      borderColor: color.borderHex,
+                      color: color.textHex,
+                    }}
+                    className="p-4 rounded-2xl border-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-md"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span
+                        style={{ backgroundColor: color.badgeBgHex }}
+                        className="text-2xl flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
+                      >
+                        {player.avatar ?? "🎮"}
+                      </span>
+                      <div className="min-w-0">
+                        <div className="font-bold truncate flex items-center gap-2">
+                          <span className="truncate">{player.nickname}</span>
+                          {player.is_host && (
+                            <span
+                              style={{ backgroundColor: color.badgeBgHex }}
+                              className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full"
+                            >
+                              Hôte
+                            </span>
+                          )}
+                        </div>
+                        <span className="text-xs opacity-90">
+                          {player.is_connected ? "Connecté" : "Déconnecté"}
+                        </span>
                       </div>
-                      <span className="text-xs text-neutral-400">
-                        {player.is_connected ? "Connecté" : "Déconnecté"}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-3">
-                    <div className="flex items-center gap-2 bg-black/40 border border-white/10 rounded-xl px-3 py-1.5">
-                      <button
-                        type="button"
-                        onClick={() => void handleAdjustScore(player.id, -1)}
-                        className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-sm font-bold"
-                      >
-                        -1
-                      </button>
-                      <span className="font-mono font-bold min-w-[3ch] text-center">
-                        {getPlayerScoreValue(player.id)}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void handleAdjustScore(player.id, 1)}
-                        className="px-2 py-0.5 rounded bg-white/10 hover:bg-white/20 text-sm font-bold"
-                      >
-                        +1
-                      </button>
                     </div>
 
-                    {!player.is_host && (
-                      <button
-                        type="button"
-                        onClick={() => void handleKickPlayer(player.id)}
-                        className="px-3 py-1.5 rounded-xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 text-xs font-medium transition"
+                    <div className="flex items-center gap-2 shrink-0">
+                      <div
+                        style={{ backgroundColor: color.badgeBgHex }}
+                        className="flex items-center gap-2 rounded-xl px-2.5 py-1"
                       >
-                        Exclure
-                      </button>
-                    )}
+                        <button
+                          type="button"
+                          onClick={() => void handleAdjustScore(player.id, -1)}
+                          className="px-2 py-0.5 rounded bg-black/25 hover:bg-black/40 text-sm font-bold"
+                        >
+                          -1
+                        </button>
+                        <span
+                          style={{ color: color.scoreHex }}
+                          className="font-mono font-black min-w-[3ch] text-center"
+                        >
+                          {getPlayerScoreValue(player.id)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void handleAdjustScore(player.id, 1)}
+                          className="px-2 py-0.5 rounded bg-black/25 hover:bg-black/40 text-sm font-bold"
+                        >
+                          +1
+                        </button>
+                      </div>
+
+                      {!player.is_host && (
+                        <button
+                          type="button"
+                          onClick={() => void handleKickPlayer(player.id)}
+                          className="px-3 py-1.5 rounded-xl bg-black/35 hover:bg-black/55 text-xs font-bold transition"
+                        >
+                          Exclure
+                        </button>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>
