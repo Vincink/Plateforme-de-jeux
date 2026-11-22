@@ -1,7 +1,8 @@
 import type { GameCategory, GameDefinition } from "@/types/game.types";
 
-export type CatalogGame = GameDefinition & {
+export type CatalogGame = Omit<GameDefinition, "rules"> & {
   categoryId?: string | null;
+  rules?: string[] | Record<string, unknown> | null;
   minPlayers?: number;
   maxPlayers?: number | null;
   estimatedMinutes?: number;
