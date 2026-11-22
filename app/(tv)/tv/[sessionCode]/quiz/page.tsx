@@ -11,22 +11,49 @@ type AnswerLetter = "A" | "B" | "C" | "D";
 
 interface QuizQuestionItem {
   id?: string | number;
-  question: string;
-  options: [string, string, string, string] | string[];
+  question?: string;
+  prompt?: string;
+  title?: string;
+  text?: string;
+  options?: string[];
+  choices?: string[];
+  answers?: string[];
   correctIndex?: number;
+  correct_index?: number;
   correctAnswer?: AnswerLetter | string;
+  correct_answer?: AnswerLetter | string;
 }
 
 interface QuizStatePayload {
   questions?: QuizQuestionItem[];
+  quizQuestions?: QuizQuestionItem[];
+  items?: QuizQuestionItem[];
+  currentQuestion?: QuizQuestionItem | null;
+  activeQuestion?: QuizQuestionItem | null;
   currentQuestionIndex?: number;
   current_question_index?: number;
+  questionIndex?: number;
   answers?: Record<string, AnswerLetter | string>;
   revealed?: boolean;
   showAnswers?: boolean;
   show_answers?: boolean;
   scores?: Record<string, number>;
+  points?: Record<string, number>;
 }
+
+type ExtendedSession = GameSession & {
+  game_state?: QuizStatePayload | null;
+  state?: QuizStatePayload | null;
+  quiz_state?: QuizStatePayload | null;
+  questions?: QuizQuestionItem[] | null;
+  currentQuestionIndex?: number | null;
+  current_question_index?: number | null;
+};
+
+type ExtendedPlayer = SessionPlayer & {
+  score?: number | null;
+  points?: number | null;
+};
 
 const ANSWER_STYLES: Record<
   AnswerLetter,
@@ -106,8 +133,8 @@ export default function TvQuizPage() {
   const sessionCode = (params?.sessionCode ?? "").toUpperCase();
   const supabase = getSupabaseBrowserClient();
 
-  const [session, setSession] = useState<GameSession | null>(null);
-  const [players, setPlayers] = useState<SessionPlayer[]>([]);
+  const [session, setSession] = useState<ExtendedSession | null>(null);
+  const [players, setPlayers] = useState<ExtendedPlayer[]>([]);
   const [gameTitle, setGameTitle] = useState<string>("Le Grand Quiz");
 
   useEffect(() => {
@@ -136,10 +163,10 @@ export default function TvQuizPage() {
         .order("id", { ascending: true });
 
       if (!isMounted) return;
-      setPlayers((data as SessionPlayer[] | null) ?? []);
+      setPlayers((data as ExtendedPlayer[] | null) ?? []);
     };
 
-    const bindSession = (targetSession: GameSession) => {
+    const bindSession = (targetSession: ExtendedSession) => {
       if (playersChannel) {
         void supabase.removeChannel(playersChannel);
       }
@@ -171,7 +198,7 @@ export default function TvQuizPage() {
         .eq("code", sessionCode)
         .order("updated_at", { ascending: false })
         .limit(1)
-        .maybeSingle<GameSession>();
+        .maybeSingle<ExtendedSession>();
 
       if (!isMounted) return;
       if (data) {
@@ -194,7 +221,7 @@ export default function TvQuizPage() {
         },
         (payload) => {
           if (!isMounted) return;
-          const nextRow = payload.new as GameSession | null;
+          const nextRow = payload.new as ExtendedSession | null;
           if (!nextRow) return;
           setSession(nextRow);
           bindSession(nextRow);
@@ -213,45 +240,84 @@ export default function TvQuizPage() {
 
   useEffect(() => {
     if (!session || !sessionCode) return;
-    if (session.status === "lobby") {
+    const status = String(session.status ?? "").toLowerCase();
+    if (
+      status === "lobby" ||
+      status === "finished" ||
+      status === "ended" ||
+      status === "completed"
+    ) {
       router.replace(`/tv/${sessionCode}`);
     }
   }, [session, sessionCode, router]);
 
   const quizState = useMemo<QuizStatePayload>(() => {
-    const raw = session as (GameSession & {
-      game_state?: QuizStatePayload | null;
-      state?: QuizStatePayload | null;
-      quiz_state?: QuizStatePayload | null;
-    }) | null;
-    return raw?.game_state || raw?.quiz_state || raw?.state || {};
+    return (
+      session?.game_state ||
+      session?.quiz_state ||
+      session?.state ||
+      {}
+    );
   }, [session]);
 
   const questions = useMemo<QuizQuestionItem[]>(() => {
-    return Array.isArray(quizState.questions) ? quizState.questions : [];
-  }, [quizState]);
+    if (Array.isArray(quizState.questions)) return quizState.questions;
+    if (Array.isArray(quizState.quizQuestions)) return quizState.quizQuestions;
+    if (Array.isArray(quizState.items)) return quizState.items;
+    if (Array.isArray(session?.questions)) return session.questions;
+    return [];
+  }, [quizState, session]);
 
   const currentQuestionIndex = useMemo(() => {
-    const idx =
+    const rawIdx =
       quizState.currentQuestionIndex ??
       quizState.current_question_index ??
+      quizState.questionIndex ??
+      session?.currentQuestionIndex ??
+      session?.current_question_index ??
       0;
-    return Math.max(0, Number(idx) || 0);
-  }, [quizState]);
+    return Math.max(0, Number(rawIdx) || 0);
+  }, [quizState, session]);
 
-  const currentQuestion = questions[currentQuestionIndex] ?? null;
+  const currentQuestion = useMemo<QuizQuestionItem | null>(() => {
+    if (questions.length > 0) {
+      return questions[currentQuestionIndex] ?? questions[0] ?? null;
+    }
+    return quizState.currentQuestion ?? quizState.activeQuestion ?? null;
+  }, [questions, currentQuestionIndex, quizState]);
+
+  const questionLabel = useMemo<string>(() => {
+    if (!currentQuestion) return "";
+    return (
+      currentQuestion.question ||
+      currentQuestion.prompt ||
+      currentQuestion.title ||
+      currentQuestion.text ||
+      ""
+    );
+  }, [currentQuestion]);
+
   const options = useMemo<string[]>(() => {
-    if (!currentQuestion?.options) return ["", "", "", ""];
+    const rawOptions =
+      currentQuestion?.options ||
+      currentQuestion?.choices ||
+      currentQuestion?.answers ||
+      [];
     return [
-      currentQuestion.options[0] ?? "",
-      currentQuestion.options[1] ?? "",
-      currentQuestion.options[2] ?? "",
-      currentQuestion.options[3] ?? "",
+      rawOptions[0] ?? "",
+      rawOptions[1] ?? "",
+      rawOptions[2] ?? "",
+      rawOptions[3] ?? "",
     ];
   }, [currentQuestion]);
 
   const answersMap = quizState.answers ?? {};
-  const scoresMap = quizState.scores ?? {};
+  const scoresMap = useMemo<Record<string, number>>(() => {
+    return {
+      ...(quizState.points ?? {}),
+      ...(quizState.scores ?? {}),
+    };
+  }, [quizState]);
 
   const allPlayersAnswered = useMemo(() => {
     if (players.length === 0) return false;
@@ -270,23 +336,33 @@ export default function TvQuizPage() {
 
   const correctLetter = useMemo<AnswerLetter | null>(() => {
     if (!currentQuestion) return null;
-    if (typeof currentQuestion.correctIndex === "number") {
-      return LETTERS[currentQuestion.correctIndex] ?? null;
+    const rawIdx =
+      typeof currentQuestion.correctIndex === "number"
+        ? currentQuestion.correctIndex
+        : typeof currentQuestion.correct_index === "number"
+        ? currentQuestion.correct_index
+        : null;
+    if (rawIdx !== null) {
+      return LETTERS[rawIdx] ?? null;
     }
-    return normalizeAnswerLetter(currentQuestion.correctAnswer);
+    return normalizeAnswerLetter(
+      currentQuestion.correctAnswer ?? currentQuestion.correct_answer
+    );
   }, [currentQuestion]);
 
   const rankedPlayers = useMemo(() => {
     return [...players]
       .map((player) => {
-        const extra = player as SessionPlayer & { score?: number | null };
-        const playerScore =
-          typeof extra.score === "number"
-            ? extra.score
-            : typeof scoresMap[String(player.id)] === "number"
-            ? scoresMap[String(player.id)]
+        const mappedScore = scoresMap[String(player.id)];
+        const rawScore =
+          typeof mappedScore === "number"
+            ? mappedScore
+            : typeof player.score === "number"
+            ? player.score
+            : typeof player.points === "number"
+            ? player.points
             : 0;
-        const score = Number(playerScore ?? 0);
+        const score = Number(rawScore ?? 0);
         const chosenLetter = normalizeAnswerLetter(
           answersMap[String(player.id)]
         );
@@ -342,17 +418,17 @@ export default function TvQuizPage() {
         <section className="col-span-7 bg-white/[0.06] border border-white/15 rounded-[2rem] p-7 flex flex-col justify-between gap-5 min-h-0">
           {/* Bloc Question centré en haut */}
           <div className="shrink-0 min-h-[22%] flex items-center justify-center text-center px-4">
-            {currentQuestion ? (
+            {questionLabel ? (
               <h2
                 className={`font-black text-white text-center break-words [word-break:normal] hyphens-none ${getQuestionFontSize(
-                  currentQuestion.question
+                  questionLabel
                 )}`}
               >
-                {currentQuestion.question}
+                {questionLabel}
               </h2>
             ) : (
               <p className="text-3xl font-bold text-neutral-400 text-center">
-                En attente de la première question...
+                En attente du lancement des questions...
               </p>
             )}
           </div>
