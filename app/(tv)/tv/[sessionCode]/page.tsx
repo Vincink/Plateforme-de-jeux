@@ -3,6 +3,7 @@
 import React, { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { QrCode, Users, Tv, Sparkles } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { clientEnv } from "@/lib/env";
 import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
 import type {
@@ -88,7 +89,7 @@ export default function TvSessionPage() {
   const round = session?.current_round ?? 1;
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-neutral-950 text-white p-8 md:p-14 flex flex-col justify-between">
+    <div className="relative h-screen w-full overflow-hidden bg-neutral-950 text-white p-6 md:p-10 flex flex-col justify-between">
       {/* Ambient background */}
       <div
         className="pointer-events-none absolute inset-0"
@@ -100,7 +101,7 @@ export default function TvSessionPage() {
       />
 
       {/* Top TV Bar */}
-      <header className="relative z-10 flex flex-wrap items-center justify-between gap-6 border-b border-white/10 pb-6">
+      <header className="relative z-10 flex flex-wrap items-center justify-between gap-6 border-b border-white/10 pb-5">
         <div className="flex items-center gap-4">
           <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 border border-white/15">
             <Tv className="w-6 h-6 text-amber-400" />
@@ -137,25 +138,38 @@ export default function TvSessionPage() {
       </header>
 
       {/* Main TV Stage */}
-      <main className="relative z-10 my-auto py-10 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+      <main className="relative z-10 my-auto py-6 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
         {/* Left: Join / QR / Status */}
-        <section className="lg:col-span-5 bg-white/5 border border-white/10 rounded-3xl p-8 space-y-6">
+        <section className="lg:col-span-5 bg-white/5 border border-white/10 rounded-3xl p-6 md:p-7 space-y-5">
           <div className="flex items-center gap-3">
             <QrCode className="w-6 h-6 text-sky-400" />
             <h2 className="text-xl font-bold">Rejoindre avec son téléphone</h2>
           </div>
 
-          <p className="text-sm text-neutral-300 leading-relaxed">
-            Ouvre l&apos;appareil photo ou le navigateur sur ton téléphone et
-            entre le code{" "}
-            <span className="font-mono font-bold text-amber-400">
-              {sessionCode || "----"}
-            </span>
-            .
-          </p>
+          <div className="flex flex-col sm:flex-row items-center gap-5">
+            <div className="shrink-0 rounded-2xl bg-white p-3 shadow-lg">
+              <QRCodeSVG
+                value={joinUrl}
+                size={148}
+                bgColor="#ffffff"
+                fgColor="#07080c"
+                level="M"
+              />
+            </div>
 
-          <div className="rounded-2xl bg-black/40 border border-white/10 p-4 font-mono text-xs text-neutral-300 break-all">
-            {joinUrl}
+            <div className="space-y-3 text-center sm:text-left">
+              <p className="text-sm text-neutral-300 leading-relaxed">
+                Scanne le QR code ou entre le code{" "}
+                <span className="font-mono font-bold text-amber-400">
+                  {sessionCode || "----"}
+                </span>{" "}
+                sur ton téléphone.
+              </p>
+
+              <div className="rounded-xl bg-black/40 border border-white/10 px-3.5 py-2.5 font-mono text-xs text-neutral-300 break-all">
+                {joinUrl}
+              </div>
+            </div>
           </div>
 
           {currentGame?.tagline && (
@@ -166,7 +180,7 @@ export default function TvSessionPage() {
         </section>
 
         {/* Right: Players & Leaderboard */}
-        <section className="lg:col-span-7 bg-white/5 border border-white/10 rounded-3xl p-8 space-y-6">
+        <section className="lg:col-span-7 bg-white/5 border border-white/10 rounded-3xl p-6 md:p-7 space-y-5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <Users className="w-6 h-6 text-emerald-400" />
