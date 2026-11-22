@@ -1,390 +1,332 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { motion } from "framer-motion";
+import React, { useEffect, useMemo, useState } from "react";
+import { useParams } from "next/navigation";
 import {
-  BellRing,
-  CheckCircle2,
-  LogOut,
+  Gamepad2,
   Trophy,
-  Users,
-  Zap,
+  Wifi,
+  WifiOff,
+  Send,
+  Sparkles,
 } from "lucide-react";
-import { GlassPanel } from "@/components/tvos/GlassPanel";
-import { LiveLeaderboard } from "@/components/shared/LiveLeaderboard";
-import { INITIAL_GAMES } from "@/features/games/catalog";
-import { usePlayerSession } from "@/hooks/usePlayerSession";
 import type {
-  GameSlug,
+  GameContent,
+  GameSession,
   PlayerScore,
-  PlayerSession,
-  SessionStatus,
+  SessionPlayer,
 } from "@/types/game.types";
 
-const AVATARS = [
-  { id: "fox", emoji: "🦊", label: "Renard" },
-  { id: "rocket", emoji: "🚀", label: "Fusée" },
-  { id: "crown", emoji: "👑", label: "Couronne" },
-  { id: "ghost", emoji: "👻", label: "Fantôme" },
-  { id: "alien", emoji: "👾", label: "Pixel" },
-  { id: "unicorn", emoji: "🦄", label: "Licorne" },
-  { id: "flame", emoji: "🔥", label: "Flamme" },
-  { id: "star", emoji: "⭐", label: "Étoile" },
-];
+interface PlayerIdentity {
+  playerId: string;
+  nickname: string;
+  avatar?: string | null;
+}
 
 export default function PlayerControllerPage() {
   const params = useParams<{ sessionCode: string }>();
-  const router = useRouter();
-  const sessionCode = (params.sessionCode ?? "DEMO01").toUpperCase();
+  const sessionCode = (params?.sessionCode ?? "").toUpperCase();
 
-  const { identity, isHydrated, saveIdentity, clearIdentity } =
-    usePlayerSession(sessionCode);
+  const [identity, setIdentity] = useState<PlayerIdentity | null>(null);
+  const [nicknameInput, setNicknameInput] = useState<string>("");
+  const [session, setSession] = useState<GameSession | null>(null);
+  const [players, setPlayers] = useState<SessionPlayer[]>([]);
+  const [scores, setScores] = useState<PlayerScore[]>([]);
+  const [currentContent, setCurrentContent] = useState<GameContent | null>(null);
+  const [answerInput, setAnswerInput] = useState<string>("");
+  const [submittedRound, setSubmittedRound] = useState<number | null>(null);
+  const [isConnected, setIsConnected] = useState<boolean>(true);
+  const [statusMessage, setStatusMessage] = useState<string>("");
 
-  const [nicknameInput, setNicknameInput] = useState("");
-  const [selectedAvatar, setSelectedAvatar] = useState("fox");
-  const [formError, setFormError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!sessionCode) return;
+    try {
+      const saved = localStorage.getItem(`player_identity_${sessionCode}`);
+      if (saved) {
+        const parsed = JSON.parse(saved) as PlayerIdentity;
+        if (parsed?.playerId && parsed?.nickname) {
+          setIdentity(parsed);
+          setNicknameInput(parsed.nickname);
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }, [sessionCode]);
 
-  // États locaux d'aperçu avant connexion temps réel (Étape 6)
-  const [status] = useState<SessionStatus>("lobby");
-  const [gameSlug] = useState<GameSlug>("quiz");
-  const [selectedOption, setSelectedOption] = useState<number | null>(null);
-  const [hasBuzzed, setHasBuzzed] = useState(false);
-  const [players] = useState<PlayerSession[]>([]);
-  const [scores] = useState<PlayerScore[]>([]);
-  const [activeTab, setActiveTab] = useState<"controller" | "ranking">(
-    "controller"
-  );
+  useEffect(() => {
+    if (!sessionCode) return;
 
-  const activeGame = useMemo(
-    () => INITIAL_GAMES.find((g) => g.slug === gameSlug) ?? INITIAL_GAMES[0],
-    [gameSlug]
-  );
+    const handleOnline = () => setIsConnected(true);
+    const handleOffline = () => setIsConnected(false);
+
+    setIsConnected(typeof navigator !== "undefined" ? navigator.onLine : true);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [sessionCode]);
 
   const myScore = useMemo(() => {
     if (!identity) return 0;
     return (
-      scores.find((s) => s.playerId === identity.playerId)?.totalScore ?? 0
+      scores.find((s) => s.player_id === identity.playerId)?.score ?? 0
     );
   }, [identity, scores]);
 
-  const handleJoin = (e: React.FormEvent) => {
+  const handleJoinGame = (e: React.FormEvent) => {
     e.preventDefault();
     const cleanName = nicknameInput.trim();
-    if (cleanName.length < 2) {
-      setFormError("Choisissez un pseudo d'au moins 2 caractères.");
-      return;
-    }
-    setFormError(null);
+    if (!cleanName) return;
 
-    const localId =
-      typeof crypto !== "undefined" && "randomUUID" in crypto
-        ? crypto.randomUUID()
-        : `player-${Date.now()}`;
-
-    saveIdentity({
-      playerId: localId,
-      playerToken: localId,
+    const newIdentity: PlayerIdentity = {
+      playerId:
+        identity?.playerId ??
+        `player-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       nickname: cleanName,
-      avatarId: selectedAvatar,
+      avatar: identity?.avatar ?? "🎮",
+    };
+
+    setIdentity(newIdentity);
+
+    try {
+      localStorage.setItem(
+        `player_identity_${sessionCode}`,
+        JSON.stringify(newIdentity)
+      );
+    } catch {
+      // Ignore storage errors
+    }
+
+    setPlayers((prev) => {
+      const exists = prev.some((p) => p.id === newIdentity.playerId);
+      if (exists) {
+        return prev.map((p) =>
+          p.id === newIdentity.playerId
+            ? { ...p, nickname: newIdentity.nickname, is_connected: true }
+            : p
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: newIdentity.playerId,
+          session_id: session?.id ?? sessionCode,
+          nickname: newIdentity.nickname,
+          avatar: newIdentity.avatar ?? "🎮",
+          is_host: false,
+          is_connected: true,
+        },
+      ];
     });
+
+    setScores((prev) => {
+      const exists = prev.some((s) => s.player_id === newIdentity.playerId);
+      if (exists) return prev;
+      return [
+        ...prev,
+        {
+          id: `score-${newIdentity.playerId}`,
+          session_id: session?.id ?? sessionCode,
+          player_id: newIdentity.playerId,
+          score: 0,
+        },
+      ];
+    });
+
+    setStatusMessage("Connecté à la partie !");
   };
 
-  const handleBuzz = () => {
-    if (hasBuzzed) return;
-    setHasBuzzed(true);
-    if (typeof navigator !== "undefined" && "vibrate" in navigator) {
-      try {
-        navigator.vibrate([40, 20, 60]);
-      } catch {
-        // Ignore vibration unsupported error
-      }
+  const handleSubmitAnswer = (
+    e?: React.FormEvent,
+    directOption?: string
+  ) => {
+    if (e) e.preventDefault();
+    if (!identity) return;
+
+    const valueToSend = (directOption ?? answerInput).trim();
+    if (!valueToSend) return;
+
+    const round = session?.current_round ?? 1;
+    setSubmittedRound(round);
+    setStatusMessage(`Réponse envoyée : "${valueToSend}"`);
+    if (!directOption) {
+      setAnswerInput("");
     }
   };
 
-  if (!isHydrated) {
-    return (
-      <main className="flex min-h-screen items-center justify-center bg-tvos-bg text-white">
-        <p className="text-sm text-white/60">Chargement de la manette...</p>
-      </main>
-    );
-  }
-
-  if (!identity) {
-    return (
-      <main className="flex min-h-screen flex-col items-center justify-center bg-tvos-bg px-5 py-8 text-white">
-        <div
-          className="pointer-events-none fixed inset-0"
-          style={{
-            background:
-              "radial-gradient(circle at 50% 10%, rgba(10, 132, 255, 0.22) 0%, transparent 55%)",
-          }}
-        />
-
-        <motion.div
-          initial={{ opacity: 0, y: 14 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="relative z-10 w-full max-w-md"
-        >
-          <GlassPanel className="p-6">
-            <div className="mb-5 text-center">
-              <span className="inline-block rounded-full bg-white/10 px-3.5 py-1 font-mono text-xs font-bold tracking-[0.2em] text-tvos-accent">
-                PARTIE {sessionCode}
-              </span>
-              <h1 className="mt-2 text-2xl font-bold tracking-tight">
-                Choisissez votre profil
-              </h1>
-              <p className="mt-1 text-xs text-white/60">
-                Votre avatar et votre pseudo apparaîtront sur le téléviseur.
-              </p>
-            </div>
-
-            <form onSubmit={handleJoin} className="space-y-5">
-              <div>
-                <label
-                  htmlFor="player-nickname"
-                  className="mb-2 block text-xs font-semibold uppercase tracking-wider text-white/65"
-                >
-                  Pseudo
-                </label>
-                <input
-                  id="player-nickname"
-                  type="text"
-                  maxLength={18}
-                  placeholder="Ex: Alex"
-                  value={nicknameInput}
-                  onChange={(e) => setNicknameInput(e.target.value)}
-                  className="w-full rounded-2xl border border-white/15 bg-white/[0.06] px-4 py-3.5 text-base font-semibold text-white placeholder:text-white/30 focus:border-tvos-accent focus:outline-none"
-                />
-              </div>
-
-              <div>
-                <span className="mb-2 block text-xs font-semibold uppercase tracking-wider text-white/65">
-                  Avatar
-                </span>
-                <div className="grid grid-cols-4 gap-2.5">
-                  {AVATARS.map((avatar) => {
-                    const active = selectedAvatar === avatar.id;
-                    return (
-                      <button
-                        key={avatar.id}
-                        type="button"
-                        onClick={() => setSelectedAvatar(avatar.id)}
-                        className={`flex flex-col items-center justify-center rounded-2xl border py-3 transition ${
-                          active
-                            ? "border-white bg-white/20 shadow-lg"
-                            : "border-white/10 bg-white/[0.04] hover:bg-white/10"
-                        }`}
-                      >
-                        <span className="text-2xl">{avatar.emoji}</span>
-                        <span className="mt-1 text-[11px] font-medium text-white/80">
-                          {avatar.label}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {formError ? (
-                <p className="text-center text-xs font-medium text-rose-400">
-                  {formError}
-                </p>
-              ) : null}
-
-              <button
-                type="submit"
-                className="w-full rounded-2xl bg-white py-3.5 text-sm font-bold text-black shadow-lg transition active:scale-[0.98]"
-              >
-                Rejoindre la partie
-              </button>
-            </form>
-          </GlassPanel>
-        </motion.div>
-      </main>
-    );
-  }
-
-  const currentAvatarEmoji =
-    AVATARS.find((a) => a.id === identity.avatarId)?.emoji ?? "🎮";
+  const roundStatus = session?.status ?? "lobby";
+  const currentRound = session?.current_round ?? 1;
+  const alreadySubmittedThisRound = submittedRound === currentRound;
 
   return (
-    <main className="flex min-h-screen flex-col justify-between bg-tvos-bg px-4 py-5 text-white">
-      <div className="mx-auto w-full max-w-md flex-1 space-y-5">
-        {/* En-tête joueur */}
-        <GlassPanel className="flex items-center justify-between px-4 py-3.5">
-          <div className="flex items-center gap-3">
-            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/10 text-2xl">
-              {currentAvatarEmoji}
-            </span>
-            <div>
-              <p className="text-sm font-bold leading-tight">
-                {identity.nickname}
-              </p>
-              <p className="font-mono text-xs text-tvos-accent">
-                {sessionCode} • {myScore} pts
-              </p>
+    <div className="min-h-screen bg-neutral-950 text-white flex flex-col justify-between p-5 select-none">
+      <div className="max-w-md w-full mx-auto space-y-6">
+        {/* Top Bar */}
+        <header className="flex items-center justify-between border-b border-white/10 pb-4">
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-neutral-400">
+              Salle
+            </div>
+            <div className="font-mono text-xl font-bold tracking-widest text-amber-400">
+              {sessionCode || "----"}
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => {
-              clearIdentity();
-              router.push("/play");
-            }}
-            aria-label="Quitter la partie"
-            className="rounded-xl bg-white/10 p-2.5 text-white/75 hover:bg-white/20 hover:text-white"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
-        </GlassPanel>
-
-        {/* Onglets Manette / Classement */}
-        <div className="grid grid-cols-2 gap-2 rounded-2xl bg-white/[0.05] p-1">
-          <button
-            type="button"
-            onClick={() => setActiveTab("controller")}
-            className={`flex items-center justify-center gap-2 rounded-xl py-2.5 text-xs font-bold transition ${
-              activeTab === "controller"
-                ? "bg-white text-black"
-                : "text-white/70 hover:text-white"
-            }`}
-          >
-            <Zap className="h-4 w-4" />
-            Manette
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab("ranking")}
-            className={`flex items-center justify-center gap-2 rounded-xl py-2.5 text-xs font-bold transition ${
-              activeTab === "ranking"
-                ? "bg-white text-black"
-                : "text-white/70 hover:text-white"
-            }`}
-          >
-            <Trophy className="h-4 w-4" />
-            Classement
-          </button>
-        </div>
-
-        {activeTab === "ranking" ? (
-          <LiveLeaderboard scores={scores} title="Classement" />
-        ) : (
-          <GlassPanel className="p-6">
-            <div className="mb-4 flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-white/55">
-                {activeGame?.title}
-              </span>
-              <span className="rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold text-white/80">
-                {status === "lobby" && "En attente"}
-                {status === "starting" && "Démarrage"}
-                {status === "playing" && "En jeu"}
-                {status === "paused" && "Pause"}
-                {status === "round_result" && "Résultat"}
-                {status === "finished" && "Terminé"}
-              </span>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5">
+              <Trophy className="w-4 h-4 text-amber-400" />
+              <span className="font-mono font-bold text-sm">{myScore} pts</span>
             </div>
 
-            {status === "lobby" && (
-              <div className="py-6 text-center">
-                <CheckCircle2 className="mx-auto mb-3 h-11 w-11 text-emerald-400" />
-                <h2 className="text-xl font-bold">Vous êtes prêt !</h2>
-                <p className="mt-1.5 text-sm text-white/65">
-                  Regardez le téléviseur. L&apos;animateur va lancer la partie.
-                </p>
+            <div
+              className={`p-2 rounded-xl border ${
+                isConnected
+                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                  : "bg-rose-500/10 border-rose-500/30 text-rose-300"
+              }`}
+              title={isConnected ? "Connecté" : "Hors ligne"}
+            >
+              {isConnected ? (
+                <Wifi className="w-4 h-4" />
+              ) : (
+                <WifiOff className="w-4 h-4" />
+              )}
+            </div>
+          </div>
+        </header>
 
-                <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-left">
-                  <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-white/70">
-                    <Users className="h-4 w-4 text-tvos-accent" />
-                    <span>Joueurs connectés ({players.length})</span>
+        {/* Join Form or Controller */}
+        {!identity ? (
+          <form
+            onSubmit={handleJoinGame}
+            className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4"
+          >
+            <div className="flex items-center gap-2 text-amber-400 text-xs uppercase tracking-wider font-semibold">
+              <Sparkles className="w-4 h-4" />
+              <span>Rejoindre la partie</span>
+            </div>
+
+            <h1 className="text-2xl font-bold">Choisis ton pseudo</h1>
+
+            <input
+              type="text"
+              value={nicknameInput}
+              onChange={(e) => setNicknameInput(e.target.value)}
+              placeholder="Ton pseudo..."
+              maxLength={24}
+              className="w-full rounded-2xl bg-black/40 border border-white/15 px-4 py-3 text-white placeholder:text-neutral-500 focus:outline-none focus:border-amber-400"
+            />
+
+            <button
+              type="submit"
+              disabled={!nicknameInput.trim()}
+              className="w-full py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-black font-bold transition"
+            >
+              Entrer dans la salle
+            </button>
+          </form>
+        ) : (
+          <main className="space-y-5">
+            {/* Player Status Card */}
+            <div className="bg-white/5 border border-white/10 rounded-3xl p-5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-3xl">{identity.avatar ?? "🎮"}</span>
+                <div>
+                  <div className="font-bold text-lg">{identity.nickname}</div>
+                  <div className="text-xs text-neutral-400">
+                    Manche {currentRound} • État :{" "}
+                    <span className="text-white uppercase">{roundStatus}</span>
                   </div>
-                  {players.length === 0 ? (
-                    <p className="text-xs text-white/50">
-                      Synchronisation en direct active dès l&apos;Étape 6.
-                    </p>
-                  ) : (
-                    <div className="flex flex-wrap gap-2">
-                      {players.map((p) => (
-                        <span
-                          key={p.id}
-                          className="rounded-full bg-white/10 px-3 py-1 text-xs font-semibold"
-                        >
-                          {p.nickname}
-                        </span>
-                      ))}
-                    </div>
-                  )}
+                </div>
+              </div>
+              <Gamepad2 className="w-6 h-6 text-neutral-400" />
+            </div>
+
+            {/* Active Question / Action Zone */}
+            <div className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4">
+              {currentContent?.question && (
+                <p className="text-base font-semibold leading-snug">
+                  {currentContent.question}
+                </p>
+              )}
+
+              {currentContent?.options && currentContent.options.length > 0 ? (
+                <div className="grid grid-cols-1 gap-3">
+                  {currentContent.options.map((opt) => (
+                    <button
+                      key={opt}
+                      type="button"
+                      disabled={alreadySubmittedThisRound}
+                      onClick={() => handleSubmitAnswer(undefined, opt)}
+                      className="w-full text-left py-3.5 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 font-medium transition"
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <form onSubmit={handleSubmitAnswer} className="space-y-3">
+                  <input
+                    type="text"
+                    value={answerInput}
+                    onChange={(e) => setAnswerInput(e.target.value)}
+                    disabled={alreadySubmittedThisRound}
+                    placeholder="Entre ta réponse..."
+                    className="w-full rounded-2xl bg-black/40 border border-white/15 px-4 py-3 text-white placeholder:text-neutral-500 focus:outline-none focus:border-amber-400 disabled:opacity-40"
+                  />
+                  <button
+                    type="submit"
+                    disabled={
+                      alreadySubmittedThisRound || !answerInput.trim()
+                    }
+                    className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-black font-bold transition"
+                  >
+                    <Send className="w-4 h-4" />
+                    <span>
+                      {alreadySubmittedThisRound
+                        ? "Réponse envoyée"
+                        : "Envoyer"}
+                    </span>
+                  </button>
+                </form>
+              )}
+
+              {statusMessage && (
+                <p className="text-xs text-emerald-300 text-center pt-1">
+                  {statusMessage}
+                </p>
+              )}
+            </div>
+
+            {/* Connected Players Preview */}
+            {players.length > 0 && (
+              <div className="bg-white/5 border border-white/10 rounded-3xl p-4">
+                <div className="text-xs uppercase tracking-wider text-neutral-400 mb-2">
+                  Joueurs ({players.length})
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {players.map((p) => (
+                    <span
+                      key={p.id}
+                      className="text-xs bg-white/10 px-3 py-1.5 rounded-full"
+                    >
+                      {p.avatar ?? "🎮"} {p.nickname}
+                    </span>
+                  ))}
                 </div>
               </div>
             )}
-
-            {status === "playing" && gameSlug === "blind-test" && (
-              <div className="flex flex-col items-center py-6 text-center">
-                <button
-                  type="button"
-                  disabled={hasBuzzed}
-                  onClick={handleBuzz}
-                  className={`flex h-48 w-48 flex-col items-center justify-center rounded-full border-4 transition active:scale-95 ${
-                    hasBuzzed
-                      ? "border-emerald-400/50 bg-emerald-500/20 text-emerald-200"
-                      : "border-rose-300 bg-gradient-to-b from-rose-500 to-rose-700 text-white shadow-[0_0_50px_rgba(244,63,94,0.55)]"
-                  }`}
-                >
-                  <BellRing className="mb-2 h-12 w-12" />
-                  <span className="text-xl font-black tracking-wider">
-                    {hasBuzzed ? "BUZZÉ !" : "BUZZER"}
-                  </span>
-                </button>
-                <p className="mt-5 text-xs text-white/65">
-                  {hasBuzzed
-                    ? "Réponse transmise à l'animateur..."
-                    : "Appuyez dès que vous trouvez !"}
-                </p>
-              </div>
-            )}
-
-            {status === "playing" && gameSlug !== "blind-test" && (
-              <div className="space-y-3 py-2">
-                <p className="mb-3 text-center text-xs text-white/65">
-                  Choisissez votre réponse sur l&apos;écran TV
-                </p>
-                {[0, 1, 2, 3].map((idx) => {
-                  const labels = ["A", "B", "C", "D"];
-                  const isPicked = selectedOption === idx;
-                  return (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => setSelectedOption(idx)}
-                      className={`flex w-full items-center gap-4 rounded-2xl border px-5 py-4 text-left font-bold transition active:scale-[0.98] ${
-                        isPicked
-                          ? "border-white bg-tvos-accent text-white shadow-lg"
-                          : "border-white/15 bg-white/[0.06] text-white hover:bg-white/10"
-                      }`}
-                    >
-                      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-black/30 font-mono text-sm">
-                        {labels[idx]}
-                      </span>
-                      <span className="text-base">Choix {labels[idx]}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {status !== "lobby" && status !== "playing" && (
-              <div className="py-10 text-center text-sm text-white/70">
-                Suivez l&apos;action sur l&apos;écran principal du téléviseur.
-              </div>
-            )}
-          </GlassPanel>
+          </main>
         )}
       </div>
 
-      <footer className="mt-6 text-center text-[11px] text-white/40">
-        tvOS Party • Manette tactile
+      <footer className="text-center text-[11px] text-neutral-500 pt-6">
+        Manette Joueur • {sessionCode || "—"}
       </footer>
-    </main>
+    </div>
   );
 }
