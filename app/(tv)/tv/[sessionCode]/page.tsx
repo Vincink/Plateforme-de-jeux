@@ -6,7 +6,7 @@ import { QrCode, Users, Tv, Sparkles } from "lucide-react";
 import { QRCodeCanvas } from "qrcode.react";
 import { clientEnv } from "@/lib/env";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import { getPlayerColor } from "@/lib/colorsplayer";
+import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
 import type {
   GameSession,
@@ -59,7 +59,8 @@ export default function TvSessionPage() {
         supabase
           .from("session_players")
           .select("*")
-          .eq("session_id", targetSessionId),
+          .eq("session_id", targetSessionId)
+          .order("id", { ascending: true }),
         supabase
           .from("player_scores")
           .select("*")
@@ -383,8 +384,8 @@ export default function TvSessionPage() {
             </div>
           ) : (
             <div className="my-auto grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {sortedPlayers.map((player, index) => {
-                const color = getPlayerColor(player.id, index);
+              {sortedPlayers.map((player) => {
+                const color = getUniquePlayerColor(player.id, players);
                 const avatarKey = player.avatarId ?? "";
                 const avatarSymbol =
                   (avatarKey ? AVATAR_EMOJIS[avatarKey] : undefined) ??
