@@ -40,6 +40,8 @@ interface QuizStatePayload {
   scores?: Record<string, number | string>;
   points?: Record<string, number | string>;
   pointsMap?: Record<string, number | string>;
+  playerScores?: Record<string, number | string>;
+  player_scores?: Record<string, number | string>;
 }
 
 type ExtendedSession = GameSession & {
@@ -51,11 +53,15 @@ type ExtendedSession = GameSession & {
   current_question_index?: number | null;
   scores?: Record<string, number | string> | null;
   points?: Record<string, number | string> | null;
+  playerScores?: Record<string, number | string> | null;
+  player_scores?: Record<string, number | string> | null;
 };
 
 type ExtendedPlayer = SessionPlayer & {
   score?: number | string | null;
   points?: number | string | null;
+  total_score?: number | string | null;
+  totalPoints?: number | string | null;
   player_id?: string | number | null;
   user_id?: string | number | null;
 };
@@ -170,7 +176,8 @@ export default function TvQuizPage() {
       if (data?.title) setGameTitle(data.title);
     };
 
-    const loadPlayers = async (targetSessionId: string) => {
+    const loadPlayers = async (targetSessionId: string | null) => {
+      if (!targetSessionId) return;
       const { data } = await supabase
         .from("session_players")
         .select("*")
@@ -216,17 +223,18 @@ export default function TvQuizPage() {
       }
 
       playersChannel = supabase
-        .channel(`tv-quiz-players-${targetSession.id}`)
+        .channel(`tv-quiz-players-${targetSession.id}-${Date.now()}`)
         .on(
           "postgres_changes",
           {
             event: "*",
             schema: "public",
             table: "session_players",
-            filter: `session_id=eq.${targetSession.id}`,
           },
           () => {
+            if (!isMounted) return;
             void loadPlayers(targetSession.id);
+            void refreshSessionRow();
           }
         )
         .subscribe();
@@ -251,7 +259,7 @@ export default function TvQuizPage() {
     void fetchInitial();
 
     const sessionChannel = supabase
-      .channel(`tv-quiz-session-${sessionCode}`)
+      .channel(`tv-quiz-session-${sessionCode}-${Date.now()}`)
       .on(
         "postgres_changes",
         {
@@ -263,7 +271,10 @@ export default function TvQuizPage() {
         (payload) => {
           if (!isMounted) return;
           const nextRow = payload.new as ExtendedSession | null;
-          if (!nextRow) return;
+          if (!nextRow) {
+            void refreshSessionRow();
+            return;
+          }
           setSession(nextRow);
           bindSession(nextRow);
         }
@@ -276,7 +287,7 @@ export default function TvQuizPage() {
       if (activeSessionId) {
         void loadPlayers(activeSessionId);
       }
-    }, 1500);
+    }, 1000);
 
     return () => {
       isMounted = false;
@@ -363,13 +374,24 @@ export default function TvQuizPage() {
 
   const answersMap = quizState.answers ?? {};
   const scoresMap = useMemo<Record<string, number | string>>(() => {
-    return {
+    const merged: Record<string, number | string> = {
+      ...(session?.player_scores ?? {}),
+      ...(session?.playerScores ?? {}),
       ...(session?.points ?? {}),
       ...(session?.scores ?? {}),
+      ...(quizState.player_scores ?? {}),
+      ...(quizState.playerScores ?? {}),
       ...(quizState.pointsMap ?? {}),
       ...(quizState.points ?? {}),
       ...(quizState.scores ?? {}),
     };
+
+    const normalized: Record<string, number | string> = {};
+    for (const [k, v] of Object.entries(merged)) {
+      normalized[k] = v;
+      normalized[k.trim().toLowerCase()] = v;
+    }
+    return normalized;
   }, [session, quizState]);
 
   const allPlayersAnswered = useMemo(() => {
@@ -415,6 +437,7 @@ export default function TvQuizPage() {
             ? String(player.user_id)
             : "",
           player.nickname ? String(player.nickname) : "",
+          player.nickname ? String(player.nickname).trim().toLowerCase() : "",
         ].filter(Boolean);
 
         let mappedValue: number | null = null;
@@ -429,7 +452,10 @@ export default function TvQuizPage() {
         }
 
         const directPlayerScore =
-          toFiniteNumber(player.score) ?? toFiniteNumber(player.points);
+          toFiniteNumber(player.score) ??
+          toFiniteNumber(player.points) ??
+          toFiniteNumber(player.total_score) ??
+          toFiniteNumber(player.totalPoints);
 
         const score = mappedValue ?? directPlayerScore ?? 0;
         const chosenLetter = normalizeAnswerLetter(
