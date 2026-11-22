@@ -22,7 +22,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import { getPlayerColor } from "@/lib/colorsplayer";
+import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
 import type {
   GameSession,
@@ -95,7 +95,8 @@ export default function AdminConsolePage() {
         supabase
           .from("session_players")
           .select("*")
-          .eq("session_id", targetSessionId),
+          .eq("session_id", targetSessionId)
+          .order("id", { ascending: true }),
         supabase
           .from("player_scores")
           .select("*")
@@ -701,8 +702,8 @@ export default function AdminConsolePage() {
             </p>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {players.map((player, index) => {
-                const color = getPlayerColor(player.id, index);
+              {players.map((player) => {
+                const color = getUniquePlayerColor(player.id, players);
 
                 return (
                   <div
