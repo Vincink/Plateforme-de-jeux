@@ -68,7 +68,9 @@ export default function TvSessionPage() {
       "finished",
     ];
     const currentStatus = session?.status ?? "lobby";
-    const nextStatus = order[(order.indexOf(currentStatus) + 1) % order.length];
+    const currentIndex = order.indexOf(currentStatus);
+    const nextStatus: SessionStatus =
+      order[(currentIndex + 1) % order.length] ?? "lobby";
     setSession((prev) => ({
       id: prev?.id ?? "demo-session",
       game_id: prev?.game_id ?? currentGame?.id ?? "quiz",
