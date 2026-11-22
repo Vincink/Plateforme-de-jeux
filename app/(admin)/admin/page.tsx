@@ -19,6 +19,7 @@ import {
   Check,
   Sparkles,
   ExternalLink,
+  AlertTriangle,
 } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
@@ -54,6 +55,7 @@ export default function AdminConsolePage() {
   const [showQrOnTv, setShowQrOnTv] = useState<boolean>(true);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
+  const [dbError, setDbError] = useState<string | null>(null);
 
   const [players, setPlayers] = useState<PlayerSession[]>([
     {
@@ -86,9 +88,17 @@ export default function AdminConsolePage() {
     round: number;
     qrVisible: boolean;
   }) => {
-    if (!supabase || !params.gameId) return;
+    if (!supabase) {
+      setDbError("Client Supabase non initialisé (vérifier NEXT_PUBLIC_SUPABASE_URL / ANON_KEY).");
+      return;
+    }
+    if (!params.gameId) {
+      setDbError("Aucun jeu sélectionné.");
+      return;
+    }
 
     setIsSavingSession(true);
+    setDbError(null);
     try {
       const payload = {
         code: params.code,
@@ -104,7 +114,7 @@ export default function AdminConsolePage() {
           .update(payload)
           .eq("id", params.id);
         if (error) {
-          console.error("Erreur mise à jour session:", error.message);
+          setDbError(`Mise à jour session impossible : ${error.message}`);
         }
       } else {
         const { data, error } = await supabase
@@ -113,7 +123,7 @@ export default function AdminConsolePage() {
           .select()
           .single<GameSession>();
         if (error) {
-          console.error("Erreur création session:", error.message);
+          setDbError(`Création session impossible : ${error.message}`);
         } else if (data?.id) {
           setSessionId(data.id);
         }
@@ -129,18 +139,29 @@ export default function AdminConsolePage() {
     const init = async () => {
       let resolvedGameId = INITIAL_GAMES[0]?.id ?? "";
 
-      if (supabase) {
-        const { data: dbGames } = await supabase
-          .from("games")
-          .select("id, slug, title, tagline, min_players, max_players, is_active")
-          .order("title", { ascending: true });
-
-        const firstGame = dbGames?.[0];
-        if (!cancelled && dbGames && dbGames.length > 0 && firstGame?.id) {
-          setGames(dbGames as CatalogGame[]);
-          resolvedGameId = firstGame.id;
-          setSelectedGameId(firstGame.id);
+      if (!supabase) {
+        if (!cancelled) {
+          setDbError("Client Supabase non initialisé.");
         }
+        return;
+      }
+
+      const { data: dbGames, error: gamesError } = await supabase
+        .from("games")
+        .select("id, slug, title, tagline, min_players, max_players, is_active")
+        .order("title", { ascending: true });
+
+      if (gamesError && !cancelled) {
+        setDbError(`Lecture jeux impossible : ${gamesError.message}`);
+      }
+
+      const rows = Array.isArray(dbGames) ? dbGames : [];
+      const firstId = rows.length > 0 ? rows[0]?.id : undefined;
+
+      if (!cancelled && rows.length > 0 && typeof firstId === "string" && firstId.length > 0) {
+        setGames(rows as CatalogGame[]);
+        resolvedGameId = firstId;
+        setSelectedGameId(firstId);
       }
 
       if (!cancelled && resolvedGameId) {
@@ -330,6 +351,13 @@ export default function AdminConsolePage() {
             </button>
           </div>
         </header>
+
+        {dbError ? (
+          <div className="flex items-center gap-3 rounded-2xl border border-rose-500/40 bg-rose-500/15 px-4 py-3 text-sm text-rose-200">
+            <AlertTriangle className="w-5 h-5 shrink-0 text-rose-400" />
+            <span>{dbError}</span>
+          </div>
+        ) : null}
 
         {/* Contrôles de session & Affichage TV */}
         <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
