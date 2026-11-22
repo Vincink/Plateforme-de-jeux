@@ -8,16 +8,18 @@ export interface PlayerColorTheme {
   scoreHex: string;
 }
 
+const FALLBACK_COLOR: PlayerColorTheme = {
+  id: "crimson",
+  name: "Rouge vif",
+  bgHex: "#e11d48",
+  borderHex: "#fda4af",
+  textHex: "#ffffff",
+  badgeBgHex: "rgba(0, 0, 0, 0.24)",
+  scoreHex: "#fef08a",
+};
+
 export const PLAYER_COLORS: readonly PlayerColorTheme[] = [
-  {
-    id: "crimson",
-    name: "Rouge vif",
-    bgHex: "#e11d48",
-    borderHex: "#fda4af",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fef08a",
-  },
+  FALLBACK_COLOR,
   {
     id: "cobalt",
     name: "Bleu cobalt",
@@ -210,8 +212,8 @@ export function getPlayerColor(
   if (playerId && playerId.trim().length > 0) {
     const hashed = hashString(playerId.trim());
     const index = (hashed + safeIndex) % count;
-    return PLAYER_COLORS[index] ?? PLAYER_COLORS[0];
+    return PLAYER_COLORS.at(index) ?? FALLBACK_COLOR;
   }
 
-  return PLAYER_COLORS[safeIndex % count] ?? PLAYER_COLORS[0];
+  return PLAYER_COLORS.at(safeIndex % count) ?? FALLBACK_COLOR;
 }
