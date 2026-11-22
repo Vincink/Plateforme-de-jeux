@@ -12,6 +12,9 @@ export const viewport: Viewport = {
   themeColor: "#07080C",
   width: "device-width",
   initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({
@@ -21,7 +24,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="fr" className="dark">
-      <body className="min-h-screen bg-tvos-bg text-white antialiased selection:bg-tvos-accent/40 selection:text-white">
+      <body className="h-[100dvh] w-screen overflow-hidden overscroll-none select-none bg-tvos-bg text-white antialiased selection:bg-tvos-accent/40 selection:text-white">
         <MotionConfig reducedMotion="user">{children}</MotionConfig>
       </body>
     </html>
