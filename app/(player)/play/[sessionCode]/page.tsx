@@ -10,6 +10,7 @@ import {
   Send,
   Sparkles,
 } from "lucide-react";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type {
   GameContent,
   GameSession,
@@ -19,13 +20,16 @@ import type {
 
 interface PlayerIdentity {
   playerId: string;
+  playerToken: string;
   nickname: string;
-  avatar?: string | null;
+  avatarId: string;
+  avatar: string;
 }
 
 export default function PlayerControllerPage() {
   const params = useParams<{ sessionCode: string }>();
   const sessionCode = (params?.sessionCode ?? "").toUpperCase();
+  const supabase = getSupabaseBrowserClient();
 
   const [identity, setIdentity] = useState<PlayerIdentity | null>(null);
   const [nicknameInput, setNicknameInput] = useState<string>("");
@@ -36,6 +40,7 @@ export default function PlayerControllerPage() {
   const [answerInput, setAnswerInput] = useState<string>("");
   const [submittedRound, setSubmittedRound] = useState<number | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(true);
+  const [isJoining, setIsJoining] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>("");
 
   useEffect(() => {
@@ -43,10 +48,19 @@ export default function PlayerControllerPage() {
     try {
       const saved = localStorage.getItem(`player_identity_${sessionCode}`);
       if (saved) {
-        const parsed = JSON.parse(saved) as PlayerIdentity;
+        const parsed = JSON.parse(saved) as Partial<PlayerIdentity>;
         if (parsed?.playerId && parsed?.nickname) {
-          setIdentity(parsed);
-          setNicknameInput(parsed.nickname);
+          const restored: PlayerIdentity = {
+            playerId: parsed.playerId,
+            playerToken:
+              parsed.playerToken ??
+              `tok-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            nickname: parsed.nickname,
+            avatarId: parsed.avatarId ?? "gamepad",
+            avatar: parsed.avatar ?? "🎮",
+          };
+          setIdentity(restored);
+          setNicknameInput(restored.nickname);
         }
       }
     } catch {
@@ -70,77 +84,279 @@ export default function PlayerControllerPage() {
     };
   }, [sessionCode]);
 
-  const myScore = useMemo(() => {
-    if (!identity) return 0;
-    return (
-      scores.find((s) => s.player_id === identity.playerId)?.score ?? 0
-    );
-  }, [identity, scores]);
+  useEffect(() => {
+    if (!supabase || !sessionCode) return;
 
-  const handleJoinGame = (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanName = nicknameInput.trim();
-    if (!cleanName) return;
+    let isMounted = true;
+    let childrenChannel: ReturnType<typeof supabase.channel> | null = null;
+    let contentChannel: ReturnType<typeof supabase.channel> | null = null;
 
-    const newIdentity: PlayerIdentity = {
-      playerId:
-        identity?.playerId ??
-        `player-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      nickname: cleanName,
-      avatar: identity?.avatar ?? "🎮",
+    const loadPlayersAndScores = async (targetSessionId: string) => {
+      const [{ data: playersData }, { data: scoresData }] = await Promise.all([
+        supabase
+          .from("session_players")
+          .select("*")
+          .eq("session_id", targetSessionId),
+        supabase
+          .from("player_scores")
+          .select("*")
+          .eq("session_id", targetSessionId),
+      ]);
+
+      if (!isMounted) return;
+      if (playersData) {
+        setPlayers(playersData as SessionPlayer[]);
+      }
+      if (scoresData) {
+        setScores(scoresData as PlayerScore[]);
+      }
     };
 
-    setIdentity(newIdentity);
+    const loadActiveContent = async (contentId: string | null | undefined) => {
+      if (!contentId) {
+        if (isMounted) setCurrentContent(null);
+        return;
+      }
+      const { data } = await supabase
+        .from("game_contents")
+        .select("*")
+        .eq("id", contentId)
+        .maybeSingle<GameContent>();
+
+      if (isMounted) {
+        setCurrentContent(data ?? null);
+      }
+    };
+
+    const bindSessionData = (targetSession: GameSession) => {
+      if (childrenChannel) {
+        void supabase.removeChannel(childrenChannel);
+      }
+      if (contentChannel) {
+        void supabase.removeChannel(contentChannel);
+      }
+
+      void loadPlayersAndScores(targetSession.id);
+      void loadActiveContent(targetSession.active_content_id);
+
+      childrenChannel = supabase
+        .channel(`play-children-${targetSession.id}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "session_players",
+            filter: `session_id=eq.${targetSession.id}`,
+          },
+          () => {
+            void loadPlayersAndScores(targetSession.id);
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "player_scores",
+            filter: `session_id=eq.${targetSession.id}`,
+          },
+          () => {
+            void loadPlayersAndScores(targetSession.id);
+          }
+        )
+        .subscribe();
+
+      if (targetSession.active_content_id) {
+        contentChannel = supabase
+          .channel(`play-content-${targetSession.active_content_id}`)
+          .on(
+            "postgres_changes",
+            {
+              event: "*",
+              schema: "public",
+              table: "game_contents",
+              filter: `id=eq.${targetSession.active_content_id}`,
+            },
+            () => {
+              void loadActiveContent(targetSession.active_content_id);
+            }
+          )
+          .subscribe();
+      }
+    };
+
+    const fetchInitialSession = async () => {
+      const { data } = await supabase
+        .from("game_sessions")
+        .select("*")
+        .eq("code", sessionCode)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<GameSession>();
+
+      if (!isMounted) return;
+      if (data) {
+        setSession(data);
+        bindSessionData(data);
+      }
+    };
+
+    void fetchInitialSession();
+
+    const sessionChannel = supabase
+      .channel(`play-session-${sessionCode}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "game_sessions",
+          filter: `code=eq.${sessionCode}`,
+        },
+        (payload) => {
+          if (!isMounted) return;
+          const nextRow = payload.new as GameSession | null;
+          if (!nextRow) return;
+          setSession(nextRow);
+          bindSessionData(nextRow);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      void supabase.removeChannel(sessionChannel);
+      if (childrenChannel) {
+        void supabase.removeChannel(childrenChannel);
+      }
+      if (contentChannel) {
+        void supabase.removeChannel(contentChannel);
+      }
+    };
+  }, [supabase, sessionCode]);
+
+  const myScore = useMemo(() => {
+    if (!identity) return 0;
+    const match = scores.find((s) => s.player_id === identity.playerId);
+    if (!match) return 0;
+    const scoreRecord = match as unknown as {
+      total_score?: number;
+      score?: number;
+    };
+    return scoreRecord.total_score ?? scoreRecord.score ?? 0;
+  }, [identity, scores]);
+
+  const handleJoinGame = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = nicknameInput.trim();
+    if (!cleanName || !sessionCode) return;
+
+    setIsJoining(true);
+    setStatusMessage("");
 
     try {
-      localStorage.setItem(
-        `player_identity_${sessionCode}`,
-        JSON.stringify(newIdentity)
-      );
-    } catch {
-      // Ignore storage errors
-    }
+      let targetSession = session;
 
-    setPlayers((prev) => {
-      const exists = prev.some((p) => p.id === newIdentity.playerId);
-      if (exists) {
-        return prev.map((p) =>
-          p.id === newIdentity.playerId
-            ? { ...p, nickname: newIdentity.nickname, is_connected: true }
-            : p
-        );
+      if (!targetSession && supabase) {
+        const { data } = await supabase
+          .from("game_sessions")
+          .select("*")
+          .eq("code", sessionCode)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle<GameSession>();
+        targetSession = data ?? null;
+        if (data) {
+          setSession(data);
+        }
       }
-      return [
-        ...prev,
-        {
-          id: newIdentity.playerId,
-          session_id: session?.id ?? sessionCode,
-          nickname: newIdentity.nickname,
-          avatar: newIdentity.avatar ?? "🎮",
-          is_host: false,
-          is_connected: true,
-        },
-      ];
-    });
 
-    setScores((prev) => {
-      const exists = prev.some((s) => s.player_id === newIdentity.playerId);
-      if (exists) return prev;
-      return [
-        ...prev,
-        {
-          id: `score-${newIdentity.playerId}`,
-          session_id: session?.id ?? sessionCode,
-          player_id: newIdentity.playerId,
-          score: 0,
-        },
-      ];
-    });
+      const generatedId =
+        identity?.playerId &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          identity.playerId
+        )
+          ? identity.playerId
+          : crypto.randomUUID();
 
-    setStatusMessage("Connecté à la partie !");
+      const newIdentity: PlayerIdentity = {
+        playerId: generatedId,
+        playerToken:
+          identity?.playerToken ??
+          `tok-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        nickname: cleanName,
+        avatarId: identity?.avatarId ?? "gamepad",
+        avatar: identity?.avatar ?? "🎮",
+      };
+
+      setIdentity(newIdentity);
+
+      try {
+        localStorage.setItem(
+          `player_identity_${sessionCode}`,
+          JSON.stringify(newIdentity)
+        );
+      } catch {
+        // Ignore storage errors
+      }
+
+      if (supabase && targetSession?.id) {
+        const { error: playerError } = await supabase
+          .from("session_players")
+          .upsert(
+            {
+              id: newIdentity.playerId,
+              session_id: targetSession.id,
+              nickname: newIdentity.nickname,
+              avatar_id: newIdentity.avatarId,
+              player_token: newIdentity.playerToken,
+              is_connected: true,
+              last_seen_at: new Date().toISOString(),
+            },
+            { onConflict: "session_id,player_token" }
+          );
+
+        if (playerError) {
+          setStatusMessage(`Connexion impossible : ${playerError.message}`);
+          return;
+        }
+
+        await supabase.from("player_scores").upsert(
+          {
+            session_id: targetSession.id,
+            player_id: newIdentity.playerId,
+            nickname: newIdentity.nickname,
+            avatar_id: newIdentity.avatarId,
+            total_score: 0,
+            streak: 0,
+          },
+          { onConflict: "session_id,player_id", ignoreDuplicates: true }
+        );
+
+        const [{ data: playersData }, { data: scoresData }] =
+          await Promise.all([
+            supabase
+              .from("session_players")
+              .select("*")
+              .eq("session_id", targetSession.id),
+            supabase
+              .from("player_scores")
+              .select("*")
+              .eq("session_id", targetSession.id),
+          ]);
+
+        if (playersData) setPlayers(playersData as SessionPlayer[]);
+        if (scoresData) setScores(scoresData as PlayerScore[]);
+      }
+
+      setStatusMessage("Connecté à la partie !");
+    } finally {
+      setIsJoining(false);
+    }
   };
 
-  const handleSubmitAnswer = (
+  const handleSubmitAnswer = async (
     e?: React.FormEvent,
     directOption?: string
   ) => {
@@ -151,6 +367,22 @@ export default function PlayerControllerPage() {
     if (!valueToSend) return;
 
     const round = session?.current_round ?? 1;
+
+    if (supabase && session?.id) {
+      const { error } = await supabase.from("player_actions").insert({
+        session_id: session.id,
+        player_id: identity.playerId,
+        round_number: round,
+        action_type: "answer",
+        payload: { answer: valueToSend },
+      });
+
+      if (error) {
+        setStatusMessage(`Envoi impossible : ${error.message}`);
+        return;
+      }
+    }
+
     setSubmittedRound(round);
     setStatusMessage(`Réponse envoyée : "${valueToSend}"`);
     if (!directOption) {
@@ -161,6 +393,9 @@ export default function PlayerControllerPage() {
   const roundStatus = session?.status ?? "lobby";
   const currentRound = session?.current_round ?? 1;
   const alreadySubmittedThisRound = submittedRound === currentRound;
+  const questionText =
+    currentContent?.prompt ??
+    (currentContent as { question?: string } | null)?.question;
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white flex flex-col justify-between p-5 select-none">
@@ -223,10 +458,10 @@ export default function PlayerControllerPage() {
 
             <button
               type="submit"
-              disabled={!nicknameInput.trim()}
+              disabled={!nicknameInput.trim() || isJoining}
               className="w-full py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-black font-bold transition"
             >
-              Entrer dans la salle
+              {isJoining ? "Connexion..." : "Entrer dans la salle"}
             </button>
           </form>
         ) : (
@@ -248,9 +483,9 @@ export default function PlayerControllerPage() {
 
             {/* Active Question / Action Zone */}
             <div className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4">
-              {currentContent?.question && (
+              {questionText && (
                 <p className="text-base font-semibold leading-snug">
-                  {currentContent.question}
+                  {questionText}
                 </p>
               )}
 
@@ -261,7 +496,7 @@ export default function PlayerControllerPage() {
                       key={opt}
                       type="button"
                       disabled={alreadySubmittedThisRound}
-                      onClick={() => handleSubmitAnswer(undefined, opt)}
+                      onClick={() => void handleSubmitAnswer(undefined, opt)}
                       className="w-full text-left py-3.5 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 font-medium transition"
                     >
                       {opt}
