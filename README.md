@@ -12,4 +12,4 @@ Plateforme web multijoueur en temps réel inspirée d'Unboared avec une interfac
 
 1. Installer les dépendances :
    ```bash
-   npm install
+   npm install 
