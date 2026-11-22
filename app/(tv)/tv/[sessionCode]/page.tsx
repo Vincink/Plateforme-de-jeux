@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Tv, Users, QrCode, Play } from "lucide-react";
+import { Tv, Users, Play } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import type { GameSession, SessionPlayer } from "@/types/game.types";
@@ -18,6 +18,12 @@ export default function TvLobbyPage() {
   const [session, setSession] = useState<GameSession | null>(null);
   const [players, setPlayers] = useState<SessionPlayer[]>([]);
   const [gameTitle, setGameTitle] = useState<string>("En attente d'un jeu");
+  const [joinUrl, setJoinUrl] = useState<string>("");
+
+  useEffect(() => {
+    if (!sessionCode || typeof window === "undefined") return;
+    setJoinUrl(`${window.location.origin}/play/${sessionCode}`);
+  }, [sessionCode]);
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
@@ -32,12 +38,12 @@ export default function TvLobbyPage() {
       }
       const { data } = await supabase
         .from("games")
-        .select("title, name")
+        .select("title")
         .eq("id", gameId)
-        .maybeSingle<{ title?: string | null; name?: string | null }>();
+        .maybeSingle<{ title?: string | null }>();
 
       if (!isMounted) return;
-      setGameTitle(data?.title || data?.name || "Jeu sélectionné");
+      setGameTitle(data?.title || "Jeu sélectionné");
     };
 
     const loadPlayers = async (targetSessionId: string) => {
@@ -139,6 +145,11 @@ export default function TvLobbyPage() {
     true;
   const roundStatus = session?.status ?? "lobby";
   const currentRound = session?.current_round ?? 1;
+  const qrImageUrl = joinUrl
+    ? `https://api.qrserver.com/v1/create-qr-code/?size=240x240&margin=10&data=${encodeURIComponent(
+        joinUrl
+      )}`
+    : "";
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white p-8 flex flex-col justify-between select-none">
@@ -173,7 +184,8 @@ export default function TvLobbyPage() {
               <span>Joueurs connectés ({players.length})</span>
             </div>
             <span className="text-xs text-neutral-400">
-              Code : <strong className="font-mono text-white">{sessionCode}</strong>
+              Code :{" "}
+              <strong className="font-mono text-white">{sessionCode}</strong>
             </span>
           </div>
 
@@ -219,14 +231,18 @@ export default function TvLobbyPage() {
         </section>
 
         <section className="lg:col-span-5 bg-white/5 border border-white/10 rounded-3xl p-7 flex flex-col items-center justify-center text-center gap-4">
-          {showQr ? (
+          {showQr && qrImageUrl ? (
             <>
-              <div className="w-20 h-20 rounded-3xl bg-white/10 border border-white/15 flex items-center justify-center">
-                <QrCode className="w-11 h-11 text-amber-400" />
+              <div className="p-3 rounded-3xl bg-white shadow-xl">
+                <img
+                  src={qrImageUrl}
+                  alt={`QR Code salle ${sessionCode}`}
+                  className="w-44 h-44 rounded-2xl block"
+                />
               </div>
               <div className="text-xl font-bold">Rejoindre la partie</div>
               <p className="text-sm text-neutral-400 max-w-xs">
-                Ouvre la manette sur ton téléphone et entre le code{" "}
+                Scanne le QR code ou ouvre la manette avec le code{" "}
                 <span className="font-mono font-bold text-amber-300">
                   {sessionCode}
                 </span>
