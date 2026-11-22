@@ -10,22 +10,31 @@ import { GAME_CATEGORIES, INITIAL_GAMES } from "@/features/games/catalog";
 import { useSpatialNavigation } from "@/hooks/useSpatialNavigation";
 import type { GameCategorySlug, GameDefinition } from "@/types/game.types";
 
+type GameWithUiFields = GameDefinition & {
+  minPlayers?: number;
+  maxPlayers?: number | null;
+  estimatedMinutes?: number;
+  coverUrl?: string;
+};
+
 export default function TvCatalogPage() {
   const router = useRouter();
   const [selectedCategory, setSelectedCategory] =
     useState<GameCategorySlug>("multijoueur");
-  const [selectedGame, setSelectedGame] = useState<GameDefinition | null>(null);
+  const [selectedGame, setSelectedGame] = useState<GameWithUiFields | null>(
+    null
+  );
   const [isCreating, setIsCreating] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
+  const gamesList = INITIAL_GAMES as GameWithUiFields[];
+
   const filteredGames = useMemo(() => {
     if (selectedCategory === "multijoueur") {
-      return INITIAL_GAMES;
+      return gamesList;
     }
-    return INITIAL_GAMES.filter(
-      (game) => game.categorySlug === selectedCategory
-    );
-  }, [selectedCategory]);
+    return gamesList.filter((game) => game.categorySlug === selectedCategory);
+  }, [gamesList, selectedCategory]);
 
   const { focusedIndex, setFocusedIndex } = useSpatialNavigation({
     itemCount: filteredGames.length,
@@ -40,9 +49,9 @@ export default function TvCatalogPage() {
   });
 
   const activeGame =
-    selectedGame ?? filteredGames[focusedIndex] ?? INITIAL_GAMES[0];
+    selectedGame ?? filteredGames[focusedIndex] ?? gamesList[0];
 
-  const handleCreateSession = async (game: GameDefinition) => {
+  const handleCreateSession = async (game: GameWithUiFields) => {
     setIsCreating(true);
     setErrorMessage(null);
     try {
@@ -172,28 +181,34 @@ export default function TvCatalogPage() {
             </GlassPanel>
           ) : (
             <div className="grid grid-cols-1 gap-8 md:grid-cols-2 xl:grid-cols-3">
-              {filteredGames.map((game, index) => (
-                <FocusCard
-                  key={game.id}
-                  title={game.title}
-                  subtitle={game.tagline ?? ""}
-                  badge={
-                    GAME_CATEGORIES.find((c) => c.slug === game.categorySlug)
-                      ?.name
-                  }
-                  meta={`${game.minPlayers}-${game.maxPlayers} joueurs • ~${game.estimatedMinutes} min`}
-                  imageUrl={game.coverUrl}
-                  accentColor={game.accentColor}
-                  isFocused={focusedIndex === index}
-                  onFocus={() => setFocusedIndex(index)}
-                  onSelect={() => setSelectedGame(game)}
-                >
-                  <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-white">
-                    <Play className="h-3.5 w-3.5 fill-current" />
-                    Voir la fiche & lancer
-                  </span>
-                </FocusCard>
-              ))}
+              {filteredGames.map((game, index) => {
+                const minP = game.minPlayers ?? game.min_players;
+                const maxP = game.maxPlayers ?? game.max_players ?? minP;
+                const mins = game.estimatedMinutes ?? 15;
+
+                return (
+                  <FocusCard
+                    key={game.id}
+                    title={game.title}
+                    subtitle={game.tagline ?? ""}
+                    badge={
+                      GAME_CATEGORIES.find((c) => c.slug === game.categorySlug)
+                        ?.name
+                    }
+                    meta={`${minP}-${maxP} joueurs • ~${mins} min`}
+                    imageUrl={game.coverUrl ?? ""}
+                    accentColor={game.accentColor ?? undefined}
+                    isFocused={focusedIndex === index}
+                    onFocus={() => setFocusedIndex(index)}
+                    onSelect={() => setSelectedGame(game)}
+                  >
+                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-white">
+                      <Play className="h-3.5 w-3.5 fill-current" />
+                      Voir la fiche & lancer
+                    </span>
+                  </FocusCard>
+                );
+              })}
             </div>
           )}
         </section>
@@ -230,22 +245,28 @@ export default function TvCatalogPage() {
 
               <div className="grid gap-8 lg:grid-cols-12">
                 <div className="lg:col-span-5">
-                  <div className="overflow-hidden rounded-2xl border border-white/15">
-                    <img
-                      src={selectedGame.coverUrl}
-                      alt={selectedGame.title}
-                      className="aspect-video w-full object-cover"
-                    />
-                  </div>
+                  {selectedGame.coverUrl ? (
+                    <div className="overflow-hidden rounded-2xl border border-white/15">
+                      <img
+                        src={selectedGame.coverUrl}
+                        alt={selectedGame.title}
+                        className="aspect-video w-full object-cover"
+                      />
+                    </div>
+                  ) : null}
                   <div className="mt-4 flex flex-wrap gap-3 text-xs text-white/75">
                     <span className="tvos-glass inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5">
                       <Users className="h-3.5 w-3.5" />
-                      {selectedGame.minPlayers} à {selectedGame.maxPlayers}{" "}
+                      {selectedGame.minPlayers ?? selectedGame.min_players} à{" "}
+                      {selectedGame.maxPlayers ??
+                        selectedGame.max_players ??
+                        selectedGame.minPlayers ??
+                        selectedGame.min_players}{" "}
                       joueurs
                     </span>
                     <span className="tvos-glass inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5">
                       <Clock className="h-3.5 w-3.5" />~
-                      {selectedGame.estimatedMinutes} min
+                      {selectedGame.estimatedMinutes ?? 15} min
                     </span>
                   </div>
                 </div>
