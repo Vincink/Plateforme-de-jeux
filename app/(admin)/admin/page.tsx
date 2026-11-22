@@ -447,10 +447,10 @@ export default function AdminConsolePage() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white p-6 md:p-10">
-      <div className="max-w-6xl mx-auto space-y-8">
+    <div className="min-h-screen bg-neutral-950 text-white p-5 md:p-8">
+      <div className="max-w-7xl mx-auto space-y-6">
         {/* Header */}
-        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-white/10 pb-6">
+        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-white/10 pb-5">
           <div>
             <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-neutral-400">
               <Sparkles className="w-4 h-4 text-amber-400" />
@@ -511,278 +511,290 @@ export default function AdminConsolePage() {
           </div>
         ) : null}
 
-        {/* Contrôles de session & Affichage TV */}
-        <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <div className="lg:col-span-2 bg-white/5 border border-white/10 rounded-3xl p-6 space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-semibold">État de la partie</h2>
-                <p className="text-sm text-neutral-400">
-                  Jeu actif :{" "}
-                  <span className="text-white font-medium">
-                    {selectedGame?.title ?? "Aucun"}
-                  </span>{" "}
-                  • Manche {currentRound}
-                </p>
-              </div>
-              <span
-                className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider ${
-                  status === "playing"
-                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                    : status === "paused"
-                    ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                    : status === "finished"
-                    ? "bg-rose-500/20 text-rose-300 border border-rose-500/30"
-                    : "bg-sky-500/20 text-sky-300 border border-sky-500/30"
-                }`}
-              >
-                {status}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <button
-                type="button"
-                onClick={() => void handleStatusChange("playing")}
-                className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-black font-semibold transition"
-              >
-                <Play className="w-4 h-4" />
-                <span>Lancer</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => void handleStatusChange("paused")}
-                className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 font-semibold transition"
-              >
-                <Pause className="w-4 h-4" />
-                <span>Pause</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => void handleNextRound()}
-                className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-semibold transition"
-              >
-                <RotateCcw className="w-4 h-4" />
-                <span>Manche +1</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => void handleStatusChange("finished")}
-                className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-semibold transition"
-              >
-                <Square className="w-4 h-4" />
-                <span>Terminer</span>
-              </button>
-            </div>
-          </div>
-
-          {/* Options écran TV */}
-          <div className="bg-white/5 border border-white/10 rounded-3xl p-6 flex flex-col justify-between space-y-4">
-            <div>
+        {/* Layout 2 colonnes : Joueurs à gauche, Contrôles & Jeux à droite */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+          {/* Colonne gauche : Joueurs connectés & Modération */}
+          <aside className="lg:col-span-5 xl:col-span-4 lg:sticky lg:top-6 bg-white/5 border border-white/10 rounded-3xl p-5 space-y-4">
+            <div className="flex items-center justify-between border-b border-white/10 pb-3">
               <h2 className="text-lg font-semibold flex items-center gap-2">
-                <QrCode className="w-5 h-5 text-sky-400" />
-                <span>Écran TV</span>
+                <Users className="w-5 h-5 text-emerald-400" />
+                <span>Joueurs ({players.length})</span>
               </h2>
-              <p className="text-sm text-neutral-400 mt-1">
-                Affiche ou masque le QR code de connexion sur la télévision.
+              <div className="flex items-center gap-1.5 text-xs text-neutral-400">
+                <Trophy className="w-4 h-4 text-amber-400" />
+                <span>Scores</span>
+              </div>
+            </div>
+
+            {players.length === 0 ? (
+              <p className="text-sm text-neutral-400 py-8 text-center">
+                Aucun joueur connecté pour le moment.
               </p>
-            </div>
+            ) : (
+              <div className="space-y-3 max-h-[calc(100vh-14rem)] overflow-y-auto pr-1">
+                {players.map((player) => {
+                  const color = getUniquePlayerColor(player.id, players);
 
-            <button
-              type="button"
-              onClick={() => void handleToggleQr()}
-              className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 font-medium transition"
-            >
-              {showQrOnTv ? (
-                <>
-                  <EyeOff className="w-4 h-4 text-amber-400" />
-                  <span>Masquer le QR Code</span>
-                </>
-              ) : (
-                <>
-                  <Eye className="w-4 h-4 text-emerald-400" />
-                  <span>Afficher le QR Code</span>
-                </>
-              )}
-            </button>
-          </div>
-        </section>
-
-        {/* Catalogue des jeux */}
-        <section className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Gamepad2 className="w-5 h-5 text-purple-400" />
-              <span>Catalogue des jeux</span>
-            </h2>
-            <span className="text-xs text-neutral-400">
-              {games.filter((g) => g.is_active).length} / {games.length} actifs
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {games.map((game) => {
-              const isSelected = game.id === selectedGame?.id;
-              return (
-                <div
-                  key={game.id}
-                  onClick={() => void handleSelectGame(game.id)}
-                  className={`cursor-pointer rounded-2xl p-4 border transition flex flex-col justify-between gap-4 ${
-                    isSelected
-                      ? "bg-white/15 border-white/40"
-                      : "bg-black/30 border-white/10 hover:border-white/25"
-                  }`}
-                >
-                  <div>
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="font-semibold text-base">{game.title}</h3>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleToggleGameActive(game.id);
-                        }}
-                        className="text-xs flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15"
-                      >
-                        {game.is_active ? (
-                          <>
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                            <span className="text-emerald-300">Actif</span>
-                          </>
-                        ) : (
-                          <>
-                            <XCircle className="w-3.5 h-3.5 text-neutral-500" />
-                            <span className="text-neutral-400">Inactif</span>
-                          </>
-                        )}
-                      </button>
-                    </div>
-                    {game.tagline && (
-                      <p className="text-xs text-neutral-400 mt-1">
-                        {game.tagline}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs text-neutral-400 pt-2 border-t border-white/5">
-                    <span>
-                      {game.min_players}–{game.max_players ?? "∞"} joueurs
-                    </span>
-                    {isSelected && (
-                      <span className="text-amber-400 font-medium">
-                        Sélectionné
-                      </span>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* Joueurs & Scores */}
-        <section className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Users className="w-5 h-5 text-emerald-400" />
-              <span>Joueurs connectés ({players.length})</span>
-            </h2>
-            <div className="flex items-center gap-1.5 text-xs text-neutral-400">
-              <Trophy className="w-4 h-4 text-amber-400" />
-              <span>Modération & Scores</span>
-            </div>
-          </div>
-
-          {players.length === 0 ? (
-            <p className="text-sm text-neutral-400 py-6 text-center">
-              Aucun joueur connecté pour le moment.
-            </p>
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              {players.map((player) => {
-                const color = getUniquePlayerColor(player.id, players);
-
-                return (
-                  <div
-                    key={player.id}
-                    style={{
-                      backgroundColor: color.bgHex,
-                      borderColor: color.borderHex,
-                      color: color.textHex,
-                    }}
-                    className="p-4 rounded-2xl border-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 shadow-md"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span
-                        style={{ backgroundColor: color.badgeBgHex }}
-                        className="text-2xl flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
-                      >
-                        {player.avatar ?? "🎮"}
-                      </span>
-                      <div className="min-w-0">
-                        <div className="font-bold truncate flex items-center gap-2">
-                          <span className="truncate">{player.nickname}</span>
-                          {player.is_host && (
-                            <span
-                              style={{ backgroundColor: color.badgeBgHex }}
-                              className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full"
-                            >
-                              Hôte
+                  return (
+                    <div
+                      key={player.id}
+                      style={{
+                        backgroundColor: color.bgHex,
+                        borderColor: color.borderHex,
+                        color: color.textHex,
+                      }}
+                      className="p-3.5 rounded-2xl border-2 space-y-3 shadow-md"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span
+                            style={{ backgroundColor: color.badgeBgHex }}
+                            className="text-xl flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+                          >
+                            {player.avatar ?? "🎮"}
+                          </span>
+                          <div className="min-w-0">
+                            <div className="font-bold truncate flex items-center gap-1.5">
+                              <span className="truncate">{player.nickname}</span>
+                              {player.is_host && (
+                                <span
+                                  style={{ backgroundColor: color.badgeBgHex }}
+                                  className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full shrink-0"
+                                >
+                                  Hôte
+                                </span>
+                              )}
+                            </div>
+                            <span className="text-[11px] opacity-90 block">
+                              {player.is_connected ? "Connecté" : "Déconnecté"}
                             </span>
-                          )}
+                          </div>
                         </div>
-                        <span className="text-xs opacity-90">
-                          {player.is_connected ? "Connecté" : "Déconnecté"}
-                        </span>
-                      </div>
-                    </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                        {!player.is_host && (
+                          <button
+                            type="button"
+                            onClick={() => void handleKickPlayer(player.id)}
+                            className="px-2.5 py-1.5 rounded-xl bg-black/35 hover:bg-black/55 text-xs font-bold transition shrink-0"
+                          >
+                            Exclure
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Contrôles score -1 / +1 */}
                       <div
                         style={{ backgroundColor: color.badgeBgHex }}
-                        className="flex items-center gap-2 rounded-xl px-2.5 py-1"
+                        className="flex items-center justify-between rounded-xl px-3 py-1.5"
                       >
                         <button
                           type="button"
                           onClick={() => void handleAdjustScore(player.id, -1)}
-                          className="px-2 py-0.5 rounded bg-black/25 hover:bg-black/40 text-sm font-bold"
+                          className="px-3 py-1 rounded-lg bg-black/30 hover:bg-black/50 text-sm font-black transition"
                         >
                           -1
                         </button>
                         <span
                           style={{ color: color.scoreHex }}
-                          className="font-mono font-black min-w-[3ch] text-center"
+                          className="font-mono text-lg font-black text-center"
                         >
-                          {getPlayerScoreValue(player.id)}
+                          {getPlayerScoreValue(player.id)} pts
                         </span>
                         <button
                           type="button"
                           onClick={() => void handleAdjustScore(player.id, 1)}
-                          className="px-2 py-0.5 rounded bg-black/25 hover:bg-black/40 text-sm font-bold"
+                          className="px-3 py-1 rounded-lg bg-black/30 hover:bg-black/50 text-sm font-black transition"
                         >
                           +1
                         </button>
                       </div>
-
-                      {!player.is_host && (
-                        <button
-                          type="button"
-                          onClick={() => void handleKickPlayer(player.id)}
-                          className="px-3 py-1.5 rounded-xl bg-black/35 hover:bg-black/55 text-xs font-bold transition"
-                        >
-                          Exclure
-                        </button>
-                      )}
                     </div>
+                  );
+                })}
+              </div>
+            )}
+          </aside>
+
+          {/* Colonne droite : État de partie, Écran TV et Catalogue */}
+          <main className="lg:col-span-7 xl:col-span-8 space-y-6">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {/* État de la partie */}
+              <section className="md:col-span-2 bg-white/5 border border-white/10 rounded-3xl p-6 space-y-6">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h2 className="text-lg font-semibold">État de la partie</h2>
+                    <p className="text-sm text-neutral-400">
+                      Jeu actif :{" "}
+                      <span className="text-white font-medium">
+                        {selectedGame?.title ?? "Aucun"}
+                      </span>{" "}
+                      • Manche {currentRound}
+                    </p>
                   </div>
-                );
-              })}
+                  <span
+                    className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider shrink-0 ${
+                      status === "playing"
+                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                        : status === "paused"
+                        ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                        : status === "finished"
+                        ? "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+                        : "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                    }`}
+                  >
+                    {status}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => void handleStatusChange("playing")}
+                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-black font-semibold transition"
+                  >
+                    <Play className="w-4 h-4" />
+                    <span>Lancer</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleStatusChange("paused")}
+                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 font-semibold transition"
+                  >
+                    <Pause className="w-4 h-4" />
+                    <span>Pause</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleNextRound()}
+                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-semibold transition"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    <span>Manche +1</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void handleStatusChange("finished")}
+                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-semibold transition"
+                  >
+                    <Square className="w-4 h-4" />
+                    <span>Terminer</span>
+                  </button>
+                </div>
+              </section>
+
+              {/* Options écran TV */}
+              <section className="bg-white/5 border border-white/10 rounded-3xl p-6 flex flex-col justify-between space-y-4">
+                <div>
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <QrCode className="w-5 h-5 text-sky-400" />
+                    <span>Écran TV</span>
+                  </h2>
+                  <p className="text-sm text-neutral-400 mt-1">
+                    QR code de connexion sur la télévision.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => void handleToggleQr()}
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 font-medium transition"
+                >
+                  {showQrOnTv ? (
+                    <>
+                      <EyeOff className="w-4 h-4 text-amber-400" />
+                      <span>Masquer QR</span>
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="w-4 h-4 text-emerald-400" />
+                      <span>Afficher QR</span>
+                    </>
+                  )}
+                </button>
+              </section>
             </div>
-          )}
-        </section>
+
+            {/* Catalogue des jeux */}
+            <section className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  <Gamepad2 className="w-5 h-5 text-purple-400" />
+                  <span>Catalogue des jeux</span>
+                </h2>
+                <span className="text-xs text-neutral-400">
+                  {games.filter((g) => g.is_active).length} / {games.length}{" "}
+                  actifs
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {games.map((game) => {
+                  const isSelected = game.id === selectedGame?.id;
+                  return (
+                    <div
+                      key={game.id}
+                      onClick={() => void handleSelectGame(game.id)}
+                      className={`cursor-pointer rounded-2xl p-4 border transition flex flex-col justify-between gap-4 ${
+                        isSelected
+                          ? "bg-white/15 border-white/40"
+                          : "bg-black/30 border-white/10 hover:border-white/25"
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-2">
+                          <h3 className="font-semibold text-base">
+                            {game.title}
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleGameActive(game.id);
+                            }}
+                            className="text-xs flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15"
+                          >
+                            {game.is_active ? (
+                              <>
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                <span className="text-emerald-300">Actif</span>
+                              </>
+                            ) : (
+                              <>
+                                <XCircle className="w-3.5 h-3.5 text-neutral-500" />
+                                <span className="text-neutral-400">
+                                  Inactif
+                                </span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        {game.tagline && (
+                          <p className="text-xs text-neutral-400 mt-1">
+                            {game.tagline}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between text-xs text-neutral-400 pt-2 border-t border-white/5">
+                        <span>
+                          {game.min_players}–{game.max_players ?? "∞"} joueurs
+                        </span>
+                        {isSelected && (
+                          <span className="text-amber-400 font-medium">
+                            Sélectionné
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          </main>
+        </div>
       </div>
     </div>
   );
