@@ -127,6 +127,24 @@ export default function PlayerControllerPage() {
     };
   }, [sessionCode]);
 
+  const activeGameId = session?.game_id ?? null;
+  const currentRound = session?.current_round ?? 1;
+  const roundStatus = session?.status ?? "lobby";
+
+  useEffect(() => {
+    setSubmittedRound(null);
+    setSelectedChoiceLetter(null);
+    setAnswerInput("");
+    setStatusMessage("");
+  }, [activeGameId]);
+
+  useEffect(() => {
+    if (submittedRound !== null && submittedRound !== currentRound) {
+      setSelectedChoiceLetter(null);
+      setStatusMessage("");
+    }
+  }, [currentRound, submittedRound]);
+
   useEffect(() => {
     if (!supabase || !sessionCode) return;
 
@@ -307,17 +325,8 @@ export default function PlayerControllerPage() {
     };
   }, [supabase, sessionCode]);
 
-  const roundStatus = session?.status ?? "lobby";
-  const currentRound = session?.current_round ?? 1;
   const alreadySubmittedThisRound = submittedRound === currentRound;
   const isPlaying = roundStatus === "playing";
-
-  useEffect(() => {
-    if (submittedRound !== null && submittedRound !== currentRound) {
-      setSelectedChoiceLetter(null);
-      setStatusMessage("");
-    }
-  }, [currentRound, submittedRound]);
 
   const parsedOptions = useMemo<string[]>(() => {
     const raw = currentContent?.options as unknown;
@@ -552,10 +561,10 @@ export default function PlayerControllerPage() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white flex flex-col justify-between p-5 select-none">
-      <div className="max-w-md w-full mx-auto space-y-6">
+    <div className="min-h-screen bg-neutral-950 text-white flex flex-col justify-between p-4 sm:p-5 select-none">
+      <div className="max-w-md w-full mx-auto flex-1 flex flex-col space-y-4">
         {/* Top Bar */}
-        <header className="flex items-center justify-between border-b border-white/10 pb-4">
+        <header className="flex items-center justify-between border-b border-white/10 pb-3.5 shrink-0">
           <div>
             <div className="text-[11px] uppercase tracking-widest text-neutral-400">
               Salle
@@ -592,7 +601,7 @@ export default function PlayerControllerPage() {
         {!identity ? (
           <form
             onSubmit={handleJoinGame}
-            className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4"
+            className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4 my-auto"
           >
             <div className="flex items-center gap-2 text-amber-400 text-xs uppercase tracking-wider font-semibold">
               <Sparkles className="w-4 h-4" />
@@ -619,7 +628,7 @@ export default function PlayerControllerPage() {
             </button>
           </form>
         ) : (
-          <main className="space-y-5">
+          <main className="flex-1 flex flex-col space-y-4">
             {/* Player Status Card */}
             <div
               style={{
@@ -627,7 +636,7 @@ export default function PlayerControllerPage() {
                 borderColor: myColor.borderHex,
                 color: myColor.textHex,
               }}
-              className="border-2 rounded-3xl p-5 flex items-center justify-between shadow-lg"
+              className="border-2 rounded-3xl p-4 flex items-center justify-between shadow-lg shrink-0"
             >
               <div className="flex items-center gap-3">
                 <span
@@ -648,9 +657,9 @@ export default function PlayerControllerPage() {
             </div>
 
             {/* Active Question / Action Zone */}
-            <div className="bg-white/5 border border-white/10 rounded-3xl p-5 space-y-4">
+            <div className="flex-1 flex flex-col justify-between bg-white/5 border border-white/10 rounded-3xl p-4 sm:p-5 space-y-4">
               {!isPlaying ? (
-                <div className="py-6 text-center space-y-1">
+                <div className="my-auto py-8 text-center space-y-1">
                   <p className="text-base font-bold text-amber-300">
                     {roundStatus === "paused"
                       ? "Partie en pause"
@@ -663,7 +672,7 @@ export default function PlayerControllerPage() {
                   </p>
                 </div>
               ) : parsedOptions.length > 0 ? (
-                <div className="grid grid-cols-2 gap-3.5">
+                <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-4 min-h-[300px]">
                   {qcmChoices.map((choice) => {
                     const isChosen = selectedChoiceLetter === choice.letter;
                     return (
@@ -682,7 +691,7 @@ export default function PlayerControllerPage() {
                           borderColor: isChosen ? "#ffffff" : choice.borderHex,
                           color: choice.textHex,
                         }}
-                        className={`h-32 sm:h-36 rounded-3xl border-4 flex items-center justify-center text-5xl font-black tracking-tight shadow-lg active:scale-95 transition ${
+                        className={`h-full min-h-[140px] rounded-3xl border-4 flex items-center justify-center text-6xl font-black tracking-tight shadow-xl active:scale-95 transition ${
                           alreadySubmittedThisRound && !isChosen
                             ? "opacity-35"
                             : "opacity-100"
@@ -694,7 +703,10 @@ export default function PlayerControllerPage() {
                   })}
                 </div>
               ) : (
-                <form onSubmit={handleSubmitAnswer} className="space-y-3">
+                <form
+                  onSubmit={handleSubmitAnswer}
+                  className="my-auto space-y-3"
+                >
                   <input
                     type="text"
                     value={answerInput}
@@ -717,7 +729,7 @@ export default function PlayerControllerPage() {
               )}
 
               {statusMessage && (
-                <p className="text-xs text-emerald-300 text-center pt-1 font-semibold">
+                <p className="text-xs text-emerald-300 text-center pt-1 font-semibold shrink-0">
                   {statusMessage}
                 </p>
               )}
@@ -726,7 +738,7 @@ export default function PlayerControllerPage() {
         )}
       </div>
 
-      <footer className="text-center text-[11px] text-neutral-500 pt-6">
+      <footer className="text-center text-[11px] text-neutral-500 pt-4 shrink-0">
         Manette Joueur • {sessionCode || "—"}
       </footer>
     </div>
