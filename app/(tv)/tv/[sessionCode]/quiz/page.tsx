@@ -37,8 +37,9 @@ interface QuizStatePayload {
   revealed?: boolean;
   showAnswers?: boolean;
   show_answers?: boolean;
-  scores?: Record<string, number>;
-  points?: Record<string, number>;
+  scores?: Record<string, number | string>;
+  points?: Record<string, number | string>;
+  pointsMap?: Record<string, number | string>;
 }
 
 type ExtendedSession = GameSession & {
@@ -48,11 +49,15 @@ type ExtendedSession = GameSession & {
   questions?: QuizQuestionItem[] | null;
   currentQuestionIndex?: number | null;
   current_question_index?: number | null;
+  scores?: Record<string, number | string> | null;
+  points?: Record<string, number | string> | null;
 };
 
 type ExtendedPlayer = SessionPlayer & {
-  score?: number | null;
-  points?: number | null;
+  score?: number | string | null;
+  points?: number | string | null;
+  player_id?: string | number | null;
+  user_id?: string | number | null;
 };
 
 const ANSWER_STYLES: Record<
@@ -96,6 +101,15 @@ const ANSWER_STYLES: Record<
 };
 
 const LETTERS: readonly AnswerLetter[] = ["A", "B", "C", "D"];
+
+function toFiniteNumber(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
 
 function normalizeAnswerLetter(raw: unknown): AnswerLetter | null {
   if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw <= 3) {
@@ -348,12 +362,15 @@ export default function TvQuizPage() {
   }, [currentQuestion]);
 
   const answersMap = quizState.answers ?? {};
-  const scoresMap = useMemo<Record<string, number>>(() => {
+  const scoresMap = useMemo<Record<string, number | string>>(() => {
     return {
+      ...(session?.points ?? {}),
+      ...(session?.scores ?? {}),
+      ...(quizState.pointsMap ?? {}),
       ...(quizState.points ?? {}),
       ...(quizState.scores ?? {}),
     };
-  }, [quizState]);
+  }, [session, quizState]);
 
   const allPlayersAnswered = useMemo(() => {
     if (players.length === 0) return false;
@@ -389,16 +406,32 @@ export default function TvQuizPage() {
   const rankedPlayers = useMemo(() => {
     return [...players]
       .map((player) => {
-        const mappedScore = scoresMap[String(player.id)];
-        const rawScore =
-          typeof mappedScore === "number"
-            ? mappedScore
-            : typeof player.score === "number"
-            ? player.score
-            : typeof player.points === "number"
-            ? player.points
-            : 0;
-        const score = Number(rawScore ?? 0);
+        const candidateKeys = [
+          player.id !== undefined && player.id !== null ? String(player.id) : "",
+          player.player_id !== undefined && player.player_id !== null
+            ? String(player.player_id)
+            : "",
+          player.user_id !== undefined && player.user_id !== null
+            ? String(player.user_id)
+            : "",
+          player.nickname ? String(player.nickname) : "",
+        ].filter(Boolean);
+
+        let mappedValue: number | null = null;
+        for (const key of candidateKeys) {
+          if (key in scoresMap) {
+            const num = toFiniteNumber(scoresMap[key]);
+            if (num !== null) {
+              mappedValue = num;
+              break;
+            }
+          }
+        }
+
+        const directPlayerScore =
+          toFiniteNumber(player.score) ?? toFiniteNumber(player.points);
+
+        const score = mappedValue ?? directPlayerScore ?? 0;
         const chosenLetter = normalizeAnswerLetter(
           answersMap[String(player.id)]
         );
