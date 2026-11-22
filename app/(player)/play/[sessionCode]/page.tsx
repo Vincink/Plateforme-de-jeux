@@ -112,20 +112,24 @@ export default function PlayerControllerPage() {
       }
     };
 
-    const loadActiveContent = async (contentId: string | null | undefined) => {
-      if (!contentId) {
+    const loadActiveContent = async (
+      targetGameId: string | null | undefined,
+      roundNumber: number
+    ) => {
+      if (!targetGameId) {
         if (isMounted) setCurrentContent(null);
         return;
       }
       const { data } = await supabase
         .from("game_contents")
         .select("*")
-        .eq("id", contentId)
-        .maybeSingle<GameContent>();
+        .eq("game_id", targetGameId)
+        .order("sort_order", { ascending: true });
 
-      if (isMounted) {
-        setCurrentContent(data ?? null);
-      }
+      if (!isMounted) return;
+      const items = Array.isArray(data) ? (data as GameContent[]) : [];
+      const idx = Math.max(0, roundNumber - 1);
+      setCurrentContent(items[idx] ?? null);
     };
 
     const bindSessionData = (targetSession: GameSession) => {
@@ -137,7 +141,10 @@ export default function PlayerControllerPage() {
       }
 
       void loadPlayersAndScores(targetSession.id);
-      void loadActiveContent(targetSession.active_content_id);
+      void loadActiveContent(
+        targetSession.game_id,
+        targetSession.current_round ?? 1
+      );
 
       childrenChannel = supabase
         .channel(`play-children-${targetSession.id}`)
@@ -167,19 +174,22 @@ export default function PlayerControllerPage() {
         )
         .subscribe();
 
-      if (targetSession.active_content_id) {
+      if (targetSession.game_id) {
         contentChannel = supabase
-          .channel(`play-content-${targetSession.active_content_id}`)
+          .channel(`play-content-${targetSession.game_id}`)
           .on(
             "postgres_changes",
             {
               event: "*",
               schema: "public",
               table: "game_contents",
-              filter: `id=eq.${targetSession.active_content_id}`,
+              filter: `game_id=eq.${targetSession.game_id}`,
             },
             () => {
-              void loadActiveContent(targetSession.active_content_id);
+              void loadActiveContent(
+                targetSession.game_id,
+                targetSession.current_round ?? 1
+              );
             }
           )
           .subscribe();
@@ -393,9 +403,6 @@ export default function PlayerControllerPage() {
   const roundStatus = session?.status ?? "lobby";
   const currentRound = session?.current_round ?? 1;
   const alreadySubmittedThisRound = submittedRound === currentRound;
-  const questionText =
-    currentContent?.prompt ??
-    (currentContent as { question?: string } | null)?.question;
 
   return (
     <div className="min-h-screen bg-neutral-950 text-white flex flex-col justify-between p-5 select-none">
@@ -483,9 +490,9 @@ export default function PlayerControllerPage() {
 
             {/* Active Question / Action Zone */}
             <div className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4">
-              {questionText && (
+              {currentContent?.question && (
                 <p className="text-base font-semibold leading-snug">
-                  {questionText}
+                  {currentContent.question}
                 </p>
               )}
 
