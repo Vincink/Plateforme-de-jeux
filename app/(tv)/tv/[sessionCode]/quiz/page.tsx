@@ -1,152 +1,154 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
-import { Check, HelpCircle, Trophy } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
+import { Check, Trophy, Tv } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
-import type {
-  GameContent,
-  GameSession,
-  PlayerScore,
-  SessionPlayer,
-} from "@/types/game.types";
+import type { GameSession, SessionPlayer } from "@/types/game.types";
 
-type QuizContentRow = GameContent & {
-  prompt?: string | null;
-  question?: string | null;
-  points?: number | null;
-  round_type?: string | null;
-};
+type AnswerLetter = "A" | "B" | "C" | "D";
 
-interface PlayerActionRow {
-  id: string;
-  session_id: string;
-  player_id: string;
-  round_number: number;
-  action_type: string;
-  payload: {
-    answer?: string;
-    choice_letter?: string | null;
-  } | null;
-  created_at?: string;
+interface QuizQuestionItem {
+  id?: string | number;
+  question: string;
+  options: [string, string, string, string] | string[];
+  correctIndex?: number;
+  correctAnswer?: AnswerLetter | string;
 }
 
-const CHOICE_META = [
-  {
-    letter: "A",
-    bgHex: "#ef4444",
-    borderHex: "#fca5a5",
-    textHex: "#ffffff",
-  },
-  {
-    letter: "B",
-    bgHex: "#2563eb",
-    borderHex: "#93c5fd",
-    textHex: "#ffffff",
-  },
-  {
-    letter: "C",
-    bgHex: "#eab308",
-    borderHex: "#fef08a",
-    textHex: "#111827",
-  },
-  {
-    letter: "D",
-    bgHex: "#16a34a",
-    borderHex: "#86efac",
-    textHex: "#ffffff",
-  },
-] as const;
+interface QuizStatePayload {
+  questions?: QuizQuestionItem[];
+  currentQuestionIndex?: number;
+  current_question_index?: number;
+  answers?: Record<string, AnswerLetter | string>;
+  revealed?: boolean;
+  showAnswers?: boolean;
+  show_answers?: boolean;
+  scores?: Record<string, number>;
+}
 
-export default function TvQuizScreenPage() {
+const ANSWER_STYLES: Record<
+  AnswerLetter,
+  {
+    bg: string;
+    border: string;
+    badgeBg: string;
+    circleBg: string;
+    circleText: string;
+  }
+> = {
+  A: {
+    bg: "bg-rose-600/90",
+    border: "border-rose-300/70",
+    badgeBg: "bg-rose-950/55 text-rose-100 border-rose-200/40",
+    circleBg: "#E11D48",
+    circleText: "#FFFFFF",
+  },
+  B: {
+    bg: "bg-sky-600/90",
+    border: "border-sky-300/70",
+    badgeBg: "bg-sky-950/55 text-sky-100 border-sky-200/40",
+    circleBg: "#0284C7",
+    circleText: "#FFFFFF",
+  },
+  C: {
+    bg: "bg-amber-500/90",
+    border: "border-amber-200/80",
+    badgeBg: "bg-amber-950/55 text-amber-100 border-amber-200/40",
+    circleBg: "#D97706",
+    circleText: "#FFFFFF",
+  },
+  D: {
+    bg: "bg-emerald-600/90",
+    border: "border-emerald-300/70",
+    badgeBg: "bg-emerald-950/55 text-emerald-100 border-emerald-200/40",
+    circleBg: "#059669",
+    circleText: "#FFFFFF",
+  },
+};
+
+const LETTERS: AnswerLetter[] = ["A", "B", "C", "D"];
+
+function normalizeAnswerLetter(raw: unknown): AnswerLetter | null {
+  if (typeof raw === "number" && raw >= 0 && raw <= 3) {
+    return LETTERS[raw];
+  }
+  if (typeof raw === "string") {
+    const upper = raw.trim().toUpperCase();
+    if (upper === "A" || upper === "B" || upper === "C" || upper === "D") {
+      return upper;
+    }
+    if (upper === "0" || upper === "1" || upper === "2" || upper === "3") {
+      return LETTERS[Number(upper)];
+    }
+  }
+  return null;
+}
+
+function getOptionFontSize(text: string): string {
+  const len = text.trim().length;
+  if (len <= 24) return "text-3xl xl:text-4xl leading-snug";
+  if (len <= 52) return "text-2xl xl:text-3xl leading-snug";
+  return "text-xl xl:text-2xl leading-snug";
+}
+
+function getQuestionFontSize(text: string): string {
+  const len = text.trim().length;
+  if (len <= 65) return "text-3xl xl:text-5xl leading-tight";
+  if (len <= 120) return "text-2xl xl:text-4xl leading-snug";
+  return "text-xl xl:text-3xl leading-snug";
+}
+
+export default function TvQuizPage() {
   const params = useParams<{ sessionCode: string }>();
+  const router = useRouter();
   const sessionCode = (params?.sessionCode ?? "").toUpperCase();
   const supabase = getSupabaseBrowserClient();
 
   const [session, setSession] = useState<GameSession | null>(null);
   const [players, setPlayers] = useState<SessionPlayer[]>([]);
-  const [scores, setScores] = useState<PlayerScore[]>([]);
-  const [currentContent, setCurrentContent] = useState<QuizContentRow | null>(
-    null
-  );
-  const [actions, setActions] = useState<PlayerActionRow[]>([]);
-
-  const currentRound = session?.current_round ?? 1;
-  const roundStatus = session?.status ?? "lobby";
+  const [gameTitle, setGameTitle] = useState<string>("Le Grand Quiz");
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
 
     let isMounted = true;
-    let childrenChannel: ReturnType<typeof supabase.channel> | null = null;
-    let contentChannel: ReturnType<typeof supabase.channel> | null = null;
+    let playersChannel: ReturnType<typeof supabase.channel> | null = null;
 
-    const loadSessionChildren = async (
-      targetSessionId: string,
-      targetGameId: string | null | undefined,
-      roundNumber: number
-    ) => {
-      const [
-        { data: playersData },
-        { data: scoresData },
-        { data: actionsData },
-        { data: contentsData },
-      ] = await Promise.all([
-        supabase
-          .from("session_players")
-          .select("*")
-          .eq("session_id", targetSessionId)
-          .order("id", { ascending: true }),
-        supabase
-          .from("player_scores")
-          .select("*")
-          .eq("session_id", targetSessionId),
-        supabase
-          .from("player_actions")
-          .select("*")
-          .eq("session_id", targetSessionId)
-          .eq("round_number", roundNumber)
-          .eq("action_type", "answer")
-          .order("created_at", { ascending: true }),
-        targetGameId
-          ? supabase
-              .from("game_contents")
-              .select("*")
-              .eq("game_id", targetGameId)
-              .order("sort_order", { ascending: true })
-          : Promise.resolve({ data: [] }),
-      ]);
+    const loadGameTitle = async (gameId: string | null | undefined) => {
+      if (!gameId) return;
+      const { data } = await supabase
+        .from("games")
+        .select("title")
+        .eq("id", gameId)
+        .maybeSingle<{ title?: string | null }>();
 
       if (!isMounted) return;
+      if (data?.title) setGameTitle(data.title);
+    };
 
-      setPlayers((playersData as SessionPlayer[] | null) ?? []);
-      setScores((scoresData as PlayerScore[] | null) ?? []);
-      setActions((actionsData as PlayerActionRow[] | null) ?? []);
+    const loadPlayers = async (targetSessionId: string) => {
+      const { data } = await supabase
+        .from("session_players")
+        .select("*")
+        .eq("session_id", targetSessionId)
+        .order("id", { ascending: true });
 
-      const items = Array.isArray(contentsData)
-        ? (contentsData as QuizContentRow[])
-        : [];
-      const idx = Math.max(0, roundNumber - 1);
-      setCurrentContent(items[idx] ?? null);
+      if (!isMounted) return;
+      setPlayers((data as SessionPlayer[] | null) ?? []);
     };
 
     const bindSession = (targetSession: GameSession) => {
-      if (childrenChannel) {
-        void supabase.removeChannel(childrenChannel);
-      }
-      if (contentChannel) {
-        void supabase.removeChannel(contentChannel);
+      if (playersChannel) {
+        void supabase.removeChannel(playersChannel);
       }
 
-      void loadSessionChildren(
-        targetSession.id,
-        targetSession.game_id,
-        targetSession.current_round ?? 1
-      );
+      void loadPlayers(targetSession.id);
+      void loadGameTitle(targetSession.game_id);
 
-      childrenChannel = supabase
-        .channel(`tv-quiz-children-${targetSession.id}`)
+      playersChannel = supabase
+        .channel(`tv-quiz-players-${targetSession.id}`)
         .on(
           "postgres_changes",
           {
@@ -156,68 +158,10 @@ export default function TvQuizScreenPage() {
             filter: `session_id=eq.${targetSession.id}`,
           },
           () => {
-            void loadSessionChildren(
-              targetSession.id,
-              targetSession.game_id,
-              targetSession.current_round ?? 1
-            );
-          }
-        )
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "player_scores",
-            filter: `session_id=eq.${targetSession.id}`,
-          },
-          () => {
-            void loadSessionChildren(
-              targetSession.id,
-              targetSession.game_id,
-              targetSession.current_round ?? 1
-            );
-          }
-        )
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "player_actions",
-            filter: `session_id=eq.${targetSession.id}`,
-          },
-          () => {
-            void loadSessionChildren(
-              targetSession.id,
-              targetSession.game_id,
-              targetSession.current_round ?? 1
-            );
+            void loadPlayers(targetSession.id);
           }
         )
         .subscribe();
-
-      if (targetSession.game_id) {
-        contentChannel = supabase
-          .channel(`tv-quiz-content-${targetSession.game_id}`)
-          .on(
-            "postgres_changes",
-            {
-              event: "*",
-              schema: "public",
-              table: "game_contents",
-              filter: `game_id=eq.${targetSession.game_id}`,
-            },
-            () => {
-              void loadSessionChildren(
-                targetSession.id,
-                targetSession.game_id,
-                targetSession.current_round ?? 1
-              );
-            }
-          )
-          .subscribe();
-      }
     };
 
     const fetchInitial = async () => {
@@ -261,213 +205,281 @@ export default function TvQuizScreenPage() {
     return () => {
       isMounted = false;
       void supabase.removeChannel(sessionChannel);
-      if (childrenChannel) {
-        void supabase.removeChannel(childrenChannel);
-      }
-      if (contentChannel) {
-        void supabase.removeChannel(contentChannel);
+      if (playersChannel) {
+        void supabase.removeChannel(playersChannel);
       }
     };
   }, [supabase, sessionCode]);
 
-  const parsedOptions = useMemo<string[]>(() => {
-    const raw = currentContent?.options as unknown;
-    if (Array.isArray(raw)) {
-      return raw.map((item) => String(item));
+  useEffect(() => {
+    if (!session || !sessionCode) return;
+    if (session.status === "lobby") {
+      router.replace(`/tv/${sessionCode}`);
     }
-    if (typeof raw === "string") {
-      try {
-        const decoded = JSON.parse(raw) as unknown;
-        if (Array.isArray(decoded)) {
-          return decoded.map((item) => String(item));
-        }
-      } catch {
-        // Ignore invalid JSON
-      }
-    }
-    return [];
-  }, [currentContent?.options]);
+  }, [session, sessionCode, router]);
 
-  const questionText =
-    currentContent?.prompt ??
-    currentContent?.question ??
-    "En attente de la question...";
+  const quizState = useMemo<QuizStatePayload>(() => {
+    const raw = session as (GameSession & {
+      game_state?: QuizStatePayload | null;
+      state?: QuizStatePayload | null;
+      quiz_state?: QuizStatePayload | null;
+    }) | null;
+    return raw?.game_state || raw?.quiz_state || raw?.state || {};
+  }, [session]);
 
-  const choicesWithLabels = useMemo(() => {
-    return CHOICE_META.map((meta, idx) => {
-      const label = parsedOptions[idx] ?? "";
-      return {
-        ...meta,
-        label,
-      };
-    }).filter((item) => item.label.length > 0 || parsedOptions.length === 0);
-  }, [parsedOptions]);
+  const questions = useMemo<QuizQuestionItem[]>(() => {
+    return Array.isArray(quizState.questions) ? quizState.questions : [];
+  }, [quizState]);
 
-  const latestAnswerByPlayer = useMemo(() => {
-    const map = new Map<string, { letter: string | null; answer: string }>();
-    for (const act of actions) {
-      if (act.round_number !== currentRound) continue;
-      const answerVal = String(act.payload?.answer ?? "").trim();
-      let letter = act.payload?.choice_letter
-        ? String(act.payload.choice_letter).toUpperCase()
-        : null;
+  const currentQuestionIndex = useMemo(() => {
+    const idx =
+      quizState.currentQuestionIndex ??
+      quizState.current_question_index ??
+      0;
+    return Math.max(0, Number(idx) || 0);
+  }, [quizState]);
 
-      if (!letter && answerVal && parsedOptions.length > 0) {
-        const matchIdx = parsedOptions.findIndex(
-          (opt) => opt.trim().toLowerCase() === answerVal.toLowerCase()
-        );
-        if (matchIdx >= 0 && CHOICE_META[matchIdx]) {
-          letter = CHOICE_META[matchIdx].letter;
-        }
-      }
+  const currentQuestion = questions[currentQuestionIndex] ?? null;
+  const options = useMemo<string[]>(() => {
+    if (!currentQuestion?.options) return ["", "", "", ""];
+    return [
+      currentQuestion.options[0] ?? "",
+      currentQuestion.options[1] ?? "",
+      currentQuestion.options[2] ?? "",
+      currentQuestion.options[3] ?? "",
+    ];
+  }, [currentQuestion]);
 
-      map.set(act.player_id, { letter, answer: answerVal });
-    }
-    return map;
-  }, [actions, currentRound, parsedOptions]);
-
-  const rankedPlayers = useMemo(() => {
-    const withScore = players.map((p) => {
-      const scoreRow = scores.find((s) => s.player_id === p.id) as
-        | (PlayerScore & { total_score?: number; score?: number })
-        | undefined;
-      const pts = scoreRow?.total_score ?? scoreRow?.score ?? 0;
-      const ans = latestAnswerByPlayer.get(p.id) ?? null;
-      return {
-        player: p,
-        points: pts,
-        answerData: ans,
-      };
-    });
-
-    withScore.sort((a, b) => {
-      if (b.points !== a.points) return b.points - a.points;
-      return a.player.nickname.localeCompare(b.player.nickname, "fr");
-    });
-
-    return withScore.map((item, index) => ({
-      ...item,
-      rank: index + 1,
-    }));
-  }, [players, scores, latestAnswerByPlayer]);
+  const answersMap = quizState.answers ?? {};
+  const scoresMap = quizState.scores ?? {};
 
   const allPlayersAnswered = useMemo(() => {
-    if (rankedPlayers.length === 0) return false;
-    return rankedPlayers.every((entry) => entry.answerData !== null);
-  }, [rankedPlayers]);
+    if (players.length === 0) return false;
+    return players.every((p) => {
+      const val = answersMap[String(p.id)];
+      return normalizeAnswerLetter(val) !== null;
+    });
+  }, [players, answersMap]);
+
+  const isRevealed = Boolean(
+    quizState.revealed ||
+      quizState.showAnswers ||
+      quizState.show_answers ||
+      allPlayersAnswered
+  );
+
+  const correctLetter = useMemo<AnswerLetter | null>(() => {
+    if (!currentQuestion) return null;
+    if (typeof currentQuestion.correctIndex === "number") {
+      return LETTERS[currentQuestion.correctIndex] ?? null;
+    }
+    return normalizeAnswerLetter(currentQuestion.correctAnswer);
+  }, [currentQuestion]);
+
+  const rankedPlayers = useMemo(() => {
+    return [...players]
+      .map((player) => {
+        const extra = player as SessionPlayer & { score?: number };
+        const score =
+          typeof scoresMap[String(player.id)] === "number"
+            ? scoresMap[String(player.id)]
+            : typeof extra.score === "number"
+            ? extra.score
+            : 0;
+        const chosenLetter = normalizeAnswerLetter(
+          answersMap[String(player.id)]
+        );
+        return {
+          player,
+          score,
+          chosenLetter,
+        };
+      })
+      .sort((a, b) => b.score - a.score);
+  }, [players, scoresMap, answersMap]);
+
+  const currentRound = session?.current_round ?? 1;
+  const totalQuestions = questions.length;
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white p-6 flex flex-col gap-6 select-none">
-      {/* Barre supérieure */}
-      <header className="flex items-center justify-between border-b border-white/10 pb-4">
-        <div className="flex items-center gap-4">
-          <span className="px-3 py-1 rounded-xl bg-amber-400/15 border border-amber-400/30 text-amber-300 font-mono text-sm font-bold tracking-widest">
-            SALLE {sessionCode || "----"}
-          </span>
-          <span className="text-sm font-semibold text-neutral-300">
-            Grand Quiz • Manche {currentRound}
-          </span>
+    <div className="h-[100dvh] w-screen overflow-hidden bg-tvos-bg text-white px-8 py-6 flex flex-col justify-between select-none">
+      {/* En-tête grand format lisible depuis le canapé */}
+      <header className="flex items-center justify-between border-b border-white/15 pb-4 shrink-0 gap-6">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="w-14 h-14 rounded-2xl bg-amber-400/15 border border-amber-400/35 flex items-center justify-center shrink-0">
+            <Tv className="w-8 h-8 text-amber-400" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-base xl:text-lg uppercase tracking-[0.18em] text-amber-300 font-extrabold">
+              Manche {currentRound}
+              {totalQuestions > 0
+                ? ` • Question ${Math.min(
+                    currentQuestionIndex + 1,
+                    totalQuestions
+                  )} / ${totalQuestions}`
+                : ""}
+            </div>
+            <h1 className="text-3xl xl:text-4xl font-black tracking-tight truncate">
+              {gameTitle}
+            </h1>
+          </div>
         </div>
 
-        <div className="flex items-center gap-3">
-          <span className="text-xs uppercase tracking-wider px-3 py-1 rounded-full bg-white/10 text-neutral-200 font-semibold">
-            {roundStatus}
+        <div className="flex items-center gap-4 shrink-0">
+          <span className="text-lg xl:text-xl font-bold uppercase tracking-wider text-neutral-300">
+            Salle
           </span>
-          <span className="text-xs text-neutral-400 font-mono">
-            {rankedPlayers.filter((r) => r.answerData !== null).length}/
-            {rankedPlayers.length} réponses
-          </span>
+          <div className="px-6 py-2.5 rounded-2xl bg-amber-400/15 border-2 border-amber-400/45 text-amber-300 font-mono text-3xl xl:text-4xl font-black tracking-[0.2em]">
+            {sessionCode || "----"}
+          </div>
         </div>
       </header>
 
-      {/* Zone principale : Classement à gauche, Question & 4 Réponses à droite */}
-      <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-6 min-h-0">
-        {/* Classement des joueurs */}
-        <section className="lg:col-span-4 bg-white/5 border border-white/10 rounded-3xl p-5 flex flex-col gap-4">
-          <div className="flex items-center justify-between border-b border-white/10 pb-3">
-            <div className="flex items-center gap-2">
-              <Trophy className="w-5 h-5 text-amber-400" />
-              <h2 className="text-lg font-bold tracking-wide">Classement</h2>
-            </div>
-            {allPlayersAnswered && (
-              <span className="text-xs font-bold text-emerald-300 bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-1 rounded-full">
-                Tous ont répondu
-              </span>
+      {/* Corps principal : Question/Réponses à gauche (7 cols), Classement à droite (5 cols) */}
+      <main className="flex-1 min-h-0 grid grid-cols-12 gap-7 pt-5">
+        {/* COLONNE GAUCHE : Grande case Question + 4 cases Réponses */}
+        <section className="col-span-7 bg-white/[0.06] border border-white/15 rounded-[2rem] p-7 flex flex-col justify-between gap-6 min-h-0">
+          {/* Bloc Question centré en haut */}
+          <div className="min-h-[26%] flex items-center justify-center text-center px-4">
+            {currentQuestion ? (
+              <h2
+                className={`font-black text-white text-center break-words [word-break:normal] hyphens-none ${getQuestionFontSize(
+                  currentQuestion.question
+                )}`}
+              >
+                {currentQuestion.question}
+              </h2>
+            ) : (
+              <p className="text-3xl font-bold text-neutral-400 text-center">
+                En attente de la première question...
+              </p>
             )}
           </div>
 
+          {/* 4 cases de réponses empilées en dessous */}
+          <div className="flex-1 min-h-0 grid grid-rows-4 gap-4">
+            {LETTERS.map((letter, index) => {
+              const style = ANSWER_STYLES[letter];
+              const optionText = options[index] || `Réponse ${letter}`;
+              const isCorrect =
+                isRevealed && correctLetter !== null && correctLetter === letter;
+              const isDimmed =
+                isRevealed && correctLetter !== null && correctLetter !== letter;
+
+              return (
+                <div
+                  key={letter}
+                  className={`relative rounded-3xl border-2 px-6 py-3 flex items-center transition-all duration-300 ${
+                    style.bg
+                  } ${style.border} ${
+                    isCorrect
+                      ? "ring-4 ring-emerald-300 scale-[1.01] shadow-2xl"
+                      : isDimmed
+                      ? "opacity-45"
+                      : "shadow-lg"
+                  }`}
+                >
+                  {/* Lettre fixe sur la gauche de la case */}
+                  <div
+                    className={`w-16 h-16 xl:w-20 xl:h-20 rounded-2xl border-2 flex items-center justify-center font-black text-3xl xl:text-4xl shrink-0 ${style.badgeBg}`}
+                  >
+                    {letter}
+                  </div>
+
+                  {/* Texte de réponse centré verticalement et horizontalement sans jamais couper un mot */}
+                  <div className="flex-1 h-full flex items-center justify-center text-center px-5 overflow-hidden">
+                    <span
+                      className={`font-black text-white text-center whitespace-normal break-words [word-break:normal] hyphens-none line-clamp-3 ${getOptionFontSize(
+                        optionText
+                      )}`}
+                    >
+                      {optionText}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+
+        {/* COLONNE DROITE : Classement des joueurs */}
+        <aside className="col-span-5 bg-white/[0.06] border border-white/15 rounded-[2rem] p-6 flex flex-col gap-4 min-h-0">
+          <div className="flex items-center justify-between shrink-0 pb-1">
+            <div className="flex items-center gap-3 text-2xl xl:text-3xl font-black">
+              <Trophy className="w-8 h-8 text-amber-400" />
+              <span>Classement</span>
+            </div>
+            <span className="text-lg font-bold text-neutral-300">
+              {players.length} joueur{players.length > 1 ? "s" : ""}
+            </span>
+          </div>
+
           {rankedPlayers.length === 0 ? (
-            <div className="my-auto text-center text-neutral-400 text-sm py-8">
-              En attente des joueurs...
+            <div className="flex-1 flex items-center justify-center text-2xl text-neutral-400 font-semibold text-center px-4">
+              Aucun joueur dans la partie
             </div>
           ) : (
-            <div className="space-y-3 overflow-y-auto pr-1">
-              {rankedPlayers.map(({ player, points, answerData, rank }) => {
+            <div className="flex-1 min-h-0 flex flex-col gap-3.5 overflow-hidden">
+              {rankedPlayers.map(({ player, score, chosenLetter }, idx) => {
                 const pColor = getUniquePlayerColor(player.id, players);
-                const playerExtra = player as SessionPlayer & {
-                  avatarId?: string;
-                  avatar_id?: string;
-                };
-                const avatarDisplay =
-                  playerExtra.avatarId || playerExtra.avatar_id || "🎮";
-                const choiceStyle = answerData?.letter
-                  ? CHOICE_META.find((c) => c.letter === answerData.letter)
-                  : undefined;
+                const rank = idx + 1;
+                const hasAnswered = chosenLetter !== null;
+                const answerStyle = chosenLetter
+                  ? ANSWER_STYLES[chosenLetter]
+                  : null;
 
                 return (
                   <div
                     key={player.id}
-                    className="flex items-center justify-between gap-3 rounded-2xl bg-black/40 border border-white/10 p-3.5"
+                    style={{
+                      backgroundColor: pColor.bgHex,
+                      borderColor: pColor.borderHex,
+                      color: pColor.textHex,
+                    }}
+                    className="rounded-3xl border-2 px-5 py-3.5 flex items-center gap-4 shadow-lg shrink-0"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <span className="w-8 h-8 rounded-xl bg-white/10 flex items-center justify-center font-mono font-black text-sm text-amber-300 shrink-0">
-                        #{rank}
-                      </span>
-
-                      <span
-                        style={{
-                          backgroundColor: pColor.bgHex,
-                          borderColor: pColor.borderHex,
-                          color: pColor.textHex,
-                        }}
-                        className="w-10 h-10 rounded-2xl border-2 flex items-center justify-center text-xl shrink-0"
-                      >
-                        {avatarDisplay}
-                      </span>
-
-                      <div className="min-w-0">
-                        <div className="font-bold text-base truncate">
-                          {player.nickname}
-                        </div>
-                        <div className="text-xs font-mono text-neutral-300">
-                          {points} pts
-                        </div>
-                      </div>
+                    {/* 1. Numéro de rang fixe à gauche */}
+                    <div
+                      style={{ backgroundColor: pColor.badgeBgHex }}
+                      className="w-12 h-12 xl:w-14 xl:h-14 rounded-2xl flex items-center justify-center font-black text-2xl xl:text-3xl shrink-0"
+                    >
+                      {rank}
                     </div>
 
-                    {/* Pastille de validation ou lettre de réponse quand tout le monde a répondu */}
-                    <div className="shrink-0">
-                      {allPlayersAnswered && choiceStyle ? (
+                    {/* 2. Pseudo à droite du numéro */}
+                    <div className="flex-1 min-w-0 font-black text-2xl xl:text-3xl truncate">
+                      {player.nickname}
+                    </div>
+
+                    {/* 3. Points fixes du joueur */}
+                    <div className="w-24 text-right font-mono font-black text-2xl xl:text-3xl shrink-0">
+                      {score} <span className="text-lg font-bold">pts</span>
+                    </div>
+
+                    {/* 4. Pastille état réponse à droite des points */}
+                    <div className="w-14 h-14 flex items-center justify-center shrink-0">
+                      {hasAnswered && !isRevealed && (
+                        <div
+                          title="A répondu"
+                          className="w-12 h-12 xl:w-14 xl:h-14 rounded-full bg-emerald-200 border-2 border-emerald-500 flex items-center justify-center shadow-md"
+                        >
+                          <Check
+                            className="w-8 h-8 text-emerald-700 stroke-[3.5]"
+                            aria-label="V"
+                          />
+                        </div>
+                      )}
+
+                      {hasAnswered && isRevealed && answerStyle && (
                         <div
                           style={{
-                            backgroundColor: choiceStyle.bgHex,
-                            borderColor: choiceStyle.borderHex,
-                            color: choiceStyle.textHex,
+                            backgroundColor: answerStyle.circleBg,
+                            color: answerStyle.circleText,
                           }}
-                          className="w-11 h-11 rounded-full border-2 flex items-center justify-center font-black text-lg shadow-md"
-                          title={`Réponse ${choiceStyle.letter}`}
+                          className="w-12 h-12 xl:w-14 xl:h-14 rounded-full border-2 border-white flex items-center justify-center font-black text-2xl xl:text-3xl shadow-md"
                         >
-                          {choiceStyle.letter}
+                          {chosenLetter}
                         </div>
-                      ) : answerData !== null ? (
-                        <div
-                          className="w-10 h-10 rounded-full bg-emerald-200 border-2 border-emerald-400 flex items-center justify-center text-emerald-700 shadow-sm"
-                          title="A répondu"
-                        >
-                          <Check className="w-5 h-5 stroke-[3]" />
-                        </div>
-                      ) : (
-                        <div className="w-10 h-10 rounded-full border border-dashed border-white/20" />
                       )}
                     </div>
                   </div>
@@ -475,58 +487,7 @@ export default function TvQuizScreenPage() {
               })}
             </div>
           )}
-        </section>
-
-        {/* Colonne droite : Question au-dessus, 4 Réponses en dessous */}
-        <section className="lg:col-span-8 flex flex-col gap-6">
-          {/* Case Question */}
-          <div className="bg-white/5 border border-white/10 rounded-3xl p-7 flex flex-col justify-center min-h-[190px]">
-            <div className="flex items-center gap-2 text-amber-400 text-xs uppercase tracking-widest font-bold mb-3">
-              <HelpCircle className="w-4 h-4" />
-              <span>Question {currentRound}</span>
-            </div>
-            <h1 className="text-2xl sm:text-4xl font-extrabold leading-tight text-white">
-              {roundStatus === "playing"
-                ? questionText
-                : roundStatus === "paused"
-                ? "Partie en pause"
-                : roundStatus === "finished"
-                ? "Partie terminée !"
-                : "Préparez-vous, le quiz va démarrer..."}
-            </h1>
-          </div>
-
-          {/* Case 4 Réponses */}
-          <div className="flex-1 bg-white/5 border border-white/10 rounded-3xl p-6 flex flex-col justify-center">
-            {roundStatus === "playing" && choicesWithLabels.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 h-full">
-                {choicesWithLabels.map((choice) => (
-                  <div
-                    key={choice.letter}
-                    style={{
-                      backgroundColor: choice.bgHex,
-                      borderColor: choice.borderHex,
-                      color: choice.textHex,
-                    }}
-                    className="rounded-3xl border-4 p-5 flex items-center gap-4 shadow-xl min-h-[115px]"
-                  >
-                    <span className="w-12 h-12 rounded-2xl bg-black/25 flex items-center justify-center text-2xl font-black shrink-0">
-                      {choice.letter}
-                    </span>
-                    <span className="text-xl sm:text-2xl font-bold leading-snug">
-                      {choice.label || `Choix ${choice.letter}`}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-center text-neutral-400 text-base py-8">
-                Les propositions de réponse s&apos;afficheront dès le lancement de
-                la manche.
-              </div>
-            )}
-          </div>
-        </section>
+        </aside>
       </main>
     </div>
   );
