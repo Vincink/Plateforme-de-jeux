@@ -11,6 +11,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
+import { getPlayerColor } from "@/lib/colorsplayer";
 import type {
   GameContent,
   GameSession,
@@ -274,6 +275,11 @@ export default function PlayerControllerPage() {
     return scoreRecord.total_score ?? scoreRecord.score ?? 0;
   }, [identity, scores]);
 
+  const myColor = useMemo(
+    () => getPlayerColor(identity?.playerId, 0),
+    [identity?.playerId]
+  );
+
   const handleJoinGame = async (e: React.FormEvent) => {
     e.preventDefault();
     const cleanName = nicknameInput.trim();
@@ -491,18 +497,30 @@ export default function PlayerControllerPage() {
         ) : (
           <main className="space-y-5">
             {/* Player Status Card */}
-            <div className="bg-white/5 border border-white/10 rounded-3xl p-5 flex items-center justify-between">
+            <div
+              style={{
+                backgroundColor: myColor.bgHex,
+                borderColor: myColor.borderHex,
+                color: myColor.textHex,
+              }}
+              className="border-2 rounded-3xl p-5 flex items-center justify-between shadow-lg"
+            >
               <div className="flex items-center gap-3">
-                <span className="text-3xl">{identity.avatar ?? "🎮"}</span>
+                <span
+                  style={{ backgroundColor: myColor.badgeBgHex }}
+                  className="text-3xl flex h-12 w-12 items-center justify-center rounded-2xl"
+                >
+                  {identity.avatar ?? "🎮"}
+                </span>
                 <div>
-                  <div className="font-bold text-lg">{identity.nickname}</div>
-                  <div className="text-xs text-neutral-400">
+                  <div className="font-black text-lg">{identity.nickname}</div>
+                  <div className="text-xs opacity-90 font-semibold">
                     Manche {currentRound} • État :{" "}
-                    <span className="text-white uppercase">{roundStatus}</span>
+                    <span className="uppercase">{roundStatus}</span>
                   </div>
                 </div>
               </div>
-              <Gamepad2 className="w-6 h-6 text-neutral-400" />
+              <Gamepad2 className="w-6 h-6 opacity-90" />
             </div>
 
             {/* Active Question / Action Zone */}
@@ -568,14 +586,22 @@ export default function PlayerControllerPage() {
                   Joueurs ({players.length})
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  {players.map((p) => (
-                    <span
-                      key={p.id}
-                      className="text-xs bg-white/10 px-3 py-1.5 rounded-full"
-                    >
-                      {p.avatar ?? "🎮"} {p.nickname}
-                    </span>
-                  ))}
+                  {players.map((p, idx) => {
+                    const pColor = getPlayerColor(p.id, idx);
+                    return (
+                      <span
+                        key={p.id}
+                        style={{
+                          backgroundColor: pColor.bgHex,
+                          borderColor: pColor.borderHex,
+                          color: pColor.textHex,
+                        }}
+                        className="text-xs font-bold border px-3 py-1.5 rounded-full"
+                      >
+                        {p.avatar ?? "🎮"} {p.nickname}
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
             )}
