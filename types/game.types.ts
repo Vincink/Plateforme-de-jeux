@@ -43,7 +43,13 @@ export interface GameContent {
   created_at?: string;
 }
 
-export type SessionStatus = "lobby" | "playing" | "paused" | "finished";
+export type SessionStatus =
+  | "lobby"
+  | "starting"
+  | "playing"
+  | "paused"
+  | "round_result"
+  | "finished";
 
 export interface GameSession {
   id: string;
