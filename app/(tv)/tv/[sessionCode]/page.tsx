@@ -1,185 +1,115 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
-import { QrCode, Users, Tv, Sparkles } from "lucide-react";
-import { QRCodeCanvas } from "qrcode.react";
-import { clientEnv } from "@/lib/env";
+import React, { useEffect, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { Tv, Users, QrCode, Play } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
-import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
-import type {
-  GameSession,
-  PlayerScore,
-  SessionPlayer,
-  SessionStatus,
-} from "@/types/game.types";
+import type { GameSession, SessionPlayer } from "@/types/game.types";
 
-const AVATAR_EMOJIS: Record<string, string> = {
-  gamepad: "🎮",
-  fox: "🦊",
-  cat: "🐱",
-  dog: "🐶",
-  robot: "🤖",
-  alien: "👽",
-  crown: "👑",
-  flame: "🔥",
-  star: "⭐",
-  rocket: "🚀",
-};
+const GRAND_QUIZ_GAME_ID = "6e6d7179-3a56-4d94-9c1d-19ac06a34aaa";
 
-const FIXED_TV_ALIASES = new Set(["SALON", "TV", "MAIN", "HOME"]);
-
-export default function TvSessionPage() {
+export default function TvLobbyPage() {
   const params = useParams<{ sessionCode: string }>();
-  const requestedCode = (params?.sessionCode ?? "").toUpperCase();
-  const isFixedTvScreen = FIXED_TV_ALIASES.has(requestedCode);
+  const router = useRouter();
+  const sessionCode = (params?.sessionCode ?? "").toUpperCase();
+  const supabase = getSupabaseBrowserClient();
 
-  const [origin, setOrigin] = useState<string>("");
   const [session, setSession] = useState<GameSession | null>(null);
   const [players, setPlayers] = useState<SessionPlayer[]>([]);
-  const [scores, setScores] = useState<PlayerScore[]>([]);
+  const [gameTitle, setGameTitle] = useState<string>("En attente d'un jeu");
 
   useEffect(() => {
-    if (typeof window !== "undefined") {
-      setOrigin(window.location.origin);
-    }
-  }, []);
-
-  useEffect(() => {
-    const supabase = getSupabaseBrowserClient();
-    if (!supabase || !requestedCode) return;
+    if (!supabase || !sessionCode) return;
 
     let isMounted = true;
     let playersChannel: ReturnType<typeof supabase.channel> | null = null;
-    let scoresChannel: ReturnType<typeof supabase.channel> | null = null;
 
-    const loadPlayersAndScores = async (targetSessionId: string) => {
-      const [{ data: playersData }, { data: scoresData }] = await Promise.all([
-        supabase
-          .from("session_players")
-          .select("*")
-          .eq("session_id", targetSessionId)
-          .order("id", { ascending: true }),
-        supabase
-          .from("player_scores")
-          .select("*")
-          .eq("session_id", targetSessionId),
-      ]);
+    const loadGameTitle = async (gameId: string | null | undefined) => {
+      if (!gameId) {
+        if (isMounted) setGameTitle("En attente d'un jeu");
+        return;
+      }
+      const { data } = await supabase
+        .from("games")
+        .select("title, name")
+        .eq("id", gameId)
+        .maybeSingle<{ title?: string | null; name?: string | null }>();
 
       if (!isMounted) return;
-      if (playersData) {
-        setPlayers(playersData as SessionPlayer[]);
-      }
-      if (scoresData) {
-        setScores(scoresData as PlayerScore[]);
-      }
+      setGameTitle(data?.title || data?.name || "Jeu sélectionné");
     };
 
-    const bindSessionChildren = (targetSessionId: string) => {
+    const loadPlayers = async (targetSessionId: string) => {
+      const { data } = await supabase
+        .from("session_players")
+        .select("*")
+        .eq("session_id", targetSessionId)
+        .order("id", { ascending: true });
+
+      if (!isMounted) return;
+      setPlayers((data as SessionPlayer[] | null) ?? []);
+    };
+
+    const bindSession = (targetSession: GameSession) => {
       if (playersChannel) {
         void supabase.removeChannel(playersChannel);
       }
-      if (scoresChannel) {
-        void supabase.removeChannel(scoresChannel);
-      }
 
-      void loadPlayersAndScores(targetSessionId);
+      void loadPlayers(targetSession.id);
+      void loadGameTitle(targetSession.game_id);
 
       playersChannel = supabase
-        .channel(`tv-players-${targetSessionId}`)
+        .channel(`tv-lobby-players-${targetSession.id}`)
         .on(
           "postgres_changes",
           {
             event: "*",
             schema: "public",
             table: "session_players",
-            filter: `session_id=eq.${targetSessionId}`,
+            filter: `session_id=eq.${targetSession.id}`,
           },
           () => {
-            void loadPlayersAndScores(targetSessionId);
-          }
-        )
-        .subscribe();
-
-      scoresChannel = supabase
-        .channel(`tv-scores-${targetSessionId}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "player_scores",
-            filter: `session_id=eq.${targetSessionId}`,
-          },
-          () => {
-            void loadPlayersAndScores(targetSessionId);
+            void loadPlayers(targetSession.id);
           }
         )
         .subscribe();
     };
 
-    const fetchSession = async () => {
-      if (isFixedTvScreen) {
-        const { data } = await supabase
-          .from("game_sessions")
-          .select("*")
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle<GameSession>();
+    const fetchInitial = async () => {
+      const { data } = await supabase
+        .from("game_sessions")
+        .select("*")
+        .eq("code", sessionCode)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<GameSession>();
 
-        if (!isMounted || !data) return;
+      if (!isMounted) return;
+      if (data) {
         setSession(data);
-        bindSessionChildren(data.id);
-      } else {
-        const { data } = await supabase
-          .from("game_sessions")
-          .select("*")
-          .eq("code", requestedCode)
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle<GameSession>();
-
-        if (!isMounted) return;
-        if (data) {
-          setSession(data);
-          bindSessionChildren(data.id);
-        } else {
-          setSession((prev) => ({
-            id: prev?.id ?? "pending-session",
-            game_id: prev?.game_id ?? "quiz",
-            code: requestedCode,
-            status: prev?.status ?? "lobby",
-            current_round: prev?.current_round ?? 1,
-            state: prev?.state ?? { gameSlug: "quiz", showQrOnTv: true },
-          }));
-        }
+        bindSession(data);
       }
     };
 
-    void fetchSession();
+    void fetchInitial();
 
     const sessionChannel = supabase
-      .channel(`tv-session-${requestedCode}`)
+      .channel(`tv-lobby-session-${sessionCode}`)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "game_sessions",
+          filter: `code=eq.${sessionCode}`,
         },
         (payload) => {
           if (!isMounted) return;
           const nextRow = payload.new as GameSession | null;
           if (!nextRow) return;
-
-          if (isFixedTvScreen) {
-            setSession(nextRow);
-            bindSessionChildren(nextRow.id);
-          } else if (nextRow.code?.toUpperCase() === requestedCode) {
-            setSession(nextRow);
-            bindSessionChildren(nextRow.id);
-          }
+          setSession(nextRow);
+          bindSession(nextRow);
         }
       )
       .subscribe();
@@ -190,235 +120,96 @@ export default function TvSessionPage() {
       if (playersChannel) {
         void supabase.removeChannel(playersChannel);
       }
-      if (scoresChannel) {
-        void supabase.removeChannel(scoresChannel);
-      }
     };
-  }, [requestedCode, isFixedTvScreen]);
+  }, [supabase, sessionCode]);
 
-  const activeCode = (
-    session?.code || (!isFixedTvScreen ? requestedCode : "")
-  ).toUpperCase();
+  useEffect(() => {
+    if (!session || !sessionCode) return;
 
-  const currentGame: CatalogGame | undefined = useMemo(() => {
-    const slug =
-      (session?.state?.gameSlug as string | undefined) ??
-      session?.game_id ??
-      "quiz";
-    return INITIAL_GAMES.find((g) => g.slug === slug) ?? INITIAL_GAMES[0];
-  }, [session]);
+    const isQuizPlaying =
+      session.game_id === GRAND_QUIZ_GAME_ID && session.status === "playing";
 
-  const showQrOnTv =
-    session?.state?.showQrOnTv !== undefined
-      ? Boolean(session.state.showQrOnTv)
-      : true;
+    if (isQuizPlaying) {
+      router.replace(`/tv/${sessionCode}/quiz`);
+    }
+  }, [session, sessionCode, router]);
 
-  const baseUrl = clientEnv.appUrl?.trim() || origin;
-  const joinUrl = baseUrl
-    ? `${baseUrl.replace(/\/$/, "")}/play/${activeCode}`
-    : `/play/${activeCode}`;
-
-  const cycleDemoStatus = () => {
-    const order: SessionStatus[] = [
-      "lobby",
-      "starting",
-      "playing",
-      "paused",
-      "round_result",
-      "finished",
-    ];
-    const currentStatus = session?.status ?? "lobby";
-    const currentIndex = order.indexOf(currentStatus);
-    const nextStatus: SessionStatus =
-      order[(currentIndex + 1) % order.length] ?? "lobby";
-    setSession((prev) => ({
-      id: prev?.id ?? "demo-session",
-      game_id: prev?.game_id ?? currentGame?.id ?? "quiz",
-      code: activeCode || "DEMO",
-      status: nextStatus,
-      current_round: prev?.current_round ?? 1,
-      state: prev?.state ?? { gameSlug: currentGame?.slug ?? "quiz" },
-    }));
-  };
-
-  const getPlayerScore = (playerId: string): number => {
-    const match = scores.find((s) => s.player_id === playerId);
-    if (!match) return 0;
-    const scoreRecord = match as unknown as {
-      total_score?: number;
-      score?: number;
-    };
-    return scoreRecord.total_score ?? scoreRecord.score ?? 0;
-  };
-
-  const sortedPlayers = useMemo(() => {
-    return [...players].sort(
-      (a, b) => getPlayerScore(b.id) - getPlayerScore(a.id)
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [players, scores]);
-
-  const status = session?.status ?? "lobby";
-  const round = session?.current_round ?? 1;
+  const showQr =
+    (session as (GameSession & { show_qr?: boolean }) | null)?.show_qr ??
+    true;
+  const roundStatus = session?.status ?? "lobby";
+  const currentRound = session?.current_round ?? 1;
 
   return (
-    <div className="relative flex h-[100dvh] w-screen flex-col justify-between overflow-hidden bg-neutral-950 p-7 text-white md:p-11">
-      {/* Ambient background */}
-      <div
-        className="pointer-events-none absolute inset-0"
-        style={{
-          background: currentGame
-            ? `radial-gradient(circle at 80% 20%, ${currentGame.accentColor}2E 0%, transparent 55%), radial-gradient(circle at 15% 85%, rgba(10, 132, 255, 0.14) 0%, transparent 55%)`
-            : undefined,
-        }}
-      />
-
-      {/* Top TV Bar */}
-      <header className="relative z-10 flex flex-wrap items-center justify-between gap-5 border-b border-white/15 pb-6">
-        <div className="flex items-center gap-4">
-          <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/15 bg-white/10">
-            <Tv className="h-9 w-9 text-amber-400" />
-          </div>
+    <div className="min-h-screen bg-neutral-950 text-white p-8 flex flex-col justify-between select-none">
+      <header className="flex items-center justify-between border-b border-white/10 pb-5">
+        <div className="flex items-center gap-3">
+          <Tv className="w-7 h-7 text-amber-400" />
           <div>
-            <div className="flex items-center gap-2 text-base font-bold uppercase tracking-widest text-neutral-300">
-              <Sparkles className="h-5 w-5 text-amber-400" />
-              <span>Écran Principal TV</span>
+            <div className="text-xs uppercase tracking-widest text-neutral-400">
+              Écran TV
             </div>
-            <h1 className="text-4xl font-black tracking-tight md:text-6xl">
-              {currentGame?.title ?? "Plateforme de Jeux"}
-            </h1>
+            <div className="text-xl font-bold">
+              {gameTitle} • Manche {currentRound}
+            </div>
           </div>
         </div>
 
-        <div className="flex shrink-0 items-center gap-4">
-          <button
-            type="button"
-            onClick={cycleDemoStatus}
-            className="whitespace-nowrap rounded-full border border-white/20 bg-white/10 px-6 py-3.5 text-base font-extrabold uppercase tracking-wider transition hover:bg-white/15 md:text-lg"
-          >
-            État : {status} • Manche {round}
-          </button>
-
-          <div className="shrink-0 rounded-2xl border border-amber-400/35 bg-white/10 px-7 py-3 text-right">
-            <div className="text-sm font-extrabold uppercase tracking-widest text-neutral-300">
-              Code Salle
-            </div>
-            <div className="font-mono text-4xl font-black tracking-widest text-amber-400 md:text-6xl">
-              {activeCode || "----"}
-            </div>
+        <div className="flex items-center gap-4">
+          <span className="px-3.5 py-1.5 rounded-full bg-white/10 text-xs font-bold uppercase tracking-wider">
+            {roundStatus}
+          </span>
+          <div className="px-4 py-2 rounded-2xl bg-amber-400/15 border border-amber-400/30 text-amber-300 font-mono text-2xl font-black tracking-widest">
+            {sessionCode || "----"}
           </div>
         </div>
       </header>
 
-      {/* Main TV Stage */}
-      <main className="relative z-10 my-auto grid flex-1 grid-cols-1 items-stretch gap-8 py-6 lg:grid-cols-12">
-        {/* Left: Join / QR / Status */}
-        <section className="flex h-full flex-col justify-between space-y-6 rounded-3xl border border-white/15 bg-white/5 p-7 lg:col-span-5 md:p-9">
-          <div className="flex items-center gap-3">
-            <QrCode className="h-9 w-9 shrink-0 text-sky-400" />
-            <h2 className="text-3xl font-black md:text-4xl">
-              Rejoindre avec son téléphone
-            </h2>
-          </div>
-
-          {showQrOnTv ? (
-            <div className="my-auto flex flex-col items-center gap-6 sm:flex-row">
-              <div className="shrink-0 rounded-3xl bg-white p-4 shadow-xl">
-                <QRCodeCanvas
-                  value={joinUrl}
-                  size={208}
-                  bgColor="#ffffff"
-                  fgColor="#07080c"
-                  level="M"
-                  marginSize={2}
-                />
-              </div>
-
-              <div className="space-y-4 text-center sm:text-left">
-                <p className="text-xl font-semibold leading-relaxed text-neutral-100 md:text-2xl">
-                  Scanne le QR code ou entre le code{" "}
-                  <span className="font-mono text-3xl font-black text-amber-400 md:text-4xl">
-                    {activeCode || "----"}
-                  </span>{" "}
-                  sur ton téléphone.
-                </p>
-
-                <div className="break-all rounded-2xl border border-white/15 bg-black/50 px-4 py-3 font-mono text-base font-bold text-neutral-200 md:text-lg">
-                  {joinUrl}
-                </div>
-              </div>
+      <main className="my-auto grid grid-cols-1 lg:grid-cols-12 gap-8 py-8">
+        <section className="lg:col-span-7 bg-white/5 border border-white/10 rounded-3xl p-7 flex flex-col gap-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5 text-lg font-bold">
+              <Users className="w-5 h-5 text-amber-400" />
+              <span>Joueurs connectés ({players.length})</span>
             </div>
-          ) : (
-            <div className="my-auto rounded-2xl border border-white/15 bg-black/40 p-8 text-center text-2xl font-semibold text-neutral-300 md:text-3xl">
-              QR code masqué par l&apos;animateur • Code salle :{" "}
-              <span className="font-mono text-3xl font-black text-amber-400 md:text-4xl">
-                {activeCode || "----"}
-              </span>
-            </div>
-          )}
-
-          {currentGame?.tagline && (
-            <p className="border-t border-white/15 pt-5 text-lg font-semibold text-neutral-200 md:text-2xl">
-              {currentGame.tagline}
-            </p>
-          )}
-        </section>
-
-        {/* Right: Players & Leaderboard */}
-        <section className="flex h-full flex-col justify-between space-y-6 rounded-3xl border border-white/15 bg-white/5 p-7 lg:col-span-7 md:p-9">
-          <div className="flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <Users className="h-9 w-9 shrink-0 text-emerald-400" />
-              <h2 className="text-3xl font-black md:text-4xl">
-                Joueurs ({sortedPlayers.length})
-              </h2>
-            </div>
-            <span className="text-base font-extrabold uppercase tracking-wider text-neutral-300 md:text-lg">
-              Classement en direct
+            <span className="text-xs text-neutral-400">
+              Code : <strong className="font-mono text-white">{sessionCode}</strong>
             </span>
           </div>
 
-          {sortedPlayers.length === 0 ? (
-            <div className="my-auto flex flex-1 items-center justify-center py-12 text-center text-2xl font-bold text-neutral-200 md:text-4xl">
-              En attente des joueurs...
+          {players.length === 0 ? (
+            <div className="py-12 text-center text-neutral-400">
+              En attente des joueurs sur leur téléphone...
             </div>
           ) : (
-            <div className="my-auto grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {sortedPlayers.map((player) => {
-                const color = getUniquePlayerColor(player.id, players);
-                const avatarKey = player.avatarId ?? "";
-                const avatarSymbol =
-                  (avatarKey ? AVATAR_EMOJIS[avatarKey] : undefined) ??
-                  player.avatar ??
-                  "🎮";
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              {players.map((player) => {
+                const pColor = getUniquePlayerColor(player.id, players);
+                const playerExtra = player as SessionPlayer & {
+                  avatarId?: string;
+                  avatar_id?: string;
+                };
+                const avatarDisplay =
+                  playerExtra.avatarId || playerExtra.avatar_id || "🎮";
 
                 return (
                   <div
                     key={player.id}
                     style={{
-                      backgroundColor: color.bgHex,
-                      borderColor: color.borderHex,
-                      color: color.textHex,
+                      backgroundColor: pColor.bgHex,
+                      borderColor: pColor.borderHex,
+                      color: pColor.textHex,
                     }}
-                    className="flex items-center justify-between gap-4 rounded-2xl border-2 p-5 shadow-lg transition"
+                    className="rounded-3xl border-2 p-4 flex items-center gap-3 shadow-lg"
                   >
-                    <div className="flex min-w-0 items-center gap-4">
-                      <span
-                        style={{ backgroundColor: color.badgeBgHex }}
-                        className="flex h-16 w-16 items-center justify-center rounded-2xl text-4xl"
-                      >
-                        {avatarSymbol}
-                      </span>
-                      <span className="truncate text-2xl font-black md:text-3xl">
-                        {player.nickname}
-                      </span>
-                    </div>
-
                     <span
-                      style={{ color: color.scoreHex }}
-                      className="shrink-0 font-mono text-3xl font-black md:text-4xl"
+                      style={{ backgroundColor: pColor.badgeBgHex }}
+                      className="w-11 h-11 rounded-2xl flex items-center justify-center text-2xl shrink-0"
                     >
-                      {getPlayerScore(player.id)} pts
+                      {avatarDisplay}
+                    </span>
+                    <span className="font-black text-base truncate">
+                      {player.nickname}
                     </span>
                   </div>
                 );
@@ -426,12 +217,36 @@ export default function TvSessionPage() {
             </div>
           )}
         </section>
+
+        <section className="lg:col-span-5 bg-white/5 border border-white/10 rounded-3xl p-7 flex flex-col items-center justify-center text-center gap-4">
+          {showQr ? (
+            <>
+              <div className="w-20 h-20 rounded-3xl bg-white/10 border border-white/15 flex items-center justify-center">
+                <QrCode className="w-11 h-11 text-amber-400" />
+              </div>
+              <div className="text-xl font-bold">Rejoindre la partie</div>
+              <p className="text-sm text-neutral-400 max-w-xs">
+                Ouvre la manette sur ton téléphone et entre le code{" "}
+                <span className="font-mono font-bold text-amber-300">
+                  {sessionCode}
+                </span>
+              </p>
+            </>
+          ) : (
+            <>
+              <Play className="w-12 h-12 text-amber-400" />
+              <div className="text-xl font-bold">Prêt à démarrer</div>
+              <p className="text-sm text-neutral-400">
+                L&apos;animateur contrôle le lancement de la partie.
+              </p>
+            </>
+          )}
+        </section>
       </main>
 
-      {/* Footer */}
-      <footer className="relative z-10 flex items-center justify-between border-t border-white/15 pt-4 text-base font-semibold text-neutral-300 md:text-lg">
-        <span>TVOS Party Platform</span>
-        <span>Salle {activeCode || requestedCode || "—"}</span>
+      <footer className="text-xs text-neutral-500 flex items-center justify-between pt-4 border-t border-white/10">
+        <span>Plateforme de jeux</span>
+        <span>Salle {sessionCode || "----"}</span>
       </footer>
     </div>
   );
