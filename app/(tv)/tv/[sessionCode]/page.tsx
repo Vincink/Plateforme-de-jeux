@@ -1,62 +1,60 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { AnimatePresence, motion } from "framer-motion";
-import {
-  ArrowLeft,
-  Pause,
-  Play,
-  QrCode,
-  Sparkles,
-  Trophy,
-  Users,
-  Volume2,
-  Zap,
-} from "lucide-react";
-import { GlassPanel } from "@/components/tvos/GlassPanel";
-import { LiveLeaderboard } from "@/components/shared/LiveLeaderboard";
-import { QRCodeDisplay } from "@/components/shared/QRCodeDisplay";
-import { INITIAL_GAMES } from "@/features/games/catalog";
+import { useParams } from "next/navigation";
+import { QrCode, Users, Tv, Sparkles } from "lucide-react";
 import { clientEnv } from "@/lib/env";
+import { INITIAL_GAMES } from "@/features/games/catalog";
 import type {
+  Game,
+  GameSession,
   PlayerScore,
-  PlayerSession,
+  SessionPlayer,
   SessionStatus,
 } from "@/types/game.types";
 
 const AVATAR_EMOJIS: Record<string, string> = {
+  gamepad: "🎮",
   fox: "🦊",
-  rocket: "🚀",
+  cat: "🐱",
+  dog: "🐶",
+  robot: "🤖",
+  alien: "👽",
   crown: "👑",
-  ghost: "👻",
-  alien: "👾",
-  unicorn: "🦄",
   flame: "🔥",
   star: "⭐",
+  rocket: "🚀",
 };
 
 export default function TvSessionPage() {
   const params = useParams<{ sessionCode: string }>();
-  const router = useRouter();
+  const sessionCode = (params?.sessionCode ?? "").toUpperCase();
 
-  const sessionCode = (params.sessionCode ?? "DEMO01").toUpperCase();
+  const [session, setSession] = useState<GameSession | null>(null);
+  const [players, setPlayers] = useState<SessionPlayer[]>([
+    {
+      id: "demo-1",
+      session_id: "demo",
+      nickname: "Vincent",
+      avatar: "🎮",
+      avatarId: "gamepad",
+      is_host: true,
+      is_connected: true,
+    },
+  ]);
+  const [scores, setScores] = useState<PlayerScore[]>([
+    {
+      id: "score-1",
+      session_id: "demo",
+      player_id: "demo-1",
+      score: 0,
+    },
+  ]);
 
-  // États locaux de démonstration visuelle avant branchement Realtime (Étape 6)
-  const [status, setStatus] = useState<SessionStatus>("lobby");
-  const [showQr, setShowQr] = useState<boolean>(true);
-  const [players] = useState<PlayerSession[]>([]);
-  const [scores] = useState<PlayerScore[]>([]);
-
-  const currentGame = useMemo(() => {
-    if (sessionCode.includes("BLIND")) {
-      return INITIAL_GAMES[1] ?? INITIAL_GAMES[0];
-    }
-    if (sessionCode.includes("SPEED")) {
-      return INITIAL_GAMES[2] ?? INITIAL_GAMES[0];
-    }
-    return INITIAL_GAMES[0];
-  }, [sessionCode]);
+  const currentGame: Game | undefined = useMemo(() => {
+    const slug = (session?.state?.gameSlug as string | undefined) ?? "quiz";
+    return INITIAL_GAMES.find((g) => g.slug === slug) ?? INITIAL_GAMES[0];
+  }, [session]);
 
   const joinUrl = `${clientEnv.appUrl}/play/${sessionCode}`;
 
@@ -69,15 +67,30 @@ export default function TvSessionPage() {
       "round_result",
       "finished",
     ];
-    const currentIdx = order.indexOf(status);
-    const nextStatus = order[(currentIdx + 1) % order.length] ?? "lobby";
-    setStatus(nextStatus);
+    const currentStatus = session?.status ?? "lobby";
+    const nextStatus = order[(order.indexOf(currentStatus) + 1) % order.length];
+    setSession((prev) => ({
+      id: prev?.id ?? "demo-session",
+      game_id: prev?.game_id ?? currentGame?.id ?? "quiz",
+      code: sessionCode || "DEMO",
+      status: nextStatus,
+      current_round: prev?.current_round ?? 1,
+      state: prev?.state ?? { gameSlug: currentGame?.slug ?? "quiz" },
+    }));
   };
 
+  const getPlayerScore = (playerId: string): number => {
+    return scores.find((s) => s.player_id === playerId)?.score ?? 0;
+  };
+
+  const status = session?.status ?? "lobby";
+  const round = session?.current_round ?? 1;
+
   return (
-    <main className="relative min-h-screen overflow-hidden bg-tvos-bg text-white">
+    <div className="relative min-h-screen overflow-hidden bg-neutral-950 text-white p-8 md:p-14 flex flex-col justify-between">
+      {/* Ambient background */}
       <div
-        className="pointer-events-none fixed inset-0 transition-all duration-700"
+        className="pointer-events-none absolute inset-0"
         style={{
           background: currentGame
             ? `radial-gradient(circle at 80% 20%, ${currentGame.accentColor}2E 0%, transparent 55%), radial-gradient(circle at 15% 85%, rgba(10, 132, 255, 0.14) 0%, transparent 55%)`
@@ -85,267 +98,129 @@ export default function TvSessionPage() {
         }}
       />
 
-      <div className="relative z-10 mx-auto flex min-h-screen max-w-[1680px] flex-col justify-between px-8 py-8 lg:px-14 lg:py-10">
-        {/* Barre supérieure TV */}
-        <header className="flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-4">
-            <button
-              type="button"
-              onClick={() => router.push("/tv")}
-              className="tvos-glass flex h-12 w-12 items-center justify-center rounded-2xl text-white/85 transition hover:bg-white/15 hover:text-white"
-              aria-label="Retour au catalogue"
-            >
-              <ArrowLeft className="h-5 w-5" />
-            </button>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.22em] text-white/55">
-                {currentGame?.title ?? "Partie en cours"}
-              </p>
-              <div className="mt-0.5 flex items-center gap-3">
-                <span className="font-mono text-xl font-black tracking-[0.2em] text-tvos-accent">
-                  {sessionCode}
-                </span>
-                <span className="rounded-full bg-white/10 px-3 py-0.5 text-xs font-semibold uppercase tracking-wider text-white/80">
-                  {status === "lobby" && "Salle d'attente"}
-                  {status === "starting" && "Lancement"}
-                  {status === "playing" && "En direct"}
-                  {status === "paused" && "En pause"}
-                  {status === "round_result" && "Résultats de la manche"}
-                  {status === "finished" && "Partie terminée"}
-                </span>
-              </div>
+      {/* Top TV Bar */}
+      <header className="relative z-10 flex flex-wrap items-center justify-between gap-6 border-b border-white/10 pb-6">
+        <div className="flex items-center gap-4">
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 border border-white/15">
+            <Tv className="w-6 h-6 text-amber-400" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-neutral-400">
+              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              <span>Écran Principal TV</span>
+            </div>
+            <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
+              {currentGame?.title ?? "Plateforme de Jeux"}
+            </h1>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <button
+            type="button"
+            onClick={cycleDemoStatus}
+            className="px-4 py-2 rounded-full text-xs font-semibold uppercase tracking-wider bg-white/10 hover:bg-white/15 border border-white/15 transition"
+          >
+            État : {status} • Manche {round}
+          </button>
+
+          <div className="bg-white/5 border border-white/15 rounded-2xl px-5 py-2.5 text-right">
+            <div className="text-[11px] uppercase tracking-widest text-neutral-400">
+              Code Salle
+            </div>
+            <div className="font-mono text-2xl md:text-3xl font-extrabold tracking-widest text-amber-400">
+              {sessionCode || "----"}
             </div>
           </div>
+        </div>
+      </header>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={() => setShowQr((prev) => !prev)}
-              className="tvos-glass inline-flex items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold text-white/85 hover:bg-white/15"
-            >
-              <QrCode className="h-4 w-4 text-tvos-accent" />
-              {showQr ? "Masquer QR" : "Afficher QR"}
-            </button>
-            <button
-              type="button"
-              onClick={cycleDemoStatus}
-              className="rounded-full bg-white/15 px-4 py-2 text-xs font-semibold text-white hover:bg-white/25"
-            >
-              Aperçu état suivant
-            </button>
+      {/* Main TV Stage */}
+      <main className="relative z-10 my-auto py-10 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+        {/* Left: Join / QR / Status */}
+        <section className="lg:col-span-5 bg-white/5 border border-white/10 rounded-3xl p-8 space-y-6">
+          <div className="flex items-center gap-3">
+            <QrCode className="w-6 h-6 text-sky-400" />
+            <h2 className="text-xl font-bold">Rejoindre avec son téléphone</h2>
           </div>
-        </header>
 
-        {/* Zone principale selon l'état */}
-        <section className="my-8 flex flex-1 items-center">
-          <AnimatePresence mode="wait">
-            {status === "lobby" && (
-              <motion.div
-                key="lobby"
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -16 }}
-                className="grid w-full gap-8 lg:grid-cols-12"
-              >
-                <div className="flex flex-col justify-between lg:col-span-7">
-                  <GlassPanel className="flex-1 p-8">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <Users className="h-6 w-6 text-tvos-accent" />
-                        <h1 className="text-3xl font-bold tracking-tight">
-                          Participants connectés
-                        </h1>
-                      </div>
-                      <span className="rounded-full bg-white/10 px-4 py-1.5 text-sm font-bold">
-                        {players.length}
+          <p className="text-sm text-neutral-300 leading-relaxed">
+            Ouvre l&apos;appareil photo ou le navigateur sur ton téléphone et
+            entre le code{" "}
+            <span className="font-mono font-bold text-amber-400">
+              {sessionCode || "----"}
+            </span>
+            .
+          </p>
+
+          <div className="rounded-2xl bg-black/40 border border-white/10 p-4 font-mono text-xs text-neutral-300 break-all">
+            {joinUrl}
+          </div>
+
+          {currentGame?.tagline && (
+            <p className="text-sm text-neutral-400 border-t border-white/10 pt-4">
+              {currentGame.tagline}
+            </p>
+          )}
+        </section>
+
+        {/* Right: Players & Leaderboard */}
+        <section className="lg:col-span-7 bg-white/5 border border-white/10 rounded-3xl p-8 space-y-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Users className="w-6 h-6 text-emerald-400" />
+              <h2 className="text-xl font-bold">
+                Joueurs ({players.length})
+              </h2>
+            </div>
+            <span className="text-xs uppercase tracking-wider text-neutral-400">
+              Classement en direct
+            </span>
+          </div>
+
+          {players.length === 0 ? (
+            <div className="py-12 text-center text-neutral-400">
+              En attente des joueurs...
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {players.map((player) => {
+                const avatarKey = player.avatarId ?? "";
+                const avatarSymbol =
+                  (avatarKey ? AVATAR_EMOJIS[avatarKey] : undefined) ??
+                  player.avatar ??
+                  "🎮";
+
+                return (
+                  <div
+                    key={player.id}
+                    className="flex items-center justify-between gap-4 rounded-2xl bg-black/35 border border-white/10 p-4"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/10 text-2xl">
+                        {avatarSymbol}
+                      </span>
+                      <span className="truncate text-base font-bold">
+                        {player.nickname}
                       </span>
                     </div>
 
-                    {players.length === 0 ? (
-                      <div className="mt-10 flex flex-col items-center justify-center rounded-2xl border border-dashed border-white/15 py-16 text-center">
-                        <Sparkles className="mb-3 h-9 w-9 text-tvos-accent" />
-                        <p className="text-lg font-semibold text-white/90">
-                          En attente des joueurs...
-                        </p>
-                        <p className="mt-1 max-w-md text-sm text-white/60">
-                          Scannez le QR code avec votre smartphone pour choisir
-                          votre pseudo et votre avatar sans installer
-                          d&apos;application.
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3">
-                        {players.map((player) => (
-                          <div
-                            key={player.id}
-                            className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.05] p-3.5"
-                          >
-                            <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/10 text-2xl">
-                              {AVATAR_EMOJIS[player.avatarId] ?? "🎮"}
-                            </span>
-                            <span className="truncate text-base font-bold">
-                              {player.nickname}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </GlassPanel>
-                </div>
-
-                {showQr ? (
-                  <div className="flex items-center justify-center lg:col-span-5">
-                    <QRCodeDisplay sessionCode={sessionCode} joinUrl={joinUrl} />
+                    <span className="font-mono text-lg font-bold text-amber-400 shrink-0">
+                      {getPlayerScore(player.id)} pts
+                    </span>
                   </div>
-                ) : null}
-              </motion.div>
-            )}
-
-            {status === "starting" && (
-              <motion.div
-                key="starting"
-                initial={{ opacity: 0, scale: 0.92 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 1.05 }}
-                className="mx-auto w-full max-w-3xl text-center"
-              >
-                <GlassPanel className="p-14">
-                  <Zap className="mx-auto mb-4 h-14 w-14 text-tvos-accent" />
-                  <p className="text-sm font-semibold uppercase tracking-[0.25em] text-white/60">
-                    Préparez vos téléphones
-                  </p>
-                  <h1 className="mt-3 text-5xl font-black tracking-tight sm:text-6xl">
-                    La partie démarre !
-                  </h1>
-                  <p className="mt-4 text-lg text-white/75">
-                    {currentGame?.title} • {currentGame?.tagline}
-                  </p>
-                </GlassPanel>
-              </motion.div>
-            )}
-
-            {status === "playing" && (
-              <motion.div
-                key="playing"
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -16 }}
-                className="grid w-full gap-8 lg:grid-cols-12"
-              >
-                <GlassPanel className="flex flex-col justify-between p-8 lg:col-span-8 lg:p-10">
-                  <div>
-                    <div className="inline-flex items-center gap-2 rounded-full bg-tvos-accent/20 px-4 py-1.5 text-xs font-bold uppercase tracking-widest text-tvos-accent">
-                      {currentGame?.slug === "blind-test" ? (
-                        <>
-                          <Volume2 className="h-4 w-4" />
-                          Extrait audio en cours
-                        </>
-                      ) : (
-                        <>
-                          <Zap className="h-4 w-4" />
-                          Manche active
-                        </>
-                      )}
-                    </div>
-
-                    <h1 className="mt-6 text-3xl font-extrabold leading-tight tracking-tight sm:text-5xl">
-                      {currentGame?.slug === "blind-test"
-                        ? "Écoutez et appuyez sur votre buzzer !"
-                        : "Les questions et moteurs de jeu seront activés à l'Étape 7."}
-                    </h1>
-                    <p className="mt-4 text-base text-white/70">
-                      Les réponses et buzzers envoyés depuis les smartphones
-                      apparaîtront ici en temps réel dès la connexion Supabase
-                      Realtime.
-                    </p>
-                  </div>
-
-                  <div className="mt-10 flex items-center justify-between border-t border-white/10 pt-5 text-sm text-white/60">
-                    <span>Code : {sessionCode}</span>
-                    <span>Synchronisation temps réel (Étape 6)</span>
-                  </div>
-                </GlassPanel>
-
-                <div className="lg:col-span-4">
-                  <LiveLeaderboard scores={scores} title="Scores en direct" />
-                </div>
-              </motion.div>
-            )}
-
-            {status === "paused" && (
-              <motion.div
-                key="paused"
-                initial={{ opacity: 0, scale: 0.96 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.96 }}
-                className="mx-auto w-full max-w-2xl text-center"
-              >
-                <GlassPanel className="p-14">
-                  <Pause className="mx-auto mb-4 h-14 w-14 text-amber-400" />
-                  <h1 className="text-4xl font-black tracking-tight">
-                    Partie en pause
-                  </h1>
-                  <p className="mt-3 text-base text-white/70">
-                    L&apos;animateur a temporairement mis la partie en pause.
-                  </p>
-                </GlassPanel>
-              </motion.div>
-            )}
-
-            {status === "round_result" && (
-              <motion.div
-                key="round_result"
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -16 }}
-                className="mx-auto w-full max-w-4xl"
-              >
-                <LiveLeaderboard
-                  scores={scores}
-                  title="Classement après la manche"
-                />
-              </motion.div>
-            )}
-
-            {status === "finished" && (
-              <motion.div
-                key="finished"
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -16 }}
-                className="mx-auto w-full max-w-4xl space-y-6"
-              >
-                <div className="text-center">
-                  <Trophy className="mx-auto mb-3 h-12 w-12 text-amber-400" />
-                  <h1 className="text-4xl font-black tracking-tight sm:text-5xl">
-                    Podium Final
-                  </h1>
-                </div>
-                <LiveLeaderboard
-                  scores={scores}
-                  title="Classement général"
-                  isFinalPodium
-                />
-                <div className="flex justify-center gap-4 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => router.push("/tv")}
-                    className="inline-flex items-center gap-2 rounded-full bg-white px-7 py-3 text-sm font-bold text-black"
-                  >
-                    <Play className="h-4 w-4 fill-current" />
-                    Retour au catalogue
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
+                );
+              })}
+            </div>
+          )}
         </section>
+      </main>
 
-        <footer className="flex items-center justify-between text-xs text-white/50">
-          <span>Interface TV Apple tvOS</span>
-          <span>Rejoindre sur : {joinUrl}</span>
-        </footer>
-      </div>
-    </main>
+      {/* Footer */}
+      <footer className="relative z-10 flex items-center justify-between text-xs text-neutral-500 border-t border-white/10 pt-4">
+        <span>TVOS Party Platform</span>
+        <span>Salle {sessionCode || "—"}</span>
+      </footer>
+    </div>
   );
 }
