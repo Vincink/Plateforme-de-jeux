@@ -141,6 +141,7 @@ export default function TvQuizPage() {
     if (!supabase || !sessionCode) return;
 
     let isMounted = true;
+    let activeSessionId: string | null = null;
     let playersChannel: ReturnType<typeof supabase.channel> | null = null;
 
     const loadGameTitle = async (gameId: string | null | undefined) => {
@@ -166,13 +167,39 @@ export default function TvQuizPage() {
       setPlayers((data as ExtendedPlayer[] | null) ?? []);
     };
 
+    const refreshSessionRow = async () => {
+      const { data } = await supabase
+        .from("game_sessions")
+        .select("*")
+        .eq("code", sessionCode)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<ExtendedSession>();
+
+      if (!isMounted || !data) return;
+      setSession(data);
+      if (data.id) {
+        activeSessionId = data.id;
+        void loadPlayers(data.id);
+      }
+      if (data.game_id) {
+        void loadGameTitle(data.game_id);
+      }
+    };
+
     const bindSession = (targetSession: ExtendedSession) => {
+      void loadPlayers(targetSession.id);
+      void loadGameTitle(targetSession.game_id);
+
+      if (activeSessionId === targetSession.id && playersChannel) {
+        return;
+      }
+
+      activeSessionId = targetSession.id;
+
       if (playersChannel) {
         void supabase.removeChannel(playersChannel);
       }
-
-      void loadPlayers(targetSession.id);
-      void loadGameTitle(targetSession.game_id);
 
       playersChannel = supabase
         .channel(`tv-quiz-players-${targetSession.id}`)
@@ -229,8 +256,17 @@ export default function TvQuizPage() {
       )
       .subscribe();
 
+    const syncInterval = window.setInterval(() => {
+      if (!isMounted) return;
+      void refreshSessionRow();
+      if (activeSessionId) {
+        void loadPlayers(activeSessionId);
+      }
+    }, 1500);
+
     return () => {
       isMounted = false;
+      window.clearInterval(syncInterval);
       void supabase.removeChannel(sessionChannel);
       if (playersChannel) {
         void supabase.removeChannel(playersChannel);
