@@ -30,6 +30,13 @@ interface PlayerIdentity {
   avatar: string;
 }
 
+type QuizContentRow = GameContent & {
+  prompt?: string | null;
+  question?: string | null;
+  points?: number | null;
+  round_type?: string | null;
+};
+
 export default function PlayerControllerPage() {
   const params = useParams<{ sessionCode: string }>();
   const sessionCode = (params?.sessionCode ?? "").toUpperCase();
@@ -40,7 +47,9 @@ export default function PlayerControllerPage() {
   const [session, setSession] = useState<GameSession | null>(null);
   const [players, setPlayers] = useState<SessionPlayer[]>([]);
   const [scores, setScores] = useState<PlayerScore[]>([]);
-  const [currentContent, setCurrentContent] = useState<GameContent | null>(null);
+  const [currentContent, setCurrentContent] = useState<QuizContentRow | null>(
+    null
+  );
   const [answerInput, setAnswerInput] = useState<string>("");
   const [submittedRound, setSubmittedRound] = useState<number | null>(null);
   const [isConnected, setIsConnected] = useState<boolean>(true);
@@ -149,7 +158,7 @@ export default function PlayerControllerPage() {
         .order("sort_order", { ascending: true });
 
       if (!isMounted) return;
-      const items = Array.isArray(data) ? (data as GameContent[]) : [];
+      const items = Array.isArray(data) ? (data as QuizContentRow[]) : [];
       const idx = Math.max(0, roundNumber - 1);
       setCurrentContent(items[idx] ?? null);
     };
@@ -267,6 +276,30 @@ export default function PlayerControllerPage() {
       }
     };
   }, [supabase, sessionCode]);
+
+  const roundStatus = session?.status ?? "lobby";
+  const currentRound = session?.current_round ?? 1;
+  const alreadySubmittedThisRound = submittedRound === currentRound;
+  const isPlaying = roundStatus === "playing";
+  const questionText =
+    currentContent?.prompt ?? currentContent?.question ?? null;
+  const parsedOptions = useMemo<string[]>(() => {
+    const raw = currentContent?.options as unknown;
+    if (Array.isArray(raw)) {
+      return raw.map((item) => String(item));
+    }
+    if (typeof raw === "string") {
+      try {
+        const decoded = JSON.parse(raw) as unknown;
+        if (Array.isArray(decoded)) {
+          return decoded.map((item) => String(item));
+        }
+      } catch {
+        // Ignore invalid JSON string
+      }
+    }
+    return [];
+  }, [currentContent?.options]);
 
   const myScore = useMemo(() => {
     if (!identity) return 0;
@@ -467,10 +500,6 @@ export default function PlayerControllerPage() {
     }
   };
 
-  const roundStatus = session?.status ?? "lobby";
-  const currentRound = session?.current_round ?? 1;
-  const alreadySubmittedThisRound = submittedRound === currentRound;
-
   return (
     <div className="min-h-screen bg-neutral-950 text-white flex flex-col justify-between p-5 select-none">
       <div className="max-w-md w-full mx-auto space-y-6">
@@ -569,51 +598,68 @@ export default function PlayerControllerPage() {
 
             {/* Active Question / Action Zone */}
             <div className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4">
-              {currentContent?.question && (
-                <p className="text-base font-semibold leading-snug">
-                  {currentContent.question}
-                </p>
-              )}
-
-              {currentContent?.options && currentContent.options.length > 0 ? (
-                <div className="grid grid-cols-1 gap-3">
-                  {currentContent.options.map((opt) => (
-                    <button
-                      key={opt}
-                      type="button"
-                      disabled={alreadySubmittedThisRound}
-                      onClick={() => void handleSubmitAnswer(undefined, opt)}
-                      className="w-full text-left py-3.5 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 font-medium transition"
-                    >
-                      {opt}
-                    </button>
-                  ))}
+              {!isPlaying ? (
+                <div className="py-4 text-center space-y-1">
+                  <p className="text-base font-bold text-amber-300">
+                    {roundStatus === "paused"
+                      ? "Partie en pause"
+                      : roundStatus === "finished"
+                      ? "Partie terminée"
+                      : "En attente du lancement par l'animateur..."}
+                  </p>
+                  <p className="text-xs text-neutral-400">
+                    Manche {currentRound}
+                  </p>
                 </div>
               ) : (
-                <form onSubmit={handleSubmitAnswer} className="space-y-3">
-                  <input
-                    type="text"
-                    value={answerInput}
-                    onChange={(e) => setAnswerInput(e.target.value)}
-                    disabled={alreadySubmittedThisRound}
-                    placeholder="Entre ta réponse..."
-                    className="w-full rounded-2xl bg-black/40 border border-white/15 px-4 py-3 text-white placeholder:text-neutral-500 focus:outline-none focus:border-amber-400 disabled:opacity-40"
-                  />
-                  <button
-                    type="submit"
-                    disabled={
-                      alreadySubmittedThisRound || !answerInput.trim()
-                    }
-                    className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-black font-bold transition"
-                  >
-                    <Send className="w-4 h-4" />
-                    <span>
-                      {alreadySubmittedThisRound
-                        ? "Réponse envoyée"
-                        : "Envoyer"}
-                    </span>
-                  </button>
-                </form>
+                <>
+                  {questionText && (
+                    <p className="text-base font-semibold leading-snug">
+                      {questionText}
+                    </p>
+                  )}
+
+                  {parsedOptions.length > 0 ? (
+                    <div className="grid grid-cols-1 gap-3">
+                      {parsedOptions.map((opt) => (
+                        <button
+                          key={opt}
+                          type="button"
+                          disabled={alreadySubmittedThisRound}
+                          onClick={() => void handleSubmitAnswer(undefined, opt)}
+                          className="w-full text-left py-3.5 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 font-medium transition"
+                        >
+                          {opt}
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <form onSubmit={handleSubmitAnswer} className="space-y-3">
+                      <input
+                        type="text"
+                        value={answerInput}
+                        onChange={(e) => setAnswerInput(e.target.value)}
+                        disabled={alreadySubmittedThisRound}
+                        placeholder="Entre ta réponse..."
+                        className="w-full rounded-2xl bg-black/40 border border-white/15 px-4 py-3 text-white placeholder:text-neutral-500 focus:outline-none focus:border-amber-400 disabled:opacity-40"
+                      />
+                      <button
+                        type="submit"
+                        disabled={
+                          alreadySubmittedThisRound || !answerInput.trim()
+                        }
+                        className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-black font-bold transition"
+                      >
+                        <Send className="w-4 h-4" />
+                        <span>
+                          {alreadySubmittedThisRound
+                            ? "Réponse envoyée"
+                            : "Envoyer"}
+                        </span>
+                      </button>
+                    </form>
+                  )}
+                </>
               )}
 
               {statusMessage && (
