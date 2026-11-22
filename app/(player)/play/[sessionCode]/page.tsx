@@ -722,33 +722,6 @@ export default function PlayerControllerPage() {
                 </p>
               )}
             </div>
-
-            {/* Connected Players Preview */}
-            {players.length > 0 && (
-              <div className="bg-white/5 border border-white/10 rounded-3xl p-4">
-                <div className="text-xs uppercase tracking-wider text-neutral-400 mb-2">
-                  Joueurs ({players.length})
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {players.map((p) => {
-                    const pColor = getUniquePlayerColor(p.id, players);
-                    return (
-                      <span
-                        key={p.id}
-                        style={{
-                          backgroundColor: pColor.bgHex,
-                          borderColor: pColor.borderHex,
-                          color: pColor.textHex,
-                        }}
-                        className="text-xs font-bold border px-3 py-1.5 rounded-full"
-                      >
-                        {p.avatar ?? "🎮"} {p.nickname}
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
           </main>
         )}
       </div>
