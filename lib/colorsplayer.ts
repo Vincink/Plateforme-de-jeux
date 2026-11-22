@@ -193,6 +193,15 @@ export const PLAYER_COLORS: readonly PlayerColorTheme[] = [
   },
 ] as const;
 
+function hashString(input: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
 export function getPlayerColorBySlot(slotIndex: number): PlayerColorTheme {
   const count = PLAYER_COLORS.length;
   const safeIndex = ((slotIndex % count) + count) % count;
@@ -201,26 +210,23 @@ export function getPlayerColorBySlot(slotIndex: number): PlayerColorTheme {
 
 export function getUniquePlayerColor(
   playerId?: string | null,
-  roster: ReadonlyArray<{ id: string }> = []
+  _roster: ReadonlyArray<{ id: string }> = []
 ): PlayerColorTheme {
-  if (!playerId) return FALLBACK_COLOR;
-
-  const sortedIds = [...roster]
-    .map((p) => p.id)
-    .filter((id, idx, arr) => Boolean(id) && arr.indexOf(id) === idx)
-    .sort((a, b) => a.localeCompare(b));
-
-  const slotIndex = sortedIds.indexOf(playerId);
-  if (slotIndex >= 0) {
-    return getPlayerColorBySlot(slotIndex);
+  void _roster;
+  if (!playerId || playerId.trim().length === 0) {
+    return FALLBACK_COLOR;
   }
 
-  return getPlayerColorBySlot(sortedIds.length);
+  const index = hashString(playerId.trim()) % PLAYER_COLORS.length;
+  return PLAYER_COLORS.at(index) ?? FALLBACK_COLOR;
 }
 
 export function getPlayerColor(
   playerId?: string | null,
   fallbackIndex = 0
 ): PlayerColorTheme {
+  if (playerId && playerId.trim().length > 0) {
+    return getUniquePlayerColor(playerId);
+  }
   return getPlayerColorBySlot(fallbackIndex);
 }
