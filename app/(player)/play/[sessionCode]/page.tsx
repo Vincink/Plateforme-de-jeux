@@ -37,6 +37,33 @@ type QuizContentRow = GameContent & {
   round_type?: string | null;
 };
 
+const CHOICE_STYLES = [
+  {
+    letter: "A",
+    bgHex: "#ef4444",
+    borderHex: "#fca5a5",
+    textHex: "#ffffff",
+  },
+  {
+    letter: "B",
+    bgHex: "#2563eb",
+    borderHex: "#93c5fd",
+    textHex: "#ffffff",
+  },
+  {
+    letter: "C",
+    bgHex: "#eab308",
+    borderHex: "#fef08a",
+    textHex: "#111827",
+  },
+  {
+    letter: "D",
+    bgHex: "#16a34a",
+    borderHex: "#86efac",
+    textHex: "#ffffff",
+  },
+] as const;
+
 export default function PlayerControllerPage() {
   const params = useParams<{ sessionCode: string }>();
   const sessionCode = (params?.sessionCode ?? "").toUpperCase();
@@ -52,6 +79,9 @@ export default function PlayerControllerPage() {
   );
   const [answerInput, setAnswerInput] = useState<string>("");
   const [submittedRound, setSubmittedRound] = useState<number | null>(null);
+  const [selectedChoiceLetter, setSelectedChoiceLetter] = useState<
+    string | null
+  >(null);
   const [isConnected, setIsConnected] = useState<boolean>(true);
   const [isJoining, setIsJoining] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>("");
@@ -281,8 +311,14 @@ export default function PlayerControllerPage() {
   const currentRound = session?.current_round ?? 1;
   const alreadySubmittedThisRound = submittedRound === currentRound;
   const isPlaying = roundStatus === "playing";
-  const questionText =
-    currentContent?.prompt ?? currentContent?.question ?? null;
+
+  useEffect(() => {
+    if (submittedRound !== null && submittedRound !== currentRound) {
+      setSelectedChoiceLetter(null);
+      setStatusMessage("");
+    }
+  }, [currentRound, submittedRound]);
+
   const parsedOptions = useMemo<string[]>(() => {
     const raw = currentContent?.options as unknown;
     if (Array.isArray(raw)) {
@@ -300,6 +336,13 @@ export default function PlayerControllerPage() {
     }
     return [];
   }, [currentContent?.options]);
+
+  const qcmChoices = useMemo(() => {
+    return CHOICE_STYLES.map((style, idx) => ({
+      ...style,
+      optionValue: parsedOptions[idx] ?? style.letter,
+    }));
+  }, [parsedOptions]);
 
   const myScore = useMemo(() => {
     if (!identity) return 0;
@@ -468,12 +511,12 @@ export default function PlayerControllerPage() {
 
   const handleSubmitAnswer = async (
     e?: React.FormEvent,
-    directOption?: string
+    directChoice?: { letter: string; optionValue: string }
   ) => {
     if (e) e.preventDefault();
     if (!identity) return;
 
-    const valueToSend = (directOption ?? answerInput).trim();
+    const valueToSend = (directChoice?.optionValue ?? answerInput).trim();
     if (!valueToSend) return;
 
     const round = session?.current_round ?? 1;
@@ -484,7 +527,10 @@ export default function PlayerControllerPage() {
         player_id: identity.playerId,
         round_number: round,
         action_type: "answer",
-        payload: { answer: valueToSend },
+        payload: {
+          answer: valueToSend,
+          choice_letter: directChoice?.letter ?? null,
+        },
       });
 
       if (error) {
@@ -494,8 +540,13 @@ export default function PlayerControllerPage() {
     }
 
     setSubmittedRound(round);
-    setStatusMessage(`Réponse envoyée : "${valueToSend}"`);
-    if (!directOption) {
+    setSelectedChoiceLetter(directChoice?.letter ?? null);
+    setStatusMessage(
+      directChoice
+        ? `Choix ${directChoice.letter} envoyé !`
+        : "Réponse envoyée !"
+    );
+    if (!directChoice) {
       setAnswerInput("");
     }
   };
@@ -597,73 +648,76 @@ export default function PlayerControllerPage() {
             </div>
 
             {/* Active Question / Action Zone */}
-            <div className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4">
+            <div className="bg-white/5 border border-white/10 rounded-3xl p-5 space-y-4">
               {!isPlaying ? (
-                <div className="py-4 text-center space-y-1">
+                <div className="py-6 text-center space-y-1">
                   <p className="text-base font-bold text-amber-300">
                     {roundStatus === "paused"
                       ? "Partie en pause"
                       : roundStatus === "finished"
                       ? "Partie terminée"
-                      : "En attente du lancement par l'animateur..."}
+                      : "Regarde la télé pour la suite..."}
                   </p>
                   <p className="text-xs text-neutral-400">
                     Manche {currentRound}
                   </p>
                 </div>
-              ) : (
-                <>
-                  {questionText && (
-                    <p className="text-base font-semibold leading-snug">
-                      {questionText}
-                    </p>
-                  )}
-
-                  {parsedOptions.length > 0 ? (
-                    <div className="grid grid-cols-1 gap-3">
-                      {parsedOptions.map((opt) => (
-                        <button
-                          key={opt}
-                          type="button"
-                          disabled={alreadySubmittedThisRound}
-                          onClick={() => void handleSubmitAnswer(undefined, opt)}
-                          className="w-full text-left py-3.5 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 font-medium transition"
-                        >
-                          {opt}
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <form onSubmit={handleSubmitAnswer} className="space-y-3">
-                      <input
-                        type="text"
-                        value={answerInput}
-                        onChange={(e) => setAnswerInput(e.target.value)}
-                        disabled={alreadySubmittedThisRound}
-                        placeholder="Entre ta réponse..."
-                        className="w-full rounded-2xl bg-black/40 border border-white/15 px-4 py-3 text-white placeholder:text-neutral-500 focus:outline-none focus:border-amber-400 disabled:opacity-40"
-                      />
+              ) : parsedOptions.length > 0 ? (
+                <div className="grid grid-cols-2 gap-3.5">
+                  {qcmChoices.map((choice) => {
+                    const isChosen = selectedChoiceLetter === choice.letter;
+                    return (
                       <button
-                        type="submit"
-                        disabled={
-                          alreadySubmittedThisRound || !answerInput.trim()
+                        key={choice.letter}
+                        type="button"
+                        disabled={alreadySubmittedThisRound}
+                        onClick={() =>
+                          void handleSubmitAnswer(undefined, {
+                            letter: choice.letter,
+                            optionValue: choice.optionValue,
+                          })
                         }
-                        className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-black font-bold transition"
+                        style={{
+                          backgroundColor: choice.bgHex,
+                          borderColor: isChosen ? "#ffffff" : choice.borderHex,
+                          color: choice.textHex,
+                        }}
+                        className={`h-32 sm:h-36 rounded-3xl border-4 flex items-center justify-center text-5xl font-black tracking-tight shadow-lg active:scale-95 transition ${
+                          alreadySubmittedThisRound && !isChosen
+                            ? "opacity-35"
+                            : "opacity-100"
+                        }`}
                       >
-                        <Send className="w-4 h-4" />
-                        <span>
-                          {alreadySubmittedThisRound
-                            ? "Réponse envoyée"
-                            : "Envoyer"}
-                        </span>
+                        {choice.letter}
                       </button>
-                    </form>
-                  )}
-                </>
+                    );
+                  })}
+                </div>
+              ) : (
+                <form onSubmit={handleSubmitAnswer} className="space-y-3">
+                  <input
+                    type="text"
+                    value={answerInput}
+                    onChange={(e) => setAnswerInput(e.target.value)}
+                    disabled={alreadySubmittedThisRound}
+                    placeholder="Entre ta réponse..."
+                    className="w-full rounded-2xl bg-black/40 border border-white/15 px-4 py-3 text-white placeholder:text-neutral-500 focus:outline-none focus:border-amber-400 disabled:opacity-40"
+                  />
+                  <button
+                    type="submit"
+                    disabled={alreadySubmittedThisRound || !answerInput.trim()}
+                    className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-black font-bold transition"
+                  >
+                    <Send className="w-4 h-4" />
+                    <span>
+                      {alreadySubmittedThisRound ? "Réponse envoyée" : "Envoyer"}
+                    </span>
+                  </button>
+                </form>
               )}
 
               {statusMessage && (
-                <p className="text-xs text-emerald-300 text-center pt-1">
+                <p className="text-xs text-emerald-300 text-center pt-1 font-semibold">
                   {statusMessage}
                 </p>
               )}
