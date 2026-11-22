@@ -88,8 +88,8 @@ function normalizeAnswerLetter(raw: unknown): AnswerLetter | null {
 
 function getOptionFontSize(text: string): string {
   const len = text.trim().length;
-  if (len <= 24) return "text-3xl xl:text-4xl leading-snug";
-  if (len <= 52) return "text-2xl xl:text-3xl leading-snug";
+  if (len <= 20) return "text-3xl xl:text-4xl leading-snug";
+  if (len <= 45) return "text-2xl xl:text-3xl leading-snug";
   return "text-xl xl:text-2xl leading-snug";
 }
 
@@ -279,14 +279,14 @@ export default function TvQuizPage() {
   const rankedPlayers = useMemo(() => {
     return [...players]
       .map((player) => {
-        const extra = player as SessionPlayer & { score?: number };
-        const rawScore =
-          typeof scoresMap[String(player.id)] === "number"
-            ? scoresMap[String(player.id)]
-            : typeof extra.score === "number"
+        const extra = player as SessionPlayer & { score?: number | null };
+        const playerScore =
+          typeof extra.score === "number"
             ? extra.score
+            : typeof scoresMap[String(player.id)] === "number"
+            ? scoresMap[String(player.id)]
             : 0;
-        const score = Number(rawScore ?? 0);
+        const score = Number(playerScore ?? 0);
         const chosenLetter = normalizeAnswerLetter(
           answersMap[String(player.id)]
         );
@@ -338,10 +338,10 @@ export default function TvQuizPage() {
 
       {/* Corps principal : Question/Réponses à gauche (7 cols), Classement à droite (5 cols) */}
       <main className="flex-1 min-h-0 grid grid-cols-12 gap-7 pt-5">
-        {/* COLONNE GAUCHE : Grande case Question + 4 cases Réponses */}
-        <section className="col-span-7 bg-white/[0.06] border border-white/15 rounded-[2rem] p-7 flex flex-col justify-between gap-6 min-h-0">
+        {/* COLONNE GAUCHE : Grande case Question + 4 cases carrées Réponses */}
+        <section className="col-span-7 bg-white/[0.06] border border-white/15 rounded-[2rem] p-7 flex flex-col justify-between gap-5 min-h-0">
           {/* Bloc Question centré en haut */}
-          <div className="min-h-[26%] flex items-center justify-center text-center px-4">
+          <div className="shrink-0 min-h-[20%] flex items-center justify-center text-center px-4">
             {currentQuestion ? (
               <h2
                 className={`font-black text-white text-center break-words [word-break:normal] hyphens-none ${getQuestionFontSize(
@@ -357,49 +357,55 @@ export default function TvQuizPage() {
             )}
           </div>
 
-          {/* 4 cases de réponses empilées en dessous */}
-          <div className="flex-1 min-h-0 grid grid-rows-4 gap-4">
-            {LETTERS.map((letter, index) => {
-              const style = ANSWER_STYLES[letter];
-              const optionText = options[index] || `Réponse ${letter}`;
-              const isCorrect =
-                isRevealed && correctLetter !== null && correctLetter === letter;
-              const isDimmed =
-                isRevealed && correctLetter !== null && correctLetter !== letter;
+          {/* 4 cases de réponses sous forme de carré en grille 2x2 */}
+          <div className="flex-1 min-h-0 flex items-center justify-center">
+            <div className="h-full max-h-full aspect-square grid grid-cols-2 grid-rows-2 gap-4">
+              {LETTERS.map((letter, index) => {
+                const style = ANSWER_STYLES[letter];
+                const optionText = options[index] || `Réponse ${letter}`;
+                const isCorrect =
+                  isRevealed &&
+                  correctLetter !== null &&
+                  correctLetter === letter;
+                const isDimmed =
+                  isRevealed &&
+                  correctLetter !== null &&
+                  correctLetter !== letter;
 
-              return (
-                <div
-                  key={letter}
-                  className={`relative rounded-3xl border-2 px-6 py-3 flex items-center transition-all duration-300 ${
-                    style.bg
-                  } ${style.border} ${
-                    isCorrect
-                      ? "ring-4 ring-emerald-300 scale-[1.01] shadow-2xl"
-                      : isDimmed
-                      ? "opacity-45"
-                      : "shadow-lg"
-                  }`}
-                >
-                  {/* Lettre fixe sur la gauche de la case */}
+                return (
                   <div
-                    className={`w-16 h-16 xl:w-20 xl:h-20 rounded-2xl border-2 flex items-center justify-center font-black text-3xl xl:text-4xl shrink-0 ${style.badgeBg}`}
+                    key={letter}
+                    className={`relative rounded-3xl border-2 p-4 flex items-center transition-all duration-300 overflow-hidden ${
+                      style.bg
+                    } ${style.border} ${
+                      isCorrect
+                        ? "ring-4 ring-emerald-300 scale-[1.02] shadow-2xl"
+                        : isDimmed
+                        ? "opacity-45"
+                        : "shadow-lg"
+                    }`}
                   >
-                    {letter}
-                  </div>
-
-                  {/* Texte de réponse centré verticalement et horizontalement sans jamais couper un mot */}
-                  <div className="flex-1 h-full flex items-center justify-center text-center px-5 overflow-hidden">
-                    <span
-                      className={`font-black text-white text-center whitespace-normal break-words [word-break:normal] hyphens-none line-clamp-3 ${getOptionFontSize(
-                        optionText
-                      )}`}
+                    {/* Lettre fixe sur la gauche de la case */}
+                    <div
+                      className={`w-12 h-12 xl:w-14 xl:h-14 rounded-2xl border-2 flex items-center justify-center font-black text-2xl xl:text-3xl shrink-0 ${style.badgeBg}`}
                     >
-                      {optionText}
-                    </span>
+                      {letter}
+                    </div>
+
+                    {/* Texte de réponse centré verticalement et horizontalement sans jamais couper un mot */}
+                    <div className="flex-1 h-full flex items-center justify-center text-center px-3 overflow-hidden">
+                      <span
+                        className={`font-black text-white text-center whitespace-normal break-words [word-break:normal] hyphens-none line-clamp-3 ${getOptionFontSize(
+                          optionText
+                        )}`}
+                      >
+                        {optionText}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         </section>
 
