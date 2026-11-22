@@ -6,9 +6,18 @@ export type GameSlug =
   | "manille"
   | (string & {});
 
+export type GameCategorySlug =
+  | "all"
+  | "quiz"
+  | "music"
+  | "party"
+  | "cards"
+  | "words"
+  | (string & {});
+
 export interface GameCategory {
   id: string;
-  slug: string;
+  slug: GameCategorySlug;
   name: string;
   sort_order: number;
   created_at?: string;
