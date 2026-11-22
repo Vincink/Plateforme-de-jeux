@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import { Play, Sparkles, Users, Clock, Tv, X } from "lucide-react";
@@ -8,6 +8,7 @@ import { FocusCard } from "@/components/tvos/FocusCard";
 import { GlassPanel } from "@/components/tvos/GlassPanel";
 import { GAME_CATEGORIES, INITIAL_GAMES } from "@/features/games/catalog";
 import { useSpatialNavigation } from "@/hooks/useSpatialNavigation";
+import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { GameCategorySlug, GameDefinition } from "@/types/game.types";
 
 type GameWithUiFields = GameDefinition & {
@@ -26,6 +27,54 @@ export default function TvCatalogPage() {
   );
   const [isCreating, setIsCreating] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    const supabase = getSupabaseBrowserClient();
+    if (!supabase) return;
+
+    let isMounted = true;
+
+    const redirectToActiveSession = async () => {
+      const { data, error } = await supabase
+        .from("game_sessions")
+        .select("code, status")
+        .neq("status", "finished")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<{ code?: string; status?: string }>();
+
+      if (error || !isMounted) return;
+      if (data?.code) {
+        router.replace(`/tv/${data.code}`);
+      }
+    };
+
+    void redirectToActiveSession();
+
+    const channel = supabase
+      .channel("tv-active-session")
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "game_sessions",
+        },
+        (payload) => {
+          if (!isMounted) return;
+          const record = payload.new as { code?: string; status?: string } | null;
+          if (record?.code && record.status !== "finished") {
+            router.replace(`/tv/${record.code}`);
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      isMounted = false;
+      void supabase.removeChannel(channel);
+    };
+  }, [router]);
 
   const gamesList = INITIAL_GAMES as GameWithUiFields[];
 
