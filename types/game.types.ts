@@ -25,6 +25,7 @@ export interface Game {
   max_players: number | null;
   rules: Record<string, unknown> | null;
   is_active: boolean;
+  accentColor?: string | null;
   created_at?: string;
 }
 
