@@ -261,15 +261,15 @@ export default function TvSessionPage() {
       {/* Top TV Bar */}
       <header className="relative z-10 flex flex-wrap items-center justify-between gap-5 border-b border-white/15 pb-6">
         <div className="flex items-center gap-4">
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/15 bg-white/10">
-            <Tv className="h-8 w-8 text-amber-400" />
+          <div className="flex h-16 w-16 items-center justify-center rounded-2xl border border-white/15 bg-white/10">
+            <Tv className="h-9 w-9 text-amber-400" />
           </div>
           <div>
-            <div className="flex items-center gap-2 text-sm font-semibold uppercase tracking-widest text-neutral-300">
-              <Sparkles className="h-4 w-4 text-amber-400" />
+            <div className="flex items-center gap-2 text-base font-bold uppercase tracking-widest text-neutral-300">
+              <Sparkles className="h-5 w-5 text-amber-400" />
               <span>Écran Principal TV</span>
             </div>
-            <h1 className="text-3xl font-extrabold tracking-tight md:text-5xl">
+            <h1 className="text-4xl font-black tracking-tight md:text-6xl">
               {currentGame?.title ?? "Plateforme de Jeux"}
             </h1>
           </div>
@@ -279,16 +279,16 @@ export default function TvSessionPage() {
           <button
             type="button"
             onClick={cycleDemoStatus}
-            className="whitespace-nowrap rounded-full border border-white/20 bg-white/10 px-5 py-3 text-sm font-bold uppercase tracking-wider transition hover:bg-white/15"
+            className="whitespace-nowrap rounded-full border border-white/20 bg-white/10 px-6 py-3.5 text-base font-extrabold uppercase tracking-wider transition hover:bg-white/15 md:text-lg"
           >
             État : {status} • Manche {round}
           </button>
 
-          <div className="shrink-0 rounded-2xl border border-amber-400/30 bg-white/10 px-6 py-3 text-right">
-            <div className="text-xs font-bold uppercase tracking-widest text-neutral-300">
+          <div className="shrink-0 rounded-2xl border border-amber-400/35 bg-white/10 px-7 py-3 text-right">
+            <div className="text-sm font-extrabold uppercase tracking-widest text-neutral-300">
               Code Salle
             </div>
-            <div className="font-mono text-3xl font-black tracking-widest text-amber-400 md:text-5xl">
+            <div className="font-mono text-4xl font-black tracking-widest text-amber-400 md:text-6xl">
               {activeCode || "----"}
             </div>
           </div>
@@ -296,22 +296,22 @@ export default function TvSessionPage() {
       </header>
 
       {/* Main TV Stage */}
-      <main className="relative z-10 my-auto grid grid-cols-1 items-center gap-8 py-6 lg:grid-cols-12">
+      <main className="relative z-10 my-auto grid flex-1 grid-cols-1 items-stretch gap-8 py-6 lg:grid-cols-12">
         {/* Left: Join / QR / Status */}
-        <section className="space-y-6 rounded-3xl border border-white/15 bg-white/5 p-7 lg:col-span-5 md:p-8">
+        <section className="flex h-full flex-col justify-between space-y-6 rounded-3xl border border-white/15 bg-white/5 p-7 lg:col-span-5 md:p-9">
           <div className="flex items-center gap-3">
-            <QrCode className="h-8 w-8 text-sky-400" />
-            <h2 className="text-2xl font-extrabold md:text-3xl">
+            <QrCode className="h-9 w-9 shrink-0 text-sky-400" />
+            <h2 className="text-3xl font-black md:text-4xl">
               Rejoindre avec son téléphone
             </h2>
           </div>
 
           {showQrOnTv ? (
-            <div className="flex flex-col items-center gap-6 sm:flex-row">
+            <div className="my-auto flex flex-col items-center gap-6 sm:flex-row">
               <div className="shrink-0 rounded-3xl bg-white p-4 shadow-xl">
                 <QRCodeCanvas
                   value={joinUrl}
-                  size={196}
+                  size={208}
                   bgColor="#ffffff"
                   fgColor="#07080c"
                   level="M"
@@ -320,55 +320,55 @@ export default function TvSessionPage() {
               </div>
 
               <div className="space-y-4 text-center sm:text-left">
-                <p className="text-lg font-medium leading-relaxed text-neutral-100 md:text-xl">
+                <p className="text-xl font-semibold leading-relaxed text-neutral-100 md:text-2xl">
                   Scanne le QR code ou entre le code{" "}
-                  <span className="font-mono text-2xl font-black text-amber-400">
+                  <span className="font-mono text-3xl font-black text-amber-400 md:text-4xl">
                     {activeCode || "----"}
                   </span>{" "}
                   sur ton téléphone.
                 </p>
 
-                <div className="break-all rounded-2xl border border-white/15 bg-black/50 px-4 py-3 font-mono text-sm font-semibold text-neutral-200 md:text-base">
+                <div className="break-all rounded-2xl border border-white/15 bg-black/50 px-4 py-3 font-mono text-base font-bold text-neutral-200 md:text-lg">
                   {joinUrl}
                 </div>
               </div>
             </div>
           ) : (
-            <div className="rounded-2xl border border-white/15 bg-black/40 p-8 text-center text-lg text-neutral-300 md:text-xl">
+            <div className="my-auto rounded-2xl border border-white/15 bg-black/40 p-8 text-center text-2xl font-semibold text-neutral-300 md:text-3xl">
               QR code masqué par l&apos;animateur • Code salle :{" "}
-              <span className="font-mono text-2xl font-black text-amber-400">
+              <span className="font-mono text-3xl font-black text-amber-400 md:text-4xl">
                 {activeCode || "----"}
               </span>
             </div>
           )}
 
           {currentGame?.tagline && (
-            <p className="border-t border-white/15 pt-5 text-base font-medium text-neutral-300 md:text-lg">
+            <p className="border-t border-white/15 pt-5 text-lg font-semibold text-neutral-200 md:text-2xl">
               {currentGame.tagline}
             </p>
           )}
         </section>
 
         {/* Right: Players & Leaderboard */}
-        <section className="space-y-6 rounded-3xl border border-white/15 bg-white/5 p-7 lg:col-span-7 md:p-8">
+        <section className="flex h-full flex-col justify-between space-y-6 rounded-3xl border border-white/15 bg-white/5 p-7 lg:col-span-7 md:p-9">
           <div className="flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <Users className="h-8 w-8 text-emerald-400" />
-              <h2 className="text-2xl font-extrabold md:text-3xl">
+              <Users className="h-9 w-9 shrink-0 text-emerald-400" />
+              <h2 className="text-3xl font-black md:text-4xl">
                 Joueurs ({players.length})
               </h2>
             </div>
-            <span className="text-sm font-bold uppercase tracking-wider text-neutral-300">
+            <span className="text-base font-extrabold uppercase tracking-wider text-neutral-300 md:text-lg">
               Classement en direct
             </span>
           </div>
 
           {players.length === 0 ? (
-            <div className="py-14 text-center text-xl font-semibold text-neutral-300 md:text-2xl">
+            <div className="my-auto flex flex-1 items-center justify-center py-12 text-center text-2xl font-bold text-neutral-200 md:text-4xl">
               En attente des joueurs...
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="my-auto grid grid-cols-1 gap-4 sm:grid-cols-2">
               {players.map((player) => {
                 const avatarKey = player.avatarId ?? "";
                 const avatarSymbol =
@@ -382,15 +382,15 @@ export default function TvSessionPage() {
                     className="flex items-center justify-between gap-4 rounded-2xl border border-white/15 bg-black/45 p-5"
                   >
                     <div className="flex min-w-0 items-center gap-4">
-                      <span className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white/10 text-3xl">
+                      <span className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/10 text-4xl">
                         {avatarSymbol}
                       </span>
-                      <span className="truncate text-xl font-bold md:text-2xl">
+                      <span className="truncate text-2xl font-extrabold md:text-3xl">
                         {player.nickname}
                       </span>
                     </div>
 
-                    <span className="shrink-0 font-mono text-2xl font-black text-amber-400 md:text-3xl">
+                    <span className="shrink-0 font-mono text-3xl font-black text-amber-400 md:text-4xl">
                       {getPlayerScore(player.id)} pts
                     </span>
                   </div>
@@ -402,7 +402,7 @@ export default function TvSessionPage() {
       </main>
 
       {/* Footer */}
-      <footer className="relative z-10 flex items-center justify-between border-t border-white/15 pt-4 text-sm font-medium text-neutral-400 md:text-base">
+      <footer className="relative z-10 flex items-center justify-between border-t border-white/15 pt-4 text-base font-semibold text-neutral-300 md:text-lg">
         <span>TVOS Party Platform</span>
         <span>Salle {activeCode || requestedCode || "—"}</span>
       </footer>
