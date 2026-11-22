@@ -68,11 +68,11 @@ const ANSWER_STYLES: Record<
   },
 };
 
-const LETTERS: AnswerLetter[] = ["A", "B", "C", "D"];
+const LETTERS: readonly AnswerLetter[] = ["A", "B", "C", "D"];
 
 function normalizeAnswerLetter(raw: unknown): AnswerLetter | null {
-  if (typeof raw === "number" && raw >= 0 && raw <= 3) {
-    return LETTERS[raw];
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw <= 3) {
+    return LETTERS[raw] ?? null;
   }
   if (typeof raw === "string") {
     const upper = raw.trim().toUpperCase();
@@ -80,7 +80,7 @@ function normalizeAnswerLetter(raw: unknown): AnswerLetter | null {
       return upper;
     }
     if (upper === "0" || upper === "1" || upper === "2" || upper === "3") {
-      return LETTERS[Number(upper)];
+      return LETTERS[Number(upper)] ?? null;
     }
   }
   return null;
@@ -280,12 +280,13 @@ export default function TvQuizPage() {
     return [...players]
       .map((player) => {
         const extra = player as SessionPlayer & { score?: number };
-        const score =
+        const rawScore =
           typeof scoresMap[String(player.id)] === "number"
             ? scoresMap[String(player.id)]
             : typeof extra.score === "number"
             ? extra.score
             : 0;
+        const score = Number(rawScore ?? 0);
         const chosenLetter = normalizeAnswerLetter(
           answersMap[String(player.id)]
         );
@@ -295,7 +296,7 @@ export default function TvQuizPage() {
           chosenLetter,
         };
       })
-      .sort((a, b) => b.score - a.score);
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   }, [players, scoresMap, answersMap]);
 
   const currentRound = session?.current_round ?? 1;
