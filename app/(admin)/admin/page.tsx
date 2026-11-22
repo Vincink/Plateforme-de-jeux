@@ -18,9 +18,8 @@ import {
   Check,
   Sparkles,
 } from "lucide-react";
-import { INITIAL_GAMES } from "@/features/games/catalog";
+import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
 import type {
-  GameDefinition,
   PlayerScore,
   PlayerSession,
   SessionStatus,
@@ -36,7 +35,7 @@ function generateSessionCode(): string {
 }
 
 export default function AdminConsolePage() {
-  const [games, setGames] = useState<GameDefinition[]>(INITIAL_GAMES);
+  const [games, setGames] = useState<CatalogGame[]>(INITIAL_GAMES);
   const [selectedGameSlug, setSelectedGameSlug] = useState<string>(
     INITIAL_GAMES[0]?.slug ?? "quiz"
   );
