@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
+import Link from "next/link";
 import {
   Play,
   Pause,
@@ -17,6 +18,7 @@ import {
   Copy,
   Check,
   Sparkles,
+  ExternalLink,
 } from "lucide-react";
 import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
 import type {
@@ -150,6 +152,16 @@ export default function AdminConsolePage() {
                 )}
               </button>
             </div>
+
+            <Link
+              href={`/tv/${sessionCode}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 font-semibold text-sm transition"
+            >
+              <span>Ouvrir TV</span>
+              <ExternalLink className="w-4 h-4" />
+            </Link>
 
             <button
               type="button"
