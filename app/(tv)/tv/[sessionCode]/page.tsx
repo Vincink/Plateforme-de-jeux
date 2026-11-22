@@ -3,7 +3,7 @@
 import React, { useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 import { QrCode, Users, Tv, Sparkles } from "lucide-react";
-import { QRCodeSVG } from "qrcode.react";
+import { QRCodeCanvas } from "qrcode.react";
 import { clientEnv } from "@/lib/env";
 import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
 import type {
@@ -89,7 +89,7 @@ export default function TvSessionPage() {
   const round = session?.current_round ?? 1;
 
   return (
-    <div className="relative h-screen w-full overflow-hidden bg-neutral-950 text-white p-6 md:p-10 flex flex-col justify-between">
+    <div className="relative flex h-[100dvh] w-screen flex-col justify-between overflow-hidden bg-neutral-950 p-6 text-white md:p-10">
       {/* Ambient background */}
       <div
         className="pointer-events-none absolute inset-0"
@@ -103,15 +103,15 @@ export default function TvSessionPage() {
       {/* Top TV Bar */}
       <header className="relative z-10 flex flex-wrap items-center justify-between gap-6 border-b border-white/10 pb-5">
         <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 border border-white/15">
-            <Tv className="w-6 h-6 text-amber-400" />
+          <div className="flex h-12 w-12 items-center justify-center rounded-2xl border border-white/15 bg-white/10">
+            <Tv className="h-6 w-6 text-amber-400" />
           </div>
           <div>
             <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-neutral-400">
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+              <Sparkles className="h-3.5 w-3.5 text-amber-400" />
               <span>Écran Principal TV</span>
             </div>
-            <h1 className="text-3xl md:text-4xl font-bold tracking-tight">
+            <h1 className="text-3xl font-bold tracking-tight md:text-4xl">
               {currentGame?.title ?? "Plateforme de Jeux"}
             </h1>
           </div>
@@ -121,16 +121,16 @@ export default function TvSessionPage() {
           <button
             type="button"
             onClick={cycleDemoStatus}
-            className="px-4 py-2 rounded-full text-xs font-semibold uppercase tracking-wider bg-white/10 hover:bg-white/15 border border-white/15 transition"
+            className="rounded-full border border-white/15 bg-white/10 px-4 py-2 text-xs font-semibold uppercase tracking-wider transition hover:bg-white/15"
           >
             État : {status} • Manche {round}
           </button>
 
-          <div className="bg-white/5 border border-white/15 rounded-2xl px-5 py-2.5 text-right">
+          <div className="rounded-2xl border border-white/15 bg-white/5 px-5 py-2.5 text-right">
             <div className="text-[11px] uppercase tracking-widest text-neutral-400">
               Code Salle
             </div>
-            <div className="font-mono text-2xl md:text-3xl font-extrabold tracking-widest text-amber-400">
+            <div className="font-mono text-2xl font-extrabold tracking-widest text-amber-400 md:text-3xl">
               {sessionCode || "----"}
             </div>
           </div>
@@ -138,27 +138,28 @@ export default function TvSessionPage() {
       </header>
 
       {/* Main TV Stage */}
-      <main className="relative z-10 my-auto py-6 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
+      <main className="relative z-10 my-auto grid grid-cols-1 items-center gap-8 py-6 lg:grid-cols-12">
         {/* Left: Join / QR / Status */}
-        <section className="lg:col-span-5 bg-white/5 border border-white/10 rounded-3xl p-6 md:p-7 space-y-5">
+        <section className="space-y-5 rounded-3xl border border-white/10 bg-white/5 p-6 lg:col-span-5 md:p-7">
           <div className="flex items-center gap-3">
-            <QrCode className="w-6 h-6 text-sky-400" />
+            <QrCode className="h-6 w-6 text-sky-400" />
             <h2 className="text-xl font-bold">Rejoindre avec son téléphone</h2>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-center gap-5">
+          <div className="flex flex-col items-center gap-5 sm:flex-row">
             <div className="shrink-0 rounded-2xl bg-white p-3 shadow-lg">
-              <QRCodeSVG
+              <QRCodeCanvas
                 value={joinUrl}
-                size={148}
+                size={152}
                 bgColor="#ffffff"
                 fgColor="#07080c"
                 level="M"
+                marginSize={2}
               />
             </div>
 
             <div className="space-y-3 text-center sm:text-left">
-              <p className="text-sm text-neutral-300 leading-relaxed">
+              <p className="text-sm leading-relaxed text-neutral-300">
                 Scanne le QR code ou entre le code{" "}
                 <span className="font-mono font-bold text-amber-400">
                   {sessionCode || "----"}
@@ -166,24 +167,24 @@ export default function TvSessionPage() {
                 sur ton téléphone.
               </p>
 
-              <div className="rounded-xl bg-black/40 border border-white/10 px-3.5 py-2.5 font-mono text-xs text-neutral-300 break-all">
+              <div className="break-all rounded-xl border border-white/10 bg-black/40 px-3.5 py-2.5 font-mono text-xs text-neutral-300">
                 {joinUrl}
               </div>
             </div>
           </div>
 
           {currentGame?.tagline && (
-            <p className="text-sm text-neutral-400 border-t border-white/10 pt-4">
+            <p className="border-t border-white/10 pt-4 text-sm text-neutral-400">
               {currentGame.tagline}
             </p>
           )}
         </section>
 
         {/* Right: Players & Leaderboard */}
-        <section className="lg:col-span-7 bg-white/5 border border-white/10 rounded-3xl p-6 md:p-7 space-y-5">
+        <section className="space-y-5 rounded-3xl border border-white/10 bg-white/5 p-6 lg:col-span-7 md:p-7">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <Users className="w-6 h-6 text-emerald-400" />
+              <Users className="h-6 w-6 text-emerald-400" />
               <h2 className="text-xl font-bold">
                 Joueurs ({players.length})
               </h2>
@@ -198,7 +199,7 @@ export default function TvSessionPage() {
               En attente des joueurs...
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {players.map((player) => {
                 const avatarKey = player.avatarId ?? "";
                 const avatarSymbol =
@@ -209,9 +210,9 @@ export default function TvSessionPage() {
                 return (
                   <div
                     key={player.id}
-                    className="flex items-center justify-between gap-4 rounded-2xl bg-black/35 border border-white/10 p-4"
+                    className="flex items-center justify-between gap-4 rounded-2xl border border-white/10 bg-black/35 p-4"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex min-w-0 items-center gap-3">
                       <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-white/10 text-2xl">
                         {avatarSymbol}
                       </span>
@@ -220,7 +221,7 @@ export default function TvSessionPage() {
                       </span>
                     </div>
 
-                    <span className="font-mono text-lg font-bold text-amber-400 shrink-0">
+                    <span className="shrink-0 font-mono text-lg font-bold text-amber-400">
                       {getPlayerScore(player.id)} pts
                     </span>
                   </div>
@@ -232,7 +233,7 @@ export default function TvSessionPage() {
       </main>
 
       {/* Footer */}
-      <footer className="relative z-10 flex items-center justify-between text-xs text-neutral-500 border-t border-white/10 pt-4">
+      <footer className="relative z-10 flex items-center justify-between border-t border-white/10 pt-4 text-xs text-neutral-500">
         <span>TVOS Party Platform</span>
         <span>Salle {sessionCode || "—"}</span>
       </footer>
