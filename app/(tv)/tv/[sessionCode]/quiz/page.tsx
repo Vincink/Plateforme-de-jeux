@@ -8,6 +8,10 @@ import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import { QUESTIONS, type QuizQuestion } from "@/lib/questions";
 import type { GameSession, SessionPlayer } from "@/types/game.types";
 
+// ============================================================================
+// 1. TYPES ET CONSTANTES DU QUIZ
+// ============================================================================
+
 type AnswerLetter = "A" | "B" | "C" | "D";
 
 interface QuizQuestionItem {
@@ -82,6 +86,7 @@ type ExtendedPlayer = SessionPlayer & {
   user_id?: string | number | null;
 };
 
+// Couleurs des 4 cases de réponses (A, B, C, D)
 const ANSWER_STYLES: Record<
   AnswerLetter,
   {
@@ -123,8 +128,12 @@ const ANSWER_STYLES: Record<
 };
 
 const LETTERS: readonly AnswerLetter[] = ["A", "B", "C", "D"];
-const QUESTION_DURATION_SECONDS = 12;
-const QUESTIONS_PER_GAME = 15;
+const QUESTION_DURATION_SECONDS = 12; // Durée du chrono par question (en secondes)
+const QUESTIONS_PER_GAME = 15; // Nombre de questions tirées aléatoirement par partie
+
+// ============================================================================
+// 2. FONCTIONS UTILITAIRES (Tirage aléatoire, tailles de texte, conversions)
+// ============================================================================
 
 function hashStringToSeed(input: string): number {
   let hash = 2166136261;
@@ -135,6 +144,7 @@ function hashStringToSeed(input: string): number {
   return hash >>> 0;
 }
 
+// Sélectionne une série aléatoire de 15 questions (stable pour toute la session)
 function pickRandomQuestionsSeries(
   source: QuizQuestionItem[],
   count: number,
@@ -216,6 +226,7 @@ function extractOptionsList(
   return LETTERS.map((letter) => String(rawOptions[letter] ?? ""));
 }
 
+// Adapte la taille du texte d'une réponse pour éviter de couper les mots longs
 function getOptionFontSize(text: string): string {
   const trimmed = text.trim();
   const longestWordLen = trimmed
@@ -231,12 +242,17 @@ function getOptionFontSize(text: string): string {
   return "text-xl xl:text-2xl leading-snug";
 }
 
+// Adapte la taille du texte de la question selon sa longueur
 function getQuestionFontSize(text: string): string {
   const len = text.trim().length;
   if (len <= 65) return "text-3xl xl:text-5xl leading-tight";
   if (len <= 120) return "text-2xl xl:text-4xl leading-snug";
   return "text-xl xl:text-3xl leading-snug";
 }
+
+// ============================================================================
+// 3. COMPOSANT PRINCIPAL DE L'ÉCRAN TV QUIZ
+// ============================================================================
 
 export default function TvQuizPage() {
   const params = useParams<{ sessionCode: string }>();
@@ -252,6 +268,7 @@ export default function TvQuizPage() {
     number | null
   >(null);
 
+  // --- Synchronisation temps réel avec Supabase (session + joueurs) ---
   useEffect(() => {
     if (!supabase || !sessionCode) return;
 
@@ -394,6 +411,7 @@ export default function TvQuizPage() {
     };
   }, [supabase, sessionCode]);
 
+  // --- Redirection automatique vers le lobby si la partie est terminée/réinitialisée ---
   useEffect(() => {
     if (!session || !sessionCode) return;
     const status = String(session.status ?? "").toLowerCase();
@@ -407,6 +425,7 @@ export default function TvQuizPage() {
     }
   }, [session, sessionCode, router]);
 
+  // --- Extraction de l'état du quiz et de la série de 15 questions ---
   const quizState = useMemo<QuizStatePayload>(() => {
     return (
       session?.game_state ||
@@ -456,7 +475,7 @@ export default function TvQuizPage() {
     );
   }, [quizState, session, sessionCode]);
 
-  // Démarrage de l'index à 0 uniquement lorsque "Manche +1" a été déclenché au moins une fois
+  // --- Index de la question active (démarre à 0 au premier clic sur "Manche +1") ---
   const activeQuestionIndex = useMemo<number | null>(() => {
     const explicitIndex =
       quizState.questionIndex ??
@@ -500,6 +519,7 @@ export default function TvQuizPage() {
     return quizState.currentQuestion ?? quizState.activeQuestion ?? null;
   }, [activeQuestionIndex, questions, quizState]);
 
+  // --- Gestion du chronomètre (12 secondes) ---
   const remoteStartMs = useMemo<number | null>(() => {
     return (
       parseTimestampMs(quizState.questionStartedAt) ??
@@ -559,6 +579,7 @@ export default function TvQuizPage() {
     remainingSeconds !== null &&
     remainingSeconds <= 0;
 
+  // --- Préparation de la question, des 4 choix et de la révélation ---
   const questionLabel = useMemo<string>(() => {
     if (!currentQuestion) return "";
     return (
@@ -634,6 +655,7 @@ export default function TvQuizPage() {
     );
   }, [currentQuestion]);
 
+  // --- Tri des joueurs pour le classement ---
   const rankedPlayers = useMemo(() => {
     return [...players]
       .map((player) => {
@@ -679,33 +701,37 @@ export default function TvQuizPage() {
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   }, [players, scoresMap, answersMap]);
 
-  const currentRound = session?.current_round ?? 1;
   const totalQuestions = questions.length;
 
+  // ==========================================================================
+  // 4. RENDU VISUEL DE LA PAGE TV (JSX)
+  // ==========================================================================
   return (
     <div className="h-[100dvh] w-screen overflow-hidden bg-tvos-bg text-white px-8 py-6 flex flex-col justify-between select-none">
-      {/* En-tête grand format lisible depuis le canapé */}
+      {/* ================= EN-TÊTE (Titre du jeu, n° Question, Chrono, Code Salle) ================= */}
       <header className="flex items-center justify-between border-b border-white/15 pb-4 shrink-0 gap-6">
+        {/* Partie gauche : Icône TV + Numéro de question + Titre du jeu */}
         <div className="flex items-center gap-4 min-w-0">
           <div className="w-14 h-14 rounded-2xl bg-amber-400/15 border border-amber-400/35 flex items-center justify-center shrink-0">
             <Tv className="w-8 h-8 text-amber-400" />
           </div>
           <div className="min-w-0">
-            <div className="text-base xl:text-lg uppercase tracking-[0.18em] text-amber-300 font-extrabold">
-              Manche {currentRound}
-              {activeQuestionIndex !== null && totalQuestions > 0
-                ? ` • Question ${
-                    Math.min(activeQuestionIndex, totalQuestions - 1) + 1
-                  } / ${totalQuestions}`
-                : ""}
-            </div>
+            {activeQuestionIndex !== null && totalQuestions > 0 && (
+              <div className="text-base xl:text-lg uppercase tracking-[0.18em] text-amber-300 font-extrabold">
+                Question{" "}
+                {Math.min(activeQuestionIndex, totalQuestions - 1) + 1} /{" "}
+                {totalQuestions}
+              </div>
+            )}
             <h1 className="text-3xl xl:text-4xl font-black tracking-tight truncate">
               {gameTitle}
             </h1>
           </div>
         </div>
 
+        {/* Partie droite : Chronomètre + Code de la salle */}
         <div className="flex items-center gap-4 shrink-0">
+          {/* Chronomètre 12s */}
           {remainingSeconds !== null && (
             <div
               className={`flex items-center gap-2.5 px-5 py-2.5 rounded-2xl border-2 font-mono text-3xl xl:text-4xl font-black transition ${
@@ -719,6 +745,7 @@ export default function TvQuizPage() {
             </div>
           )}
 
+          {/* Code Salle */}
           <span className="text-lg xl:text-xl font-bold uppercase tracking-wider text-neutral-300">
             Salle
           </span>
@@ -728,11 +755,11 @@ export default function TvQuizPage() {
         </div>
       </header>
 
-      {/* Corps principal : Question/Réponses à gauche (7 cols), Classement à droite (5 cols) */}
+      {/* ================= CORPS PRINCIPAL (Colonne Question/Réponses + Colonne Classement) ================= */}
       <main className="flex-1 min-h-0 grid grid-cols-12 gap-7 pt-5">
-        {/* COLONNE GAUCHE : Grande case Question + 4 cases Réponses sur toute la largeur */}
+        {/* ----------------- COLONNE GAUCHE : QUESTION + 4 CASES DE RÉPONSES ----------------- */}
         <section className="col-span-7 bg-white/[0.06] border border-white/15 rounded-[2rem] p-7 flex flex-col justify-between gap-5 min-h-0">
-          {/* Bloc Question centré en haut */}
+          {/* Zone d'affichage de la question */}
           <div className="shrink-0 min-h-[22%] flex items-center justify-center text-center px-4">
             {questionLabel ? (
               <h2
@@ -749,7 +776,7 @@ export default function TvQuizPage() {
             )}
           </div>
 
-          {/* 4 cases de réponses réparties sur toute la largeur en grille 2x2 avec hauteur réduite */}
+          {/* Grille 2x2 des 4 cases de réponses (A, B, C, D) */}
           <div className="w-full flex-1 max-h-[420px] grid grid-cols-2 grid-rows-2 gap-4 self-center">
             {LETTERS.map((letter, index) => {
               const style = ANSWER_STYLES[letter];
@@ -776,14 +803,14 @@ export default function TvQuizPage() {
                       : "shadow-lg"
                   }`}
                 >
-                  {/* Lettre placée dans le coin supérieur gauche */}
+                  {/* Badge lettre (A, B, C, D) dans le coin supérieur gauche */}
                   <div
                     className={`absolute top-3 left-3 w-10 h-10 xl:w-11 xl:h-11 rounded-xl border-2 flex items-center justify-center font-black text-xl xl:text-2xl z-10 ${style.badgeBg}`}
                   >
                     {letter}
                   </div>
 
-                  {/* Texte de réponse centré verticalement et horizontalement sans couper les mots */}
+                  {/* Texte de la réponse centré horizontalement et verticalement */}
                   <div className="w-full h-full flex items-center justify-center text-center px-10">
                     <span
                       className={`font-black text-white text-center whitespace-normal break-normal [word-break:normal] hyphens-none line-clamp-3 ${getOptionFontSize(
@@ -799,8 +826,9 @@ export default function TvQuizPage() {
           </div>
         </section>
 
-        {/* COLONNE DROITE : Classement des joueurs */}
+        {/* ----------------- COLONNE DROITE : CLASSEMENT DES JOUEURS ----------------- */}
         <aside className="col-span-5 bg-white/[0.06] border border-white/15 rounded-[2rem] p-6 flex flex-col gap-4 min-h-0">
+          {/* Titre du classement et compteur de joueurs */}
           <div className="flex items-center justify-between shrink-0 pb-1">
             <div className="flex items-center gap-3 text-2xl xl:text-3xl font-black">
               <Trophy className="w-8 h-8 text-amber-400" />
@@ -811,6 +839,7 @@ export default function TvQuizPage() {
             </span>
           </div>
 
+          {/* Liste des joueurs triés par points */}
           {rankedPlayers.length === 0 ? (
             <div className="flex-1 flex items-center justify-center text-2xl text-neutral-400 font-semibold text-center px-4">
               Aucun joueur dans la partie
@@ -835,7 +864,7 @@ export default function TvQuizPage() {
                     }}
                     className="rounded-3xl border-2 px-5 py-3.5 flex items-center gap-4 shadow-lg shrink-0"
                   >
-                    {/* 1. Numéro de rang fixe à gauche */}
+                    {/* 1. Numéro de rang à gauche */}
                     <div
                       style={{ backgroundColor: pColor.badgeBgHex }}
                       className="w-12 h-12 xl:w-14 xl:h-14 rounded-2xl flex items-center justify-center font-black text-2xl xl:text-3xl shrink-0"
@@ -843,17 +872,17 @@ export default function TvQuizPage() {
                       {rank}
                     </div>
 
-                    {/* 2. Pseudo à droite du numéro */}
+                    {/* 2. Pseudo du joueur */}
                     <div className="flex-1 min-w-0 font-black text-2xl xl:text-3xl truncate">
                       {player.nickname}
                     </div>
 
-                    {/* 3. Points fixes du joueur */}
+                    {/* 3. Score en points */}
                     <div className="w-24 text-right font-mono font-black text-2xl xl:text-3xl shrink-0">
                       {score} <span className="text-lg font-bold">pts</span>
                     </div>
 
-                    {/* 4. Pastille état réponse à droite des points */}
+                    {/* 4. Pastille d'état de réponse (coche verte ou lettre choisie) */}
                     <div className="w-14 h-14 flex items-center justify-center shrink-0">
                       {hasAnswered && !isRevealed && (
                         <div
