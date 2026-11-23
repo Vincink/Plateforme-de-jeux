@@ -67,7 +67,7 @@ interface WakeLockSentinelLike {
   release: () => Promise<void>;
 }
 
-interface PendingQuestionSnapshot {
+interface QuestionSnapshot {
   key: string;
   question: QuizQuestionPayload;
   options: string[];
@@ -275,7 +275,7 @@ export default function PlayerControllerPage() {
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const settledQuestionsRef = useRef<Set<string>>(new Set());
   const currentScoreRef = useRef<number>(0);
-  const activeSnapshotRef = useRef<PendingQuestionSnapshot | null>(null);
+  const snapshotRef = useRef<QuestionSnapshot | null>(null);
   const prevQuestionKeyRef = useRef<string | null>(null);
 
   const persistPlayerScore = async (
@@ -487,17 +487,18 @@ export default function PlayerControllerPage() {
     return extractOptions(raw);
   }, [activeQuestion]);
 
-  const settleSnapshot = (snapshot: PendingQuestionSnapshot | null) => {
+  const settleSnapshot = (snapshot: QuestionSnapshot | null) => {
     if (!identity || !snapshot) return;
 
     const settlementKey = `${identity.playerId}::${snapshot.key}`;
     if (settledQuestionsRef.current.has(settlementKey)) return;
 
-    const stateAnswer = normalizeAnswerLetter(
-      quizState.answers?.[String(identity.playerId)],
-      snapshot.options
-    );
-    const chosenLetter = snapshot.chosenLetter ?? stateAnswer;
+    const chosenLetter =
+      snapshot.chosenLetter ??
+      normalizeAnswerLetter(
+        quizState.answers?.[String(identity.playerId)],
+        snapshot.options
+      );
 
     settledQuestionsRef.current.add(settlementKey);
 
@@ -557,7 +558,6 @@ export default function PlayerControllerPage() {
     );
   };
 
-  // Maintient un snapshot fiable de la question courante et de la réponse choisie
   useEffect(() => {
     if (!currentQuestionKey || !activeQuestion) return;
 
@@ -569,18 +569,15 @@ export default function PlayerControllerPage() {
             parsedOptions
           );
 
-    if (
-      activeSnapshotRef.current &&
-      activeSnapshotRef.current.key === currentQuestionKey
-    ) {
-      activeSnapshotRef.current = {
-        ...activeSnapshotRef.current,
+    if (snapshotRef.current && snapshotRef.current.key === currentQuestionKey) {
+      snapshotRef.current = {
+        ...snapshotRef.current,
         question: activeQuestion,
         options: parsedOptions,
-        chosenLetter: chosenLetter ?? activeSnapshotRef.current.chosenLetter,
+        chosenLetter: chosenLetter ?? snapshotRef.current.chosenLetter,
       };
     } else {
-      activeSnapshotRef.current = {
+      snapshotRef.current = {
         key: currentQuestionKey,
         question: activeQuestion,
         options: parsedOptions,
@@ -597,17 +594,15 @@ export default function PlayerControllerPage() {
     identity?.playerId,
   ]);
 
-  // Quand la clé de question change (ex: clic sur "Question suivante"),
-  // on règle d'abord la question précédente si elle ne l'a pas encore été, puis on réinitialise l'état de réponse
   useEffect(() => {
     const previousKey = prevQuestionKeyRef.current;
     if (
       previousKey &&
       previousKey !== currentQuestionKey &&
-      activeSnapshotRef.current &&
-      activeSnapshotRef.current.key === previousKey
+      snapshotRef.current &&
+      snapshotRef.current.key === previousKey
     ) {
-      settleSnapshot(activeSnapshotRef.current);
+      settleSnapshot(snapshotRef.current);
     }
 
     prevQuestionKeyRef.current = currentQuestionKey;
@@ -661,10 +656,9 @@ export default function PlayerControllerPage() {
     (remainingSeconds <= 0 || Boolean(quizState.revealed));
   const isPlaying = roundStatus === "playing" && !isTimerExpired;
 
-  // Règle la question en cours dès que le chrono est expiré ou que la réponse est révélée
   useEffect(() => {
-    if (!isTimerExpired || !activeSnapshotRef.current) return;
-    settleSnapshot(activeSnapshotRef.current);
+    if (!isTimerExpired || !snapshotRef.current) return;
+    settleSnapshot(snapshotRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTimerExpired, identity?.playerId, currentQuestionKey]);
 
@@ -986,7 +980,7 @@ export default function PlayerControllerPage() {
     const chosenLetter = choice.letter;
 
     if (currentQuestionKey && activeQuestion) {
-      activeSnapshotRef.current = {
+      snapshotRef.current = {
         key: currentQuestionKey,
         question: activeQuestion,
         options: parsedOptions,
