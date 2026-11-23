@@ -1,14 +1,30 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Tv, Users, Play } from "lucide-react";
+import { Tv, Users } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import type { GameSession, SessionPlayer } from "@/types/game.types";
 
-const GRAND_QUIZ_GAME_ID = "6e6d7179-3a56-4d94-9c1d-19ac06a34aaa";
-const HUB_ALIAS_CODE = "SALON";
+// ============================================================================
+// 1. TYPES ET CONSTANTES DU LOBBY TV
+// ============================================================================
+
+interface LobbyGameState {
+  nextSessionCode?: string;
+  replacedByCode?: string;
+}
+
+type ExtendedSession = GameSession & {
+  game_state?: LobbyGameState | null;
+  show_qr?: boolean | null;
+};
+
+// ============================================================================
+// 2. COMPOSANT PRINCIPAL : LOBBY TV
+// ============================================================================
 
 export default function TvLobbyPage() {
   const params = useParams<{ sessionCode: string }>();
@@ -16,37 +32,27 @@ export default function TvLobbyPage() {
   const sessionCode = (params?.sessionCode ?? "").toUpperCase();
   const supabase = getSupabaseBrowserClient();
 
-  const [session, setSession] = useState<GameSession | null>(null);
+  const [session, setSession] = useState<ExtendedSession | null>(null);
   const [players, setPlayers] = useState<SessionPlayer[]>([]);
-  const [gameTitle, setGameTitle] = useState<string>("En attente d'un jeu");
+  const [gameTitle, setGameTitle] = useState<string>("Grand Quiz tvOS");
   const [joinUrl, setJoinUrl] = useState<string>("");
 
+  // --- Construction de l'URL de connexion mobile ---
   useEffect(() => {
-    if (!sessionCode || typeof window === "undefined") return;
+    if (typeof window === "undefined" || !sessionCode) return;
     setJoinUrl(`${window.location.origin}/play/${sessionCode}`);
   }, [sessionCode]);
 
+  // --- Synchronisation temps réel avec Supabase (session + joueurs) ---
   useEffect(() => {
     if (!supabase || !sessionCode) return;
 
     let isMounted = true;
+    let activeSessionId: string | null = null;
     let playersChannel: ReturnType<typeof supabase.channel> | null = null;
-    const isSalonHub = sessionCode === HUB_ALIAS_CODE;
-
-    const redirectToActiveSessionIfNeeded = (candidate: GameSession | null) => {
-      if (!isMounted || !isSalonHub || !candidate?.code) return;
-      const targetCode = candidate.code.toUpperCase();
-      if (!targetCode || targetCode === HUB_ALIAS_CODE) return;
-      if (candidate.status === "lobby" || candidate.status === "playing") {
-        router.replace(`/tv/${targetCode}`);
-      }
-    };
 
     const loadGameTitle = async (gameId: string | null | undefined) => {
-      if (!gameId) {
-        if (isMounted) setGameTitle("En attente d'un jeu");
-        return;
-      }
+      if (!gameId) return;
       const { data } = await supabase
         .from("games")
         .select("title")
@@ -54,10 +60,11 @@ export default function TvLobbyPage() {
         .maybeSingle<{ title?: string | null }>();
 
       if (!isMounted) return;
-      setGameTitle(data?.title || "Jeu sélectionné");
+      if (data?.title) setGameTitle(data.title);
     };
 
-    const loadPlayers = async (targetSessionId: string) => {
+    const loadPlayers = async (targetSessionId: string | null) => {
+      if (!targetSessionId) return;
       const { data } = await supabase
         .from("session_players")
         .select("*")
@@ -68,57 +75,66 @@ export default function TvLobbyPage() {
       setPlayers((data as SessionPlayer[] | null) ?? []);
     };
 
-    const bindSession = (targetSession: GameSession) => {
-      if (playersChannel) {
-        void supabase.removeChannel(playersChannel);
-      }
-
-      void loadPlayers(targetSession.id);
-      void loadGameTitle(targetSession.game_id);
-
-      playersChannel = supabase
-        .channel(`tv-lobby-players-${targetSession.id}`)
-        .on(
-          "postgres_changes",
-          {
-            event: "*",
-            schema: "public",
-            table: "session_players",
-            filter: `session_id=eq.${targetSession.id}`,
-          },
-          () => {
-            void loadPlayers(targetSession.id);
-          }
-        )
-        .subscribe();
-    };
-
-    const fetchInitial = async () => {
-      if (isSalonHub) {
-        const { data: activeList } = await supabase
-          .from("game_sessions")
-          .select("*")
-          .in("status", ["lobby", "playing"])
-          .order("updated_at", { ascending: false })
-          .limit(5);
-
-        const activeSession = ((activeList as GameSession[] | null) ?? []).find(
-          (row) => (row.code ?? "").toUpperCase() !== HUB_ALIAS_CODE
-        );
-
-        if (activeSession) {
-          redirectToActiveSessionIfNeeded(activeSession);
-          return;
-        }
-      }
-
+    const refreshSessionRow = async () => {
       const { data } = await supabase
         .from("game_sessions")
         .select("*")
         .eq("code", sessionCode)
         .order("updated_at", { ascending: false })
         .limit(1)
-        .maybeSingle<GameSession>();
+        .maybeSingle<ExtendedSession>();
+
+      if (!isMounted || !data) return;
+      setSession(data);
+      if (data.id) {
+        activeSessionId = data.id;
+        void loadPlayers(data.id);
+      }
+      if (data.game_id) {
+        void loadGameTitle(data.game_id);
+      }
+    };
+
+    const bindSession = (targetSession: ExtendedSession) => {
+      void loadPlayers(targetSession.id);
+      void loadGameTitle(targetSession.game_id);
+
+      if (activeSessionId === targetSession.id && playersChannel) {
+        return;
+      }
+
+      activeSessionId = targetSession.id;
+
+      if (playersChannel) {
+        void supabase.removeChannel(playersChannel);
+      }
+
+      playersChannel = supabase
+        .channel(`tv-lobby-players-${targetSession.id}-${Date.now()}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "session_players",
+          },
+          () => {
+            if (!isMounted) return;
+            void loadPlayers(targetSession.id);
+            void refreshSessionRow();
+          }
+        )
+        .subscribe();
+    };
+
+    const fetchInitial = async () => {
+      const { data } = await supabase
+        .from("game_sessions")
+        .select("*")
+        .eq("code", sessionCode)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<ExtendedSession>();
 
       if (!isMounted) return;
       if (data) {
@@ -129,91 +145,95 @@ export default function TvLobbyPage() {
 
     void fetchInitial();
 
-    const sessionChannel = isSalonHub
-      ? supabase
-          .channel("tv-hub-all-sessions")
-          .on(
-            "postgres_changes",
-            {
-              event: "*",
-              schema: "public",
-              table: "game_sessions",
-            },
-            (payload) => {
-              if (!isMounted) return;
-              const nextRow = payload.new as GameSession | null;
-              if (!nextRow) return;
-              if ((nextRow.code ?? "").toUpperCase() === HUB_ALIAS_CODE) {
-                setSession(nextRow);
-                bindSession(nextRow);
-                return;
-              }
-              redirectToActiveSessionIfNeeded(nextRow);
-            }
-          )
-          .subscribe()
-      : supabase
-          .channel(`tv-lobby-session-${sessionCode}`)
-          .on(
-            "postgres_changes",
-            {
-              event: "*",
-              schema: "public",
-              table: "game_sessions",
-              filter: `code=eq.${sessionCode}`,
-            },
-            (payload) => {
-              if (!isMounted) return;
-              const nextRow = payload.new as GameSession | null;
-              if (!nextRow) return;
-              setSession(nextRow);
-              bindSession(nextRow);
-            }
-          )
-          .subscribe();
+    const sessionChannel = supabase
+      .channel(`tv-lobby-session-${sessionCode}-${Date.now()}`)
+      .on(
+        "postgres_changes",
+        {
+          event: "*",
+          schema: "public",
+          table: "game_sessions",
+          filter: `code=eq.${sessionCode}`,
+        },
+        (payload) => {
+          if (!isMounted) return;
+          const nextRow = payload.new as ExtendedSession | null;
+          if (!nextRow) {
+            void refreshSessionRow();
+            return;
+          }
+          setSession(nextRow);
+          bindSession(nextRow);
+        }
+      )
+      .subscribe();
+
+    const syncInterval = window.setInterval(() => {
+      if (!isMounted) return;
+      void refreshSessionRow();
+      if (activeSessionId) {
+        void loadPlayers(activeSessionId);
+      }
+    }, 1500);
 
     return () => {
       isMounted = false;
+      window.clearInterval(syncInterval);
       void supabase.removeChannel(sessionChannel);
       if (playersChannel) {
         void supabase.removeChannel(playersChannel);
       }
     };
-  }, [supabase, sessionCode, router]);
+  }, [supabase, sessionCode]);
 
+  // --- Redirection vers une nouvelle salle ou vers l'écran quiz ---
   useEffect(() => {
-    if (!session || !sessionCode || sessionCode === HUB_ALIAS_CODE) return;
+    if (!session || !sessionCode) return;
 
-    const isQuizPlaying =
-      session.game_id === GRAND_QUIZ_GAME_ID && session.status === "playing";
+    const replacementCode = (
+      session.game_state?.nextSessionCode ||
+      session.game_state?.replacedByCode ||
+      ""
+    )
+      .trim()
+      .toUpperCase();
 
-    if (isQuizPlaying) {
+    if (replacementCode && replacementCode !== sessionCode) {
+      router.replace(`/tv/${replacementCode}`);
+      return;
+    }
+
+    const status = String(session.status ?? "").toLowerCase();
+    if (status === "playing" || status === "paused") {
       router.replace(`/tv/${sessionCode}/quiz`);
     }
   }, [session, sessionCode, router]);
 
-  const showQr =
-    (session as (GameSession & { show_qr?: boolean }) | null)?.show_qr ??
-    true;
-  const roundStatus = session?.status ?? "lobby";
-  const currentRound = session?.current_round ?? 1;
-  const qrImageUrl = joinUrl
-    ? `https://api.qrserver.com/v1/create-qr-code/?size=320x320&margin=12&data=${encodeURIComponent(
-        joinUrl
-      )}`
-    : "";
+  // --- Statut affiché (par défaut LOBBY pour une nouvelle salle) ---
+  const displayStatus = useMemo(() => {
+    const raw = String(session?.status ?? "lobby").toLowerCase();
+    if (!raw || raw === "finished" || raw === "ended" || raw === "completed") {
+      return "LOBBY";
+    }
+    return raw.toUpperCase();
+  }, [session?.status]);
 
+  const showQr = session?.show_qr !== false;
+
+  // ==========================================================================
+  // 3. RENDU VISUEL DU LOBBY TV (JSX)
+  // ==========================================================================
   return (
-    <div className="h-[100dvh] w-screen overflow-hidden bg-tvos-bg text-white px-10 py-8 flex flex-col justify-between select-none">
-      {/* En-tête grand format */}
-      <header className="flex items-center justify-between border-b border-white/15 pb-6 shrink-0">
+    <div className="min-h-[100dvh] w-screen overflow-hidden bg-neutral-950 text-white px-8 py-6 flex flex-col justify-between select-none">
+      {/* ================= EN-TÊTE (Titre du jeu, Statut, Code Salle) ================= */}
+      <header className="flex items-center justify-between border-b border-white/15 pb-4 shrink-0 gap-6">
         <div className="flex items-center gap-4 min-w-0">
           <div className="w-14 h-14 rounded-2xl bg-amber-400/15 border border-amber-400/35 flex items-center justify-center shrink-0">
             <Tv className="w-8 h-8 text-amber-400" />
           </div>
           <div className="min-w-0">
-            <div className="text-sm uppercase tracking-[0.22em] text-neutral-400 font-bold">
-              Écran TV • Manche {currentRound}
+            <div className="text-xs xl:text-sm uppercase tracking-[0.2em] text-amber-300 font-extrabold">
+              Écran TV
             </div>
             <h1 className="text-3xl xl:text-4xl font-black tracking-tight truncate">
               {gameTitle}
@@ -221,48 +241,38 @@ export default function TvLobbyPage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-5 shrink-0">
-          <span className="px-5 py-2.5 rounded-2xl bg-white/10 border border-white/15 text-base font-extrabold uppercase tracking-wider">
-            {roundStatus}
+        <div className="flex items-center gap-4 shrink-0">
+          <span className="px-4 py-1.5 rounded-xl bg-white/10 border border-white/15 text-sm font-black uppercase tracking-widest text-neutral-200">
+            {displayStatus}
           </span>
-          <div className="px-6 py-3 rounded-2xl bg-amber-400/15 border-2 border-amber-400/40 text-amber-300 font-mono text-4xl font-black tracking-[0.2em]">
+          <div className="px-6 py-2.5 rounded-2xl bg-amber-400/15 border-2 border-amber-400/45 text-amber-300 font-mono text-3xl xl:text-4xl font-black tracking-[0.2em]">
             {sessionCode || "----"}
           </div>
         </div>
       </header>
 
-      {/* Corps principal sur 100dvh */}
-      <main className="flex-1 min-h-0 grid grid-cols-12 gap-8 py-7">
-        {/* Joueurs connectés */}
-        <section className="col-span-7 bg-white/[0.06] border border-white/15 rounded-[2rem] p-7 flex flex-col gap-5 min-h-0">
+      {/* ================= CORPS PRINCIPAL (Joueurs connectés + QR Code) ================= */}
+      <main className="flex-1 min-h-0 grid grid-cols-12 gap-7 py-6">
+        {/* Colonne gauche : Joueurs connectés */}
+        <section className="col-span-7 bg-white/[0.05] border border-white/15 rounded-[2rem] p-7 flex flex-col gap-5 min-h-0">
           <div className="flex items-center justify-between shrink-0">
             <div className="flex items-center gap-3 text-2xl xl:text-3xl font-black">
-              <Users className="w-7 h-7 text-amber-400" />
+              <Users className="w-8 h-8 text-amber-400" />
               <span>Joueurs connectés ({players.length})</span>
             </div>
-            <span className="text-lg text-neutral-300">
-              Code :{" "}
-              <strong className="font-mono text-2xl text-amber-300 font-black">
-                {sessionCode}
-              </strong>
+            <span className="text-lg font-mono font-bold text-neutral-400">
+              Code : {sessionCode}
             </span>
           </div>
 
           {players.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center text-center text-2xl text-neutral-400 font-medium px-6">
+            <div className="flex-1 flex items-center justify-center text-2xl text-neutral-400 font-semibold text-center px-6">
               En attente des joueurs sur leur téléphone...
             </div>
           ) : (
-            <div className="grid grid-cols-2 xl:grid-cols-3 gap-4 overflow-y-auto pr-1 content-start">
+            <div className="grid grid-cols-2 gap-4 overflow-y-auto pr-1">
               {players.map((player) => {
                 const pColor = getUniquePlayerColor(player.id, players);
-                const playerExtra = player as SessionPlayer & {
-                  avatarId?: string;
-                  avatar_id?: string;
-                };
-                const avatarDisplay =
-                  playerExtra.avatarId || playerExtra.avatar_id || "🎮";
-
                 return (
                   <div
                     key={player.id}
@@ -271,13 +281,13 @@ export default function TvLobbyPage() {
                       borderColor: pColor.borderHex,
                       color: pColor.textHex,
                     }}
-                    className="rounded-3xl border-2 p-4 flex items-center gap-4 shadow-lg"
+                    className="rounded-3xl border-2 px-5 py-4 flex items-center gap-4 shadow-lg"
                   >
                     <span
                       style={{ backgroundColor: pColor.badgeBgHex }}
-                      className="w-14 h-14 rounded-2xl flex items-center justify-center text-3xl shrink-0"
+                      className="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0"
                     >
-                      {avatarDisplay}
+                      {player.avatar ?? "🎮"}
                     </span>
                     <span className="font-black text-2xl truncate">
                       {player.nickname}
@@ -289,43 +299,37 @@ export default function TvLobbyPage() {
           )}
         </section>
 
-        {/* QR code ou état prêt */}
-        <section className="col-span-5 bg-white/[0.06] border border-white/15 rounded-[2rem] p-7 flex flex-col items-center justify-center text-center gap-5 min-h-0">
-          {showQr && qrImageUrl ? (
+        {/* Colonne droite : QR Code de connexion */}
+        <aside className="col-span-5 bg-white/[0.05] border border-white/15 rounded-[2rem] p-7 flex flex-col items-center justify-center text-center gap-5 min-h-0">
+          {showQr && joinUrl ? (
             <>
-              <div className="p-4 rounded-[2rem] bg-white shadow-2xl shrink-0">
-                <img
-                  src={qrImageUrl}
-                  alt={`QR Code salle ${sessionCode}`}
-                  className="w-52 h-52 xl:w-60 xl:h-60 rounded-2xl block"
-                />
+              <div className="bg-white p-5 rounded-3xl shadow-2xl">
+                <QRCodeSVG value={joinUrl} size={210} />
               </div>
-              <div className="text-3xl font-black">Rejoindre la partie</div>
-              <p className="text-xl text-neutral-300 max-w-md leading-snug">
-                Scanne le QR code ou entre le code{" "}
-                <span className="font-mono font-black text-2xl text-amber-300">
-                  {sessionCode}
-                </span>
-              </p>
+              <div className="space-y-1.5">
+                <h2 className="text-2xl xl:text-3xl font-black">
+                  Rejoindre la partie
+                </h2>
+                <p className="text-base xl:text-lg text-neutral-300">
+                  Scanne le QR code ou entre le code{" "}
+                  <span className="font-mono font-black text-amber-300">
+                    {sessionCode}
+                  </span>
+                </p>
+              </div>
             </>
           ) : (
-            <>
-              <Play className="w-16 h-16 text-amber-400" />
-              <div className="text-3xl font-black">Prêt à démarrer</div>
-              <p className="text-xl text-neutral-300 max-w-sm">
-                L&apos;animateur contrôle le lancement de la partie.
-              </p>
-            </>
+            <p className="text-xl text-neutral-400 font-semibold">
+              QR code masqué par l&apos;animateur
+            </p>
           )}
-        </section>
+        </aside>
       </main>
 
-      {/* Pied de page sobre */}
-      <footer className="text-base text-neutral-400 flex items-center justify-between pt-4 border-t border-white/10 shrink-0">
-        <span className="font-semibold">tvOS Party</span>
-        <span className="font-mono font-bold text-neutral-300">
-          Salle {sessionCode || "----"}
-        </span>
+      {/* ================= PIED DE PAGE ================= */}
+      <footer className="flex items-center justify-between text-sm text-neutral-400 border-t border-white/10 pt-3 shrink-0">
+        <span>tvOS Party</span>
+        <span className="font-mono">Salle {sessionCode}</span>
       </footer>
     </div>
   );
