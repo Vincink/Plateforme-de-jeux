@@ -54,6 +54,8 @@ interface QuizStatePayload {
   pausedRemainingSeconds?: number | null;
   seriesNumber?: number;
   seriesSeed?: string;
+  nextSessionCode?: string;
+  replacedByCode?: string;
   answers?: Record<string, AnswerLetter | string>;
   revealed?: boolean;
   showAnswers?: boolean;
@@ -193,7 +195,6 @@ function pickRandomQuestionsSeries(
     return freshQuestions.slice(0, targetCount);
   }
 
-  // Complète avec les questions restantes si le pool non encore joué est plus petit que 15
   const alreadySeen = shuffled.filter((item, idx) => {
     const k = getQuestionUniqueKey(item, idx);
     return excludedKeys.has(k);
@@ -307,6 +308,11 @@ export default function TvQuizPage() {
   // Garde en mémoire les questions déjà jouées lors des séries précédentes
   const usedQuestionKeysRef = useRef<Set<string>>(new Set());
   const lastRecordedSeriesKeyRef = useRef<string>("");
+  const cachedSeriesRef = useRef<{
+    signature: string;
+    items: QuizQuestionItem[];
+  } | null>(null);
+  const lastTimerResetKeyRef = useRef<string>("");
 
   // --- Synchronisation temps réel avec Supabase (session + joueurs) ---
   useEffect(() => {
@@ -350,7 +356,20 @@ export default function TvQuizPage() {
         .maybeSingle<ExtendedSession>();
 
       if (!isMounted || !data) return;
-      setSession(data);
+      setSession((prev) => {
+        if (
+          prev &&
+          prev.id === data.id &&
+          prev.status === data.status &&
+          prev.updated_at === data.updated_at &&
+          JSON.stringify(prev.game_state ?? null) ===
+            JSON.stringify(data.game_state ?? null)
+        ) {
+          return prev;
+        }
+        return data;
+      });
+
       if (data.id) {
         activeSessionId = data.id;
         void loadPlayers(data.id);
@@ -439,7 +458,7 @@ export default function TvQuizPage() {
       if (activeSessionId) {
         void loadPlayers(activeSessionId);
       }
-    }, 1000);
+    }, 1500);
 
     return () => {
       isMounted = false;
@@ -451,9 +470,32 @@ export default function TvQuizPage() {
     };
   }, [supabase, sessionCode]);
 
-  // --- Redirection automatique vers le lobby si la partie est terminée/réinitialisée ---
+  // --- Extraction de l'état du quiz et redirection si nouvelle salle créée ---
+  const quizState = useMemo<QuizStatePayload>(() => {
+    return (
+      session?.game_state ||
+      session?.quiz_state ||
+      session?.state ||
+      {}
+    );
+  }, [session]);
+
   useEffect(() => {
     if (!session || !sessionCode) return;
+
+    const replacementCode = (
+      quizState.nextSessionCode ||
+      quizState.replacedByCode ||
+      ""
+    )
+      .trim()
+      .toUpperCase();
+
+    if (replacementCode && replacementCode !== sessionCode) {
+      router.replace(`/tv/${replacementCode}/quiz`);
+      return;
+    }
+
     const status = String(session.status ?? "").toLowerCase();
     if (
       status === "lobby" ||
@@ -463,17 +505,7 @@ export default function TvQuizPage() {
     ) {
       router.replace(`/tv/${sessionCode}`);
     }
-  }, [session, sessionCode, router]);
-
-  // --- Extraction de l'état du quiz et de la série de 15 questions ---
-  const quizState = useMemo<QuizStatePayload>(() => {
-    return (
-      session?.game_state ||
-      session?.quiz_state ||
-      session?.state ||
-      {}
-    );
-  }, [session]);
+  }, [session, sessionCode, quizState, router]);
 
   const seriesNumber = useMemo<number>(() => {
     return Math.max(1, toFiniteNumber(quizState.seriesNumber) ?? 1);
@@ -506,10 +538,17 @@ export default function TvQuizPage() {
     return QUESTIONS as QuizQuestion[];
   }, [quizState, session]);
 
+  // Mémorise la série de 15 questions pour la signature courante afin qu'elle reste stable
   const questions = useMemo<QuizQuestionItem[]>(() => {
     const signature = `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`;
+    if (
+      cachedSeriesRef.current &&
+      cachedSeriesRef.current.signature === signature
+    ) {
+      return cachedSeriesRef.current.items;
+    }
+
     if (lastRecordedSeriesKeyRef.current !== signature) {
-      // Si une nouvelle série démarre, on marque les questions de la précédente comme utilisées
       lastRecordedSeriesKeyRef.current = signature;
     }
 
@@ -520,8 +559,6 @@ export default function TvQuizPage() {
       usedQuestionKeysRef.current
     );
 
-    // Si on a assez de questions dans le catalogue pour ne pas répéter la série précédente,
-    // on enregistre les clés de cette série pour la prochaine relance
     if (sourceQuestions.length > QUESTIONS_PER_GAME) {
       if (
         usedQuestionKeysRef.current.size + picked.length >=
@@ -534,6 +571,7 @@ export default function TvQuizPage() {
       });
     }
 
+    cachedSeriesRef.current = { signature, items: picked };
     return picked;
   }, [sourceQuestions, session?.id, sessionCode, seriesNumber, seriesSeed]);
 
@@ -606,13 +644,21 @@ export default function TvQuizPage() {
     return Math.max(1, Math.round(rawDuration));
   }, [quizState]);
 
-  // Réinitialise l'heure de départ quand la question ou la série change
+  // Réinitialise le chrono uniquement quand la question ou la série change réellement
   useEffect(() => {
     if (activeQuestionIndex === null || !currentQuestion) {
+      lastTimerResetKeyRef.current = "";
       setLocalQuestionStartMs(null);
       setFrozenRemainingSeconds(null);
       return;
     }
+
+    const resetKey = `${seriesNumber}-${seriesSeed}-${activeQuestionIndex}-${remoteStartMs ?? ""}`;
+    if (lastTimerResetKeyRef.current === resetKey) {
+      return;
+    }
+    lastTimerResetKeyRef.current = resetKey;
+
     const startStamp = remoteStartMs ?? Date.now();
     setLocalQuestionStartMs(startStamp);
     setFrozenRemainingSeconds(null);
@@ -662,7 +708,7 @@ export default function TvQuizPage() {
     if (activeQuestionIndex === null || !currentQuestion || isPaused) return;
     const interval = window.setInterval(() => {
       setNowMs(Date.now());
-    }, 200);
+    }, 250);
     return () => {
       window.clearInterval(interval);
     };
