@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   Gamepad2,
@@ -192,12 +192,27 @@ export default function PlayerControllerPage() {
   const [submittedQuestionKey, setSubmittedQuestionKey] = useState<
     string | null
   >(null);
-  const [selectedChoiceLetter, setSelectedChoiceLetter] = useState<
+  const [highlightedChoiceLetter, setHighlightedChoiceLetter] = useState<
     string | null
   >(null);
   const [isConnected, setIsConnected] = useState<boolean>(true);
   const [isJoining, setIsJoining] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>("");
+
+  const highlightTimeoutRef = useRef<number | null>(null);
+
+  const clearHighlightTimer = () => {
+    if (highlightTimeoutRef.current !== null) {
+      window.clearTimeout(highlightTimeoutRef.current);
+      highlightTimeoutRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      clearHighlightTimer();
+    };
+  }, []);
 
   useEffect(() => {
     if (!sessionCode) return;
@@ -274,8 +289,9 @@ export default function PlayerControllerPage() {
   ]);
 
   useEffect(() => {
+    clearHighlightTimer();
     setSubmittedQuestionKey(null);
-    setSelectedChoiceLetter(null);
+    setHighlightedChoiceLetter(null);
     setAnswerInput("");
     setStatusMessage("");
   }, [activeGameId, currentQuestionKey]);
@@ -731,8 +747,16 @@ export default function PlayerControllerPage() {
       }
     }
 
+    clearHighlightTimer();
     setSubmittedQuestionKey(currentQuestionKey);
-    setSelectedChoiceLetter(directChoice?.letter ?? null);
+    setHighlightedChoiceLetter(directChoice?.letter ?? null);
+    if (directChoice?.letter) {
+      highlightTimeoutRef.current = window.setTimeout(() => {
+        setHighlightedChoiceLetter(null);
+        highlightTimeoutRef.current = null;
+      }, 1000);
+    }
+
     setStatusMessage(
       directChoice
         ? `Choix ${directChoice.letter} envoyé !`
@@ -861,7 +885,8 @@ export default function PlayerControllerPage() {
               ) : parsedOptions.length > 0 ? (
                 <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-4 min-h-[300px]">
                   {qcmChoices.map((choice) => {
-                    const isChosen = selectedChoiceLetter === choice.letter;
+                    const isHighlighted =
+                      highlightedChoiceLetter === choice.letter;
                     return (
                       <button
                         key={choice.letter}
@@ -875,13 +900,13 @@ export default function PlayerControllerPage() {
                         }
                         style={{
                           backgroundColor: choice.bgHex,
-                          borderColor: isChosen ? "#ffffff" : choice.borderHex,
+                          borderColor: isHighlighted
+                            ? "#ffffff"
+                            : choice.borderHex,
                           color: choice.textHex,
                         }}
-                        className={`h-full min-h-[140px] rounded-3xl border-4 flex items-center justify-center text-6xl font-black tracking-tight shadow-xl active:scale-95 transition ${
-                          alreadySubmittedThisQuestion && !isChosen
-                            ? "opacity-35"
-                            : "opacity-100"
+                        className={`h-full min-h-[140px] rounded-3xl border-4 flex items-center justify-center text-6xl font-black tracking-tight shadow-xl active:scale-95 transition-all duration-300 ${
+                          isHighlighted ? "scale-105" : "scale-100"
                         }`}
                       >
                         {choice.letter}
