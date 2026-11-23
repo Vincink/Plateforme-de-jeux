@@ -260,7 +260,6 @@ export default function PlayerControllerPage() {
   const [remainingSeconds, setRemainingSeconds] = useState<number>(
     DEFAULT_QUESTION_DURATION_SECONDS
   );
-  const [hadActiveRound, setHadActiveRound] = useState<boolean>(false);
   const [isConnected, setIsConnected] = useState<boolean>(true);
   const [isJoining, setIsJoining] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>("");
@@ -280,13 +279,13 @@ export default function PlayerControllerPage() {
 
     const clampedScore = Math.max(0, nextScore);
 
-    const { data: existingRows, error: selectErr } = await supabase
+    const { data: existingRows } = await supabase
       .from("player_scores")
       .select("id, total_score")
       .eq("session_id", targetSessionId)
       .eq("player_id", targetIdentity.playerId);
 
-    if (!selectErr && Array.isArray(existingRows) && existingRows.length > 0) {
+    if (Array.isArray(existingRows) && existingRows.length > 0) {
       const targetId = (existingRows[0] as { id: string }).id;
       await supabase
         .from("player_scores")
@@ -299,7 +298,7 @@ export default function PlayerControllerPage() {
       return;
     }
 
-    const { error: upsertErr } = await supabase.from("player_scores").upsert(
+    await supabase.from("player_scores").upsert(
       {
         session_id: targetSessionId,
         player_id: targetIdentity.playerId,
@@ -309,16 +308,6 @@ export default function PlayerControllerPage() {
       },
       { onConflict: "session_id,player_id" }
     );
-
-    if (upsertErr) {
-      await supabase.from("player_scores").insert({
-        session_id: targetSessionId,
-        player_id: targetIdentity.playerId,
-        nickname: targetIdentity.nickname,
-        avatar_id: targetIdentity.avatarId,
-        total_score: clampedScore,
-      });
-    }
   };
 
   const clearHighlightTimer = () => {
@@ -441,17 +430,11 @@ export default function PlayerControllerPage() {
     const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
     const seriesSeed =
       typeof quizState.seriesSeed === "string" ? quizState.seriesSeed : "";
-    const startedAt =
-      quizState.questionStartedAt !== undefined &&
-      quizState.questionStartedAt !== null
-        ? String(quizState.questionStartedAt)
-        : "";
-    return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${startedAt}`;
+    return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}`;
   }, [
     activeQuestionIndex,
     quizState.seriesNumber,
     quizState.seriesSeed,
-    quizState.questionStartedAt,
     session?.id,
     sessionCode,
   ]);
@@ -461,30 +444,35 @@ export default function PlayerControllerPage() {
     setSubmittedQuestionKey(null);
     setSubmittedChoiceLetter(null);
     setHighlightedChoiceLetter(null);
-    setHadActiveRound(false);
+    setRemainingSeconds(
+      typeof quizState.durationSeconds === "number" &&
+        quizState.durationSeconds > 0
+        ? quizState.durationSeconds
+        : DEFAULT_QUESTION_DURATION_SECONDS
+    );
     setStatusMessage("");
-  }, [activeGameId, currentQuestionKey]);
+  }, [activeGameId, currentQuestionKey, quizState.durationSeconds]);
 
   useEffect(() => {
-    const updateTimer = () => {
-      const nextRemaining = computeRemainingSeconds(quizState, Date.now());
-      setRemainingSeconds(nextRemaining);
-      if (roundStatus === "playing" && nextRemaining > 0) {
-        setHadActiveRound(true);
-      }
-    };
-
-    updateTimer();
-
-    if (activeQuestionIndex === null) {
+    if (
+      activeQuestionIndex === null ||
+      roundStatus !== "playing" ||
+      quizState.revealed
+    ) {
       return;
     }
 
+    const updateTimer = () => {
+      setRemainingSeconds(computeRemainingSeconds(quizState, Date.now()));
+    };
+
+    updateTimer();
     const intervalId = window.setInterval(updateTimer, 200);
     return () => window.clearInterval(intervalId);
   }, [
     activeQuestionIndex,
     roundStatus,
+    quizState.revealed,
     quizState.questionStartedAt,
     quizState.durationSeconds,
     quizState.isPaused,
@@ -527,7 +515,8 @@ export default function PlayerControllerPage() {
             const match = rows.find((r) => r.player_id === parsed.playerId);
             if (match) {
               const dbScore = extractScoreValue(match);
-              setLocalScore((prev) => Math.max(prev, dbScore));
+              setLocalScore(dbScore);
+              localScoreRef.current = dbScore;
             }
           }
         } catch {
@@ -546,6 +535,7 @@ export default function PlayerControllerPage() {
             localStorage.removeItem(`player_identity_${sessionCode}`);
             setIdentity(null);
             setLocalScore(0);
+            localScoreRef.current = 0;
             setStatusMessage("Tu as été exclu de la partie.");
           }
         }
@@ -674,6 +664,7 @@ export default function PlayerControllerPage() {
     submittedQuestionKey === currentQuestionKey;
   const isTimerExpired =
     activeQuestionIndex !== null &&
+    roundStatus === "playing" &&
     (remainingSeconds <= 0 || Boolean(quizState.revealed));
   const isPlaying = roundStatus === "playing" && !isTimerExpired;
 
@@ -720,13 +711,7 @@ export default function PlayerControllerPage() {
   );
 
   useEffect(() => {
-    if (
-      !identity ||
-      !currentQuestionKey ||
-      !activeQuestion ||
-      !isTimerExpired ||
-      !hadActiveRound
-    ) {
+    if (!identity || !currentQuestionKey || !activeQuestion || !isTimerExpired) {
       return;
     }
 
@@ -797,7 +782,6 @@ export default function PlayerControllerPage() {
     activeQuestion,
     parsedOptions,
     isTimerExpired,
-    hadActiveRound,
     quizState.answers,
     submittedQuestionKey,
     submittedChoiceLetter,
