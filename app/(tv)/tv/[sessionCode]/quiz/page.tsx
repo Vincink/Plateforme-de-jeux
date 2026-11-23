@@ -1,145 +1,98 @@
 "use client";
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
-import { Check, Clock, Trophy, Tv } from "lucide-react";
+import { useParams } from "next/navigation";
+import {
+  Gamepad2,
+  Trophy,
+  Wifi,
+  WifiOff,
+  Send,
+  Sparkles,
+} from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
-import { getUniquePlayerColor } from "@/lib/colorsplayer";
-import { QUESTIONS, type QuizQuestion } from "@/lib/questions";
-import type { GameSession, SessionPlayer } from "@/types/game.types";
+import {
+  getNextAvailableColorIndex,
+  getUniquePlayerColor,
+} from "@/lib/colorsplayer";
+import type {
+  GameSession,
+  PlayerScore,
+  SessionPlayer,
+} from "@/types/game.types";
 
-// ============================================================================
-// 1. TYPES ET CONSTANTES DU QUIZ
-// ============================================================================
+interface PlayerIdentity {
+  playerId: string;
+  playerToken: string;
+  nickname: string;
+  avatarId: string;
+  avatar: string;
+}
 
-type AnswerLetter = "A" | "B" | "C" | "D";
-
-interface QuizQuestionItem {
+interface QuizQuestionPayload {
   id?: string | number;
   question?: string;
   prompt?: string;
   title?: string;
   text?: string;
-  options?: string[] | Partial<Record<AnswerLetter, string>>;
-  choices?: string[] | Partial<Record<AnswerLetter, string>>;
-  answers?: string[] | Partial<Record<AnswerLetter, string>>;
-  correct?: AnswerLetter | string;
+  options?: string[] | Record<string, string>;
+  choices?: string[] | Record<string, string>;
+  answers?: string[] | Record<string, string>;
+  correct?: string | number;
   correctIndex?: number;
   correct_index?: number;
-  correctAnswer?: AnswerLetter | string;
-  correct_answer?: AnswerLetter | string;
+  correctAnswer?: string | number;
+  correct_answer?: string | number;
+  points?: number;
 }
 
-interface QuizStatePayload {
-  questions?: QuizQuestionItem[];
-  quizQuestions?: QuizQuestionItem[];
-  items?: QuizQuestionItem[];
-  currentQuestion?: QuizQuestionItem | null;
-  activeQuestion?: QuizQuestionItem | null;
+interface QuizGameState {
   questionStarted?: boolean;
-  question_started?: boolean;
   roundTriggered?: boolean;
-  round_triggered?: boolean;
   questionIndex?: number | null;
-  question_index?: number | null;
   currentQuestionIndex?: number | null;
-  current_question_index?: number | null;
   questionStartedAt?: string | number | null;
-  question_started_at?: string | number | null;
-  roundStartedAt?: string | number | null;
-  round_started_at?: string | number | null;
-  durationSeconds?: number;
-  duration_seconds?: number;
-  isPaused?: boolean;
-  pausedRemainingSeconds?: number | null;
   seriesNumber?: number;
   seriesSeed?: string;
-  nextSessionCode?: string;
-  replacedByCode?: string;
-  answers?: Record<string, AnswerLetter | string>;
+  questions?: QuizQuestionPayload[];
+  currentQuestion?: QuizQuestionPayload | null;
+  answers?: Record<string, string>;
   revealed?: boolean;
-  showAnswers?: boolean;
-  show_answers?: boolean;
-  scores?: Record<string, number | string>;
-  points?: Record<string, number | string>;
-  pointsMap?: Record<string, number | string>;
-  playerScores?: Record<string, number | string>;
-  player_scores?: Record<string, number | string>;
+  [key: string]: unknown;
 }
 
-type ExtendedSession = GameSession & {
-  game_state?: QuizStatePayload | null;
-  state?: QuizStatePayload | null;
-  quiz_state?: QuizStatePayload | null;
-  questions?: QuizQuestionItem[] | null;
-  question_index?: number | null;
-  currentQuestionIndex?: number | null;
-  current_question_index?: number | null;
-  question_started_at?: string | number | null;
-  round_started_at?: string | number | null;
-  scores?: Record<string, number | string> | null;
-  points?: Record<string, number | string> | null;
-  playerScores?: Record<string, number | string> | null;
-  player_scores?: Record<string, number | string> | null;
+type ExtendedGameSession = GameSession & {
+  game_state?: QuizGameState | null;
 };
 
-type ExtendedPlayer = SessionPlayer & {
-  score?: number | string | null;
-  points?: number | string | null;
-  total_score?: number | string | null;
-  totalPoints?: number | string | null;
-  player_id?: string | number | null;
-  user_id?: string | number | null;
-};
-
-// Couleurs des 4 cases de réponses (A, B, C, D)
-const ANSWER_STYLES: Record<
-  AnswerLetter,
+const CHOICE_STYLES = [
   {
-    bg: string;
-    border: string;
-    badgeBg: string;
-    circleBg: string;
-    circleText: string;
-  }
-> = {
-  A: {
-    bg: "bg-rose-600/90",
-    border: "border-rose-300/70",
-    badgeBg: "bg-rose-950/55 text-rose-100 border-rose-200/40",
-    circleBg: "#E11D48",
-    circleText: "#FFFFFF",
+    letter: "A",
+    bgHex: "#ef4444",
+    borderHex: "#fca5a5",
+    textHex: "#ffffff",
   },
-  B: {
-    bg: "bg-sky-600/90",
-    border: "border-sky-300/70",
-    badgeBg: "bg-sky-950/55 text-sky-100 border-sky-200/40",
-    circleBg: "#0284C7",
-    circleText: "#FFFFFF",
+  {
+    letter: "B",
+    bgHex: "#2563eb",
+    borderHex: "#93c5fd",
+    textHex: "#ffffff",
   },
-  C: {
-    bg: "bg-amber-500/90",
-    border: "border-amber-200/80",
-    badgeBg: "bg-amber-950/55 text-amber-100 border-amber-200/40",
-    circleBg: "#D97706",
-    circleText: "#FFFFFF",
+  {
+    letter: "C",
+    bgHex: "#eab308",
+    borderHex: "#fef08a",
+    textHex: "#111827",
   },
-  D: {
-    bg: "bg-emerald-600/90",
-    border: "border-emerald-300/70",
-    badgeBg: "bg-emerald-950/55 text-emerald-100 border-emerald-200/40",
-    circleBg: "#059669",
-    circleText: "#FFFFFF",
+  {
+    letter: "D",
+    bgHex: "#16a34a",
+    borderHex: "#86efac",
+    textHex: "#ffffff",
   },
-};
+] as const;
 
-const LETTERS: readonly AnswerLetter[] = ["A", "B", "C", "D"];
-const QUESTION_DURATION_SECONDS = 12; // Durée du chrono par question (en secondes)
-const QUESTIONS_PER_GAME = 15; // Nombre de questions tirées aléatoirement par partie
-
-// ============================================================================
-// 2. FONCTIONS UTILITAIRES (Tirage aléatoire, tailles de texte, conversions)
-// ============================================================================
+const LETTERS = ["A", "B", "C", "D"] as const;
 
 function hashStringToSeed(input: string): number {
   let hash = 2166136261;
@@ -169,67 +122,29 @@ function shuffleWithSeed<T>(items: T[], seedKey: string): T[] {
   return copy;
 }
 
-function getQuestionUniqueKey(q: QuizQuestionItem, fallbackIdx: number): string {
-  if (q.id !== undefined && q.id !== null) return `id:${String(q.id)}`;
-  const label = q.question || q.prompt || q.title || q.text || "";
-  return label ? `txt:${label.trim().toLowerCase()}` : `idx:${fallbackIdx}`;
-}
-
-// Sélectionne une série aléatoire de 15 questions différente à chaque relance
-function pickRandomQuestionsSeries(
-  source: QuizQuestionItem[],
-  count: number,
-  seedSignature: string,
-  excludedKeys: ReadonlySet<string> = new Set()
-): QuizQuestionItem[] {
-  if (!Array.isArray(source) || source.length === 0) return [];
-  const targetCount = Math.min(count, source.length);
-  const shuffled = shuffleWithSeed(source, seedSignature);
-
-  const freshQuestions = shuffled.filter((item, idx) => {
-    const k = getQuestionUniqueKey(item, idx);
-    return !excludedKeys.has(k);
-  });
-
-  if (freshQuestions.length >= targetCount) {
-    return freshQuestions.slice(0, targetCount);
+function extractOptions(
+  rawOptions: QuizQuestionPayload["options"]
+): string[] {
+  if (!rawOptions) return [];
+  if (Array.isArray(rawOptions)) {
+    return rawOptions.map((item) => String(item));
   }
-
-  const alreadySeen = shuffled.filter((item, idx) => {
-    const k = getQuestionUniqueKey(item, idx);
-    return excludedKeys.has(k);
-  });
-
-  return [...freshQuestions, ...alreadySeen].slice(0, targetCount);
-}
-
-function toFiniteNumber(raw: unknown): number | null {
-  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-  if (typeof raw === "string" && raw.trim() !== "") {
-    const parsed = Number(raw);
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return null;
-}
-
-function parseTimestampMs(raw: unknown): number | null {
-  if (typeof raw === "number" && Number.isFinite(raw)) {
-    return raw < 1e12 ? raw * 1000 : raw;
-  }
-  if (typeof raw === "string" && raw.trim() !== "") {
-    const asNum = Number(raw);
-    if (Number.isFinite(asNum)) {
-      return asNum < 1e12 ? asNum * 1000 : asNum;
-    }
-    const parsedDate = Date.parse(raw);
-    if (!Number.isNaN(parsedDate)) {
-      return parsedDate;
+  if (typeof rawOptions === "string") {
+    try {
+      const decoded = JSON.parse(rawOptions) as unknown;
+      if (Array.isArray(decoded)) {
+        return decoded.map((item) => String(item));
+      }
+    } catch {
+      return [];
     }
   }
-  return null;
+  return LETTERS.map((letter) => String(rawOptions[letter] ?? "")).filter(
+    Boolean
+  );
 }
 
-function normalizeAnswerLetter(raw: unknown): AnswerLetter | null {
+function normalizeAnswerLetter(raw: unknown): string | null {
   if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw <= 3) {
     return LETTERS[raw] ?? null;
   }
@@ -245,192 +160,243 @@ function normalizeAnswerLetter(raw: unknown): AnswerLetter | null {
   return null;
 }
 
-function extractOptionsList(
-  rawOptions: QuizQuestionItem["options"]
-): string[] {
-  if (!rawOptions) return ["", "", "", ""];
-  if (Array.isArray(rawOptions)) {
-    return [
-      String(rawOptions[0] ?? ""),
-      String(rawOptions[1] ?? ""),
-      String(rawOptions[2] ?? ""),
-      String(rawOptions[3] ?? ""),
-    ];
+function resolveCorrectLetter(
+  question: QuizQuestionPayload | null
+): string | null {
+  if (!question) return null;
+  const rawIdx =
+    typeof question.correctIndex === "number"
+      ? question.correctIndex
+      : typeof question.correct_index === "number"
+      ? question.correct_index
+      : null;
+  if (rawIdx !== null && rawIdx >= 0 && rawIdx <= 3) {
+    return LETTERS[rawIdx] ?? null;
   }
-  return LETTERS.map((letter) => String(rawOptions[letter] ?? ""));
+  return normalizeAnswerLetter(
+    question.correct ?? question.correctAnswer ?? question.correct_answer
+  );
 }
 
-// Adapte la taille du texte d'une réponse pour éviter de couper les mots longs et garder de la marge
-function getOptionFontSize(text: string): string {
-  const trimmed = text.trim();
-  const longestWordLen = trimmed
-    .split(/\s+/)
-    .reduce((max, word) => Math.max(max, word.length), 0);
-  const len = trimmed.length;
-
-  if (longestWordLen >= 13) return "text-lg xl:text-2xl leading-relaxed";
-  if (longestWordLen >= 9) return "text-xl xl:text-3xl leading-relaxed";
-  if (len <= 10) return "text-3xl xl:text-4xl leading-relaxed";
-  if (len <= 22) return "text-2xl xl:text-3xl leading-relaxed";
-  if (len <= 42) return "text-xl xl:text-2xl leading-relaxed";
-  return "text-lg xl:text-xl leading-relaxed";
-}
-
-// Adapte la taille du texte de la question selon sa longueur
-function getQuestionFontSize(text: string): string {
-  const len = text.trim().length;
-  if (len <= 65) return "text-3xl xl:text-5xl leading-tight";
-  if (len <= 120) return "text-2xl xl:text-4xl leading-snug";
-  return "text-xl xl:text-3xl leading-snug";
-}
-
-// ============================================================================
-// 3. COMPOSANT PRINCIPAL DE L'ÉCRAN TV QUIZ
-// ============================================================================
-
-export default function TvQuizPage() {
+export default function PlayerControllerPage() {
   const params = useParams<{ sessionCode: string }>();
-  const router = useRouter();
   const sessionCode = (params?.sessionCode ?? "").toUpperCase();
   const supabase = getSupabaseBrowserClient();
 
-  const [session, setSession] = useState<ExtendedSession | null>(null);
-  const [players, setPlayers] = useState<ExtendedPlayer[]>([]);
-  const [gameTitle, setGameTitle] = useState<string>("Le Grand Quiz");
-  const [nowMs, setNowMs] = useState<number>(() => Date.now());
-  const [localQuestionStartMs, setLocalQuestionStartMs] = useState<
-    number | null
+  const [identity, setIdentity] = useState<PlayerIdentity | null>(null);
+  const [nicknameInput, setNicknameInput] = useState<string>("");
+  const [session, setSession] = useState<ExtendedGameSession | null>(null);
+  const [players, setPlayers] = useState<SessionPlayer[]>([]);
+  const [scores, setScores] = useState<PlayerScore[]>([]);
+  const [answerInput, setAnswerInput] = useState<string>("");
+  const [submittedQuestionKey, setSubmittedQuestionKey] = useState<
+    string | null
   >(null);
-  const [frozenRemainingSeconds, setFrozenRemainingSeconds] = useState<
-    number | null
+  const [highlightedChoiceLetter, setHighlightedChoiceLetter] = useState<
+    string | null
   >(null);
+  const [isConnected, setIsConnected] = useState<boolean>(true);
+  const [isJoining, setIsJoining] = useState<boolean>(false);
+  const [statusMessage, setStatusMessage] = useState<string>("");
 
-  // Garde en mémoire les questions déjà jouées lors des séries précédentes
-  const usedQuestionKeysRef = useRef<Set<string>>(new Set());
-  const lastRecordedSeriesKeyRef = useRef<string>("");
-  const cachedSeriesRef = useRef<{
-    signature: string;
-    items: QuizQuestionItem[];
-  } | null>(null);
-  const lastTimerResetKeyRef = useRef<string>("");
+  const highlightTimeoutRef = useRef<number | null>(null);
 
-  // --- Synchronisation temps réel avec Supabase (session + joueurs) ---
+  const clearHighlightTimer = () => {
+    if (highlightTimeoutRef.current !== null) {
+      window.clearTimeout(highlightTimeoutRef.current);
+      highlightTimeoutRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      clearHighlightTimer();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!sessionCode) return;
+    try {
+      const saved = localStorage.getItem(`player_identity_${sessionCode}`);
+      if (saved) {
+        const parsed = JSON.parse(saved) as Partial<PlayerIdentity>;
+        if (parsed?.playerId && parsed?.nickname) {
+          const restored: PlayerIdentity = {
+            playerId: parsed.playerId,
+            playerToken:
+              parsed.playerToken ??
+              `tok-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            nickname: parsed.nickname,
+            avatarId: parsed.avatarId ?? "gamepad",
+            avatar: parsed.avatar ?? "🎮",
+          };
+          setIdentity(restored);
+          setNicknameInput(restored.nickname);
+        }
+      }
+    } catch {
+      // Ignore storage errors
+    }
+  }, [sessionCode]);
+
+  useEffect(() => {
+    if (!sessionCode) return;
+
+    const handleOnline = () => setIsConnected(true);
+    const handleOffline = () => setIsConnected(false);
+
+    setIsConnected(typeof navigator !== "undefined" ? navigator.onLine : true);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+    };
+  }, [sessionCode]);
+
+  const quizState = session?.game_state ?? {};
+  const activeGameId = session?.game_id ?? null;
+  const roundStatus = session?.status ?? "lobby";
+
+  const activeQuestionIndex = useMemo<number | null>(() => {
+    const rawIdx =
+      quizState.questionIndex ?? quizState.currentQuestionIndex ?? null;
+    if (typeof rawIdx === "number" && Number.isFinite(rawIdx) && rawIdx >= 0) {
+      return Math.floor(rawIdx);
+    }
+    return null;
+  }, [quizState.questionIndex, quizState.currentQuestionIndex]);
+
+  const currentQuestionKey = useMemo<string | null>(() => {
+    if (activeQuestionIndex === null) return null;
+    const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
+    const seriesSeed =
+      typeof quizState.seriesSeed === "string" ? quizState.seriesSeed : "";
+    const startedAt =
+      quizState.questionStartedAt !== undefined &&
+      quizState.questionStartedAt !== null
+        ? String(quizState.questionStartedAt)
+        : "";
+    return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${startedAt}`;
+  }, [
+    activeQuestionIndex,
+    quizState.seriesNumber,
+    quizState.seriesSeed,
+    quizState.questionStartedAt,
+    session?.id,
+    sessionCode,
+  ]);
+
+  useEffect(() => {
+    clearHighlightTimer();
+    setSubmittedQuestionKey(null);
+    setHighlightedChoiceLetter(null);
+    setAnswerInput("");
+    setStatusMessage("");
+  }, [activeGameId, currentQuestionKey]);
+
   useEffect(() => {
     if (!supabase || !sessionCode) return;
 
     let isMounted = true;
-    let activeSessionId: string | null = null;
-    let playersChannel: ReturnType<typeof supabase.channel> | null = null;
+    let childrenChannel: ReturnType<typeof supabase.channel> | null = null;
 
-    const loadGameTitle = async (gameId: string | null | undefined) => {
-      if (!gameId) return;
-      const { data } = await supabase
-        .from("games")
-        .select("title")
-        .eq("id", gameId)
-        .maybeSingle<{ title?: string | null }>();
-
-      if (!isMounted) return;
-      if (data?.title) setGameTitle(data.title);
-    };
-
-    const loadPlayers = async (targetSessionId: string | null) => {
-      if (!targetSessionId) return;
-      const { data } = await supabase
-        .from("session_players")
-        .select("*")
-        .eq("session_id", targetSessionId)
-        .order("id", { ascending: true });
+    const loadPlayersAndScores = async (targetSessionId: string) => {
+      const [{ data: playersData }, { data: scoresData }] = await Promise.all([
+        supabase
+          .from("session_players")
+          .select("*")
+          .eq("session_id", targetSessionId)
+          .order("id", { ascending: true }),
+        supabase
+          .from("player_scores")
+          .select("*")
+          .eq("session_id", targetSessionId),
+      ]);
 
       if (!isMounted) return;
-      setPlayers((data as ExtendedPlayer[] | null) ?? []);
-    };
+      const nextPlayers = (playersData as SessionPlayer[] | null) ?? [];
+      setPlayers(nextPlayers);
 
-    const refreshSessionRow = async () => {
-      const { data } = await supabase
-        .from("game_sessions")
-        .select("*")
-        .eq("code", sessionCode)
-        .order("updated_at", { ascending: false })
-        .limit(1)
-        .maybeSingle<ExtendedSession>();
+      if (scoresData) {
+        setScores(scoresData as PlayerScore[]);
+      }
 
-      if (!isMounted || !data) return;
-      setSession((prev) => {
-        if (
-          prev &&
-          prev.id === data.id &&
-          prev.status === data.status &&
-          prev.updated_at === data.updated_at &&
-          JSON.stringify(prev.game_state ?? null) ===
-            JSON.stringify(data.game_state ?? null)
-        ) {
-          return prev;
+      try {
+        const saved = localStorage.getItem(`player_identity_${sessionCode}`);
+        if (saved) {
+          const parsed = JSON.parse(saved) as Partial<PlayerIdentity>;
+          if (
+            parsed?.playerId &&
+            !nextPlayers.some((p) => p.id === parsed.playerId)
+          ) {
+            localStorage.removeItem(`player_identity_${sessionCode}`);
+            setIdentity(null);
+            setStatusMessage("Tu as été exclu de la partie.");
+          }
         }
-        return data;
-      });
-
-      if (data.id) {
-        activeSessionId = data.id;
-        void loadPlayers(data.id);
-      }
-      if (data.game_id) {
-        void loadGameTitle(data.game_id);
+      } catch {
+        // Ignore storage errors
       }
     };
 
-    const bindSession = (targetSession: ExtendedSession) => {
-      void loadPlayers(targetSession.id);
-      void loadGameTitle(targetSession.game_id);
-
-      if (activeSessionId === targetSession.id && playersChannel) {
-        return;
+    const bindSessionData = (targetSession: ExtendedGameSession) => {
+      if (childrenChannel) {
+        void supabase.removeChannel(childrenChannel);
       }
 
-      activeSessionId = targetSession.id;
+      void loadPlayersAndScores(targetSession.id);
 
-      if (playersChannel) {
-        void supabase.removeChannel(playersChannel);
-      }
-
-      playersChannel = supabase
-        .channel(`tv-quiz-players-${targetSession.id}-${Date.now()}`)
+      childrenChannel = supabase
+        .channel(`play-children-${targetSession.id}`)
         .on(
           "postgres_changes",
           {
             event: "*",
             schema: "public",
             table: "session_players",
+            filter: `session_id=eq.${targetSession.id}`,
           },
           () => {
-            if (!isMounted) return;
-            void loadPlayers(targetSession.id);
-            void refreshSessionRow();
+            void loadPlayersAndScores(targetSession.id);
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "player_scores",
+            filter: `session_id=eq.${targetSession.id}`,
+          },
+          () => {
+            void loadPlayersAndScores(targetSession.id);
           }
         )
         .subscribe();
     };
 
-    const fetchInitial = async () => {
+    const fetchInitialSession = async () => {
       const { data } = await supabase
         .from("game_sessions")
         .select("*")
         .eq("code", sessionCode)
         .order("updated_at", { ascending: false })
         .limit(1)
-        .maybeSingle<ExtendedSession>();
+        .maybeSingle<ExtendedGameSession>();
 
       if (!isMounted) return;
       if (data) {
         setSession(data);
-        bindSession(data);
+        bindSessionData(data);
       }
     };
 
-    void fetchInitial();
+    void fetchInitialSession();
 
     const sessionChannel = supabase
-      .channel(`tv-quiz-session-${sessionCode}-${Date.now()}`)
+      .channel(`play-session-${sessionCode}`)
       .on(
         "postgres_changes",
         {
@@ -441,652 +407,556 @@ export default function TvQuizPage() {
         },
         (payload) => {
           if (!isMounted) return;
-          const nextRow = payload.new as ExtendedSession | null;
-          if (!nextRow) {
-            void refreshSessionRow();
-            return;
-          }
+          const nextRow = payload.new as ExtendedGameSession | null;
+          if (!nextRow) return;
           setSession(nextRow);
-          bindSession(nextRow);
+          bindSessionData(nextRow);
         }
       )
       .subscribe();
 
-    const syncInterval = window.setInterval(() => {
-      if (!isMounted) return;
-      void refreshSessionRow();
-      if (activeSessionId) {
-        void loadPlayers(activeSessionId);
-      }
-    }, 1500);
-
     return () => {
       isMounted = false;
-      window.clearInterval(syncInterval);
       void supabase.removeChannel(sessionChannel);
-      if (playersChannel) {
-        void supabase.removeChannel(playersChannel);
+      if (childrenChannel) {
+        void supabase.removeChannel(childrenChannel);
       }
     };
   }, [supabase, sessionCode]);
 
-  // --- Extraction de l'état du quiz et redirection si nouvelle salle créée ---
-  const quizState = useMemo<QuizStatePayload>(() => {
-    return (
-      session?.game_state ||
-      session?.quiz_state ||
-      session?.state ||
-      {}
-    );
-  }, [session]);
-
-  useEffect(() => {
-    if (!session || !sessionCode) return;
-
-    const replacementCode = (
-      quizState.nextSessionCode ||
-      quizState.replacedByCode ||
-      ""
-    )
-      .trim()
-      .toUpperCase();
-
-    if (replacementCode && replacementCode !== sessionCode) {
-      router.replace(`/tv/${replacementCode}/quiz`);
-      return;
+  const activeQuestion = useMemo<QuizQuestionPayload | null>(() => {
+    if (activeQuestionIndex === null) {
+      return quizState.currentQuestion ?? null;
     }
-
-    const status = String(session.status ?? "").toLowerCase();
-    if (
-      status === "lobby" ||
-      status === "finished" ||
-      status === "ended" ||
-      status === "completed"
-    ) {
-      router.replace(`/tv/${sessionCode}`);
+    const list = Array.isArray(quizState.questions) ? quizState.questions : [];
+    if (list.length > 0) {
+      const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
+      const seriesSeed =
+        typeof quizState.seriesSeed === "string" && quizState.seriesSeed.trim()
+          ? quizState.seriesSeed.trim()
+          : `${session?.id ?? ""}-${sessionCode}-s${seriesNumber}`;
+      const ordered = shuffleWithSeed(
+        list,
+        `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`
+      ).slice(0, Math.min(15, list.length));
+      const safeIdx = Math.min(activeQuestionIndex, ordered.length - 1);
+      return ordered[safeIdx] ?? null;
     }
-  }, [session, sessionCode, quizState, router]);
-
-  const seriesNumber = useMemo<number>(() => {
-    return Math.max(1, toFiniteNumber(quizState.seriesNumber) ?? 1);
-  }, [quizState]);
-
-  const seriesSeed = useMemo<string>(() => {
-    const rawSeed =
-      typeof quizState.seriesSeed === "string" && quizState.seriesSeed.trim()
-        ? quizState.seriesSeed.trim()
-        : "";
-    return rawSeed || `${session?.id ?? ""}-${sessionCode}-s${seriesNumber}`;
-  }, [quizState.seriesSeed, session?.id, sessionCode, seriesNumber]);
-
-  const sourceQuestions = useMemo<QuizQuestionItem[]>(() => {
-    if (Array.isArray(quizState.questions) && quizState.questions.length > 0) {
-      return quizState.questions;
-    }
-    if (
-      Array.isArray(quizState.quizQuestions) &&
-      quizState.quizQuestions.length > 0
-    ) {
-      return quizState.quizQuestions;
-    }
-    if (Array.isArray(quizState.items) && quizState.items.length > 0) {
-      return quizState.items;
-    }
-    if (Array.isArray(session?.questions) && session.questions.length > 0) {
-      return session.questions;
-    }
-    return QUESTIONS as QuizQuestion[];
-  }, [quizState, session]);
-
-  // Mémorise la série de 15 questions pour la signature courante afin qu'elle reste stable
-  const questions = useMemo<QuizQuestionItem[]>(() => {
-    const signature = `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`;
-    if (
-      cachedSeriesRef.current &&
-      cachedSeriesRef.current.signature === signature
-    ) {
-      return cachedSeriesRef.current.items;
-    }
-
-    if (lastRecordedSeriesKeyRef.current !== signature) {
-      lastRecordedSeriesKeyRef.current = signature;
-    }
-
-    const picked = pickRandomQuestionsSeries(
-      sourceQuestions,
-      QUESTIONS_PER_GAME,
-      signature,
-      usedQuestionKeysRef.current
-    );
-
-    if (sourceQuestions.length > QUESTIONS_PER_GAME) {
-      if (
-        usedQuestionKeysRef.current.size + picked.length >=
-        sourceQuestions.length
-      ) {
-        usedQuestionKeysRef.current = new Set();
-      }
-      picked.forEach((item, idx) => {
-        usedQuestionKeysRef.current.add(getQuestionUniqueKey(item, idx));
-      });
-    }
-
-    cachedSeriesRef.current = { signature, items: picked };
-    return picked;
-  }, [sourceQuestions, session?.id, sessionCode, seriesNumber, seriesSeed]);
-
-  // --- Index de la question active ---
-  const activeQuestionIndex = useMemo<number | null>(() => {
-    const explicitIndex =
-      quizState.questionIndex ??
-      quizState.question_index ??
-      quizState.currentQuestionIndex ??
-      quizState.current_question_index ??
-      session?.question_index ??
-      session?.currentQuestionIndex ??
-      session?.current_question_index;
-
-    const hasExplicitFlag = Boolean(
-      quizState.questionStarted ||
-        quizState.question_started ||
-        quizState.roundTriggered ||
-        quizState.round_triggered
-    );
-
-    if (typeof explicitIndex === "number" && Number.isFinite(explicitIndex)) {
-      if (explicitIndex < 0) return null;
-      if (explicitIndex === 0 && !hasExplicitFlag) {
-        const roundVal = session?.current_round ?? 1;
-        return roundVal > 1 ? 0 : null;
-      }
-      return Math.max(0, Math.floor(explicitIndex));
-    }
-
-    if (hasExplicitFlag) {
-      const roundVal = Math.max(1, Number(session?.current_round ?? 1) || 1);
-      return roundVal - 1;
-    }
-
-    return null;
-  }, [quizState, session]);
-
-  const currentQuestion = useMemo<QuizQuestionItem | null>(() => {
-    if (activeQuestionIndex === null) return null;
-    if (questions.length > 0) {
-      const safeIndex = Math.min(activeQuestionIndex, questions.length - 1);
-      return questions[safeIndex] ?? null;
-    }
-    return quizState.currentQuestion ?? quizState.activeQuestion ?? null;
-  }, [activeQuestionIndex, questions, quizState]);
-
-  // --- Gestion du chronomètre (12 secondes) et de la Pause ---
-  const isPaused = useMemo<boolean>(() => {
-    const status = String(session?.status ?? "").toLowerCase();
-    return status === "paused" || Boolean(quizState.isPaused);
-  }, [session, quizState]);
-
-  const remoteStartMs = useMemo<number | null>(() => {
-    return (
-      parseTimestampMs(quizState.questionStartedAt) ??
-      parseTimestampMs(quizState.question_started_at) ??
-      parseTimestampMs(quizState.roundStartedAt) ??
-      parseTimestampMs(quizState.round_started_at) ??
-      parseTimestampMs(session?.question_started_at) ??
-      parseTimestampMs(session?.round_started_at)
-    );
-  }, [quizState, session]);
-
-  const durationSeconds = useMemo<number>(() => {
-    const rawDuration =
-      toFiniteNumber(quizState.durationSeconds) ??
-      toFiniteNumber(quizState.duration_seconds) ??
-      QUESTION_DURATION_SECONDS;
-    return Math.max(1, Math.round(rawDuration));
-  }, [quizState]);
-
-  // Réinitialise le chrono uniquement quand la question ou la série change réellement
-  useEffect(() => {
-    if (activeQuestionIndex === null || !currentQuestion) {
-      lastTimerResetKeyRef.current = "";
-      setLocalQuestionStartMs(null);
-      setFrozenRemainingSeconds(null);
-      return;
-    }
-
-    const resetKey = `${seriesNumber}-${seriesSeed}-${activeQuestionIndex}-${remoteStartMs ?? ""}`;
-    if (lastTimerResetKeyRef.current === resetKey) {
-      return;
-    }
-    lastTimerResetKeyRef.current = resetKey;
-
-    const startStamp = remoteStartMs ?? Date.now();
-    setLocalQuestionStartMs(startStamp);
-    setFrozenRemainingSeconds(null);
-    setNowMs(Date.now());
+    return quizState.currentQuestion ?? null;
   }, [
     activeQuestionIndex,
-    currentQuestion,
-    remoteStartMs,
-    seriesNumber,
-    seriesSeed,
+    quizState.questions,
+    quizState.currentQuestion,
+    quizState.seriesNumber,
+    quizState.seriesSeed,
+    session?.id,
+    sessionCode,
   ]);
 
-  // Fige immédiatement la valeur du chrono côté TV dès que la pause est activée
-  useEffect(() => {
-    if (!isPaused || activeQuestionIndex === null || !currentQuestion) {
-      if (!isPaused) {
-        setFrozenRemainingSeconds(null);
-      }
-      return;
-    }
+  const alreadySubmittedThisQuestion =
+    currentQuestionKey !== null &&
+    submittedQuestionKey === currentQuestionKey;
+  const isPlaying = roundStatus === "playing";
 
-    const fromPayload = toFiniteNumber(quizState.pausedRemainingSeconds);
-    if (fromPayload !== null) {
-      setFrozenRemainingSeconds(Math.max(0, Math.ceil(fromPayload)));
-      return;
-    }
+  const parsedOptions = useMemo<string[]>(() => {
+    const raw =
+      activeQuestion?.options ??
+      activeQuestion?.choices ??
+      activeQuestion?.answers;
+    return extractOptions(raw);
+  }, [activeQuestion]);
 
-    setFrozenRemainingSeconds((prev) => {
-      if (prev !== null) return prev;
-      const effectiveStart = remoteStartMs ?? localQuestionStartMs ?? nowMs;
-      const elapsedSeconds = Math.max(0, (nowMs - effectiveStart) / 1000);
-      return Math.max(0, Math.ceil(durationSeconds - elapsedSeconds));
-    });
-  }, [
-    isPaused,
-    activeQuestionIndex,
-    currentQuestion,
-    quizState.pausedRemainingSeconds,
-    remoteStartMs,
-    localQuestionStartMs,
-    nowMs,
-    durationSeconds,
-  ]);
+  const qcmChoices = useMemo(() => {
+    return CHOICE_STYLES.map((style, idx) => ({
+      ...style,
+      optionValue: parsedOptions[idx] ?? style.letter,
+    }));
+  }, [parsedOptions]);
 
-  // L'intervalle s'arrête net lorsque la partie est en pause
-  useEffect(() => {
-    if (activeQuestionIndex === null || !currentQuestion || isPaused) return;
-    const interval = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 250);
-    return () => {
-      window.clearInterval(interval);
+  const myScore = useMemo(() => {
+    if (!identity) return 0;
+    const match = scores.find((s) => s.player_id === identity.playerId);
+    if (!match) return 0;
+    const scoreRecord = match as unknown as {
+      total_score?: number;
+      score?: number;
     };
-  }, [activeQuestionIndex, currentQuestion, isPaused]);
+    return scoreRecord.total_score ?? scoreRecord.score ?? 0;
+  }, [identity, scores]);
 
-  const remainingSeconds = useMemo<number | null>(() => {
-    if (activeQuestionIndex === null || !currentQuestion) return null;
-
-    if (isPaused) {
-      if (frozenRemainingSeconds !== null) {
-        return frozenRemainingSeconds;
-      }
-      const fromPayload = toFiniteNumber(quizState.pausedRemainingSeconds);
-      if (fromPayload !== null) {
-        return Math.max(0, Math.ceil(fromPayload));
-      }
-    }
-
-    const effectiveStart = remoteStartMs ?? localQuestionStartMs ?? nowMs;
-    const elapsedSeconds = Math.max(0, (nowMs - effectiveStart) / 1000);
-    return Math.max(0, Math.ceil(durationSeconds - elapsedSeconds));
-  }, [
-    activeQuestionIndex,
-    currentQuestion,
-    isPaused,
-    frozenRemainingSeconds,
-    quizState.pausedRemainingSeconds,
-    remoteStartMs,
-    localQuestionStartMs,
-    nowMs,
-    durationSeconds,
-  ]);
-
-  const isTimerExpired =
-    !isPaused &&
-    activeQuestionIndex !== null &&
-    currentQuestion !== null &&
-    remainingSeconds !== null &&
-    remainingSeconds <= 0;
-
-  // --- Préparation de la question, des 4 choix et de la révélation ---
-  const questionLabel = useMemo<string>(() => {
-    if (!currentQuestion) return "";
-    return (
-      currentQuestion.question ||
-      currentQuestion.prompt ||
-      currentQuestion.title ||
-      currentQuestion.text ||
-      ""
+  const currentPlayerRecord = useMemo(() => {
+    if (!identity) return undefined;
+    return players.find(
+      (p) =>
+        p.id === identity.playerId ||
+        (Boolean(identity.playerToken) &&
+          (p as unknown as { player_token?: string }).player_token ===
+            identity.playerToken)
     );
-  }, [currentQuestion]);
+  }, [identity, players]);
 
-  const options = useMemo<string[]>(() => {
-    const rawOptions =
-      currentQuestion?.options ||
-      currentQuestion?.choices ||
-      currentQuestion?.answers;
-    return extractOptionsList(rawOptions);
-  }, [currentQuestion]);
-
-  const answersMap = quizState.answers ?? {};
-  const scoresMap = useMemo<Record<string, number | string>>(() => {
-    const merged: Record<string, number | string> = {
-      ...(session?.player_scores ?? {}),
-      ...(session?.playerScores ?? {}),
-      ...(session?.points ?? {}),
-      ...(session?.scores ?? {}),
-      ...(quizState.player_scores ?? {}),
-      ...(quizState.playerScores ?? {}),
-      ...(quizState.pointsMap ?? {}),
-      ...(quizState.points ?? {}),
-      ...(quizState.scores ?? {}),
-    };
-
-    const normalized: Record<string, number | string> = {};
-    for (const [k, v] of Object.entries(merged)) {
-      normalized[k] = v;
-      normalized[k.trim().toLowerCase()] = v;
-    }
-    return normalized;
-  }, [session, quizState]);
-
-  const allPlayersAnswered = useMemo(() => {
-    if (players.length === 0) return false;
-    return players.every((p) => {
-      const val = answersMap[String(p.id)];
-      return normalizeAnswerLetter(val) !== null;
-    });
-  }, [players, answersMap]);
-
-  const isRevealed = Boolean(
-    quizState.revealed ||
-      quizState.showAnswers ||
-      quizState.show_answers ||
-      allPlayersAnswered ||
-      isTimerExpired
+  const myColor = useMemo(
+    () =>
+      getUniquePlayerColor(
+        currentPlayerRecord?.id ?? identity?.playerId,
+        players
+      ),
+    [currentPlayerRecord?.id, identity?.playerId, players]
   );
 
-  const correctLetter = useMemo<AnswerLetter | null>(() => {
-    if (!currentQuestion) return null;
-    const rawIdx =
-      typeof currentQuestion.correctIndex === "number"
-        ? currentQuestion.correctIndex
-        : typeof currentQuestion.correct_index === "number"
-        ? currentQuestion.correct_index
-        : null;
-    if (rawIdx !== null) {
-      return LETTERS[rawIdx] ?? null;
-    }
-    return normalizeAnswerLetter(
-      currentQuestion.correct ??
-        currentQuestion.correctAnswer ??
-        currentQuestion.correct_answer
-    );
-  }, [currentQuestion]);
+  const handleJoinGame = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanName = nicknameInput.trim();
+    if (!cleanName || !sessionCode) return;
 
-  // --- Tri des joueurs pour le classement ---
-  const rankedPlayers = useMemo(() => {
-    return [...players]
-      .map((player) => {
-        const candidateKeys = [
-          player.id !== undefined && player.id !== null ? String(player.id) : "",
-          player.player_id !== undefined && player.player_id !== null
-            ? String(player.player_id)
-            : "",
-          player.user_id !== undefined && player.user_id !== null
-            ? String(player.user_id)
-            : "",
-          player.nickname ? String(player.nickname) : "",
-          player.nickname ? String(player.nickname).trim().toLowerCase() : "",
-        ].filter(Boolean);
+    setIsJoining(true);
+    setStatusMessage("");
 
-        let mappedValue: number | null = null;
-        for (const key of candidateKeys) {
-          if (key in scoresMap) {
-            const num = toFiniteNumber(scoresMap[key]);
-            if (num !== null) {
-              mappedValue = num;
-              break;
-            }
-          }
+    try {
+      let targetSession = session;
+
+      if (!targetSession && supabase) {
+        const { data } = await supabase
+          .from("game_sessions")
+          .select("*")
+          .eq("code", sessionCode)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle<ExtendedGameSession>();
+        targetSession = data ?? null;
+        if (data) {
+          setSession(data);
+        }
+      }
+
+      const generatedId =
+        identity?.playerId &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          identity.playerId
+        )
+          ? identity.playerId
+          : crypto.randomUUID();
+
+      const newIdentity: PlayerIdentity = {
+        playerId: generatedId,
+        playerToken:
+          identity?.playerToken ??
+          `tok-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        nickname: cleanName,
+        avatarId: identity?.avatarId ?? "gamepad",
+        avatar: identity?.avatar ?? "🎮",
+      };
+
+      setIdentity(newIdentity);
+
+      try {
+        localStorage.setItem(
+          `player_identity_${sessionCode}`,
+          JSON.stringify(newIdentity)
+        );
+      } catch {
+        // Ignore storage errors
+      }
+
+      if (supabase && targetSession?.id) {
+        const { data: currentSessionPlayers } = await supabase
+          .from("session_players")
+          .select("id, player_token, color_index")
+          .eq("session_id", targetSession.id);
+
+        const existingRows =
+          (currentSessionPlayers as Array<{
+            id: string;
+            player_token?: string;
+            color_index?: number | null;
+          }> | null) ?? [];
+
+        const existingSelf = existingRows.find(
+          (row) =>
+            row.id === newIdentity.playerId ||
+            row.player_token === newIdentity.playerToken
+        );
+
+        const assignedColorIndex =
+          typeof existingSelf?.color_index === "number"
+            ? existingSelf.color_index
+            : getNextAvailableColorIndex(existingRows);
+
+        const { error: playerError } = await supabase
+          .from("session_players")
+          .upsert(
+            {
+              id: newIdentity.playerId,
+              session_id: targetSession.id,
+              nickname: newIdentity.nickname,
+              avatar_id: newIdentity.avatarId,
+              player_token: newIdentity.playerToken,
+              color_index: assignedColorIndex,
+              is_connected: true,
+              last_seen_at: new Date().toISOString(),
+            },
+            { onConflict: "session_id,player_token" }
+          );
+
+        if (playerError) {
+          setStatusMessage(`Connexion impossible : ${playerError.message}`);
+          return;
         }
 
-        const directPlayerScore =
-          toFiniteNumber(player.score) ??
-          toFiniteNumber(player.points) ??
-          toFiniteNumber(player.total_score) ??
-          toFiniteNumber(player.totalPoints);
-
-        const score = mappedValue ?? directPlayerScore ?? 0;
-        const chosenLetter = normalizeAnswerLetter(
-          answersMap[String(player.id)]
+        await supabase.from("player_scores").upsert(
+          {
+            session_id: targetSession.id,
+            player_id: newIdentity.playerId,
+            nickname: newIdentity.nickname,
+            avatar_id: newIdentity.avatarId,
+            total_score: 0,
+            streak: 0,
+          },
+          { onConflict: "session_id,player_id", ignoreDuplicates: true }
         );
-        return {
-          player,
-          score,
-          chosenLetter,
-        };
-      })
-      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  }, [players, scoresMap, answersMap]);
 
-  const totalQuestions = questions.length;
+        const [{ data: playersData }, { data: scoresData }] =
+          await Promise.all([
+            supabase
+              .from("session_players")
+              .select("*")
+              .eq("session_id", targetSession.id)
+              .order("id", { ascending: true }),
+            supabase
+              .from("player_scores")
+              .select("*")
+              .eq("session_id", targetSession.id),
+          ]);
 
-  // ==========================================================================
-  // 4. RENDU VISUEL DE LA PAGE TV (JSX)
-  // ==========================================================================
+        if (playersData) setPlayers(playersData as SessionPlayer[]);
+        if (scoresData) setScores(scoresData as PlayerScore[]);
+      }
+
+      setStatusMessage("Connecté à la partie !");
+    } finally {
+      setIsJoining(false);
+    }
+  };
+
+  const handleSubmitAnswer = async (
+    e?: React.FormEvent,
+    directChoice?: { letter: string; optionValue: string }
+  ) => {
+    if (e) e.preventDefault();
+    if (!identity || alreadySubmittedThisQuestion) return;
+
+    const valueToSend = (directChoice?.optionValue ?? answerInput).trim();
+    if (!valueToSend) return;
+
+    const round = (activeQuestionIndex ?? 0) + 1;
+    const chosenLetter =
+      directChoice?.letter ?? normalizeAnswerLetter(valueToSend) ?? "";
+    const correctLetter = resolveCorrectLetter(activeQuestion);
+    const isCorrect =
+      Boolean(correctLetter) &&
+      Boolean(chosenLetter) &&
+      chosenLetter === correctLetter;
+    const earnedPoints = isCorrect
+      ? Math.max(1, Number(activeQuestion?.points ?? 1) || 1)
+      : 0;
+    const nextScore = myScore + earnedPoints;
+
+    if (supabase && session?.id) {
+      const currentAnswers =
+        quizState.answers && typeof quizState.answers === "object"
+          ? { ...quizState.answers }
+          : {};
+      if (chosenLetter) {
+        currentAnswers[String(identity.playerId)] = chosenLetter;
+      }
+
+      const nextGameState: QuizGameState = {
+        ...quizState,
+        answers: currentAnswers,
+      };
+
+      const [{ error: actionError }, { error: sessionUpdateError }] =
+        await Promise.all([
+          supabase.from("player_actions").insert({
+            session_id: session.id,
+            player_id: identity.playerId,
+            round_number: round,
+            action_type: "answer",
+            payload: {
+              answer: valueToSend,
+              choice_letter: directChoice?.letter ?? null,
+              question_index: activeQuestionIndex ?? 0,
+            },
+          }),
+          supabase
+            .from("game_sessions")
+            .update({ game_state: nextGameState })
+            .eq("id", session.id),
+        ]);
+
+      if (actionError || sessionUpdateError) {
+        setStatusMessage(
+          `Envoi impossible : ${
+            actionError?.message ?? sessionUpdateError?.message ?? ""
+          }`
+        );
+        return;
+      }
+
+      if (earnedPoints > 0) {
+        await supabase.from("player_scores").upsert(
+          {
+            session_id: session.id,
+            player_id: identity.playerId,
+            nickname: identity.nickname,
+            avatar_id: identity.avatarId,
+            total_score: nextScore,
+          },
+          { onConflict: "session_id,player_id" }
+        );
+      }
+
+      setSession((prev) =>
+        prev ? { ...prev, game_state: nextGameState } : prev
+      );
+      if (earnedPoints > 0) {
+        setScores((prev) => {
+          const exists = prev.some((s) => s.player_id === identity.playerId);
+          if (exists) {
+            return prev.map((s) =>
+              s.player_id === identity.playerId
+                ? ({
+                    ...s,
+                    total_score: nextScore,
+                    score: nextScore,
+                  } as PlayerScore)
+                : s
+            );
+          }
+          return [
+            ...prev,
+            {
+              id: `score-${identity.playerId}`,
+              session_id: session.id,
+              player_id: identity.playerId,
+              total_score: nextScore,
+              score: nextScore,
+            } as unknown as PlayerScore,
+          ];
+        });
+      }
+    }
+
+    clearHighlightTimer();
+    setSubmittedQuestionKey(currentQuestionKey);
+    setHighlightedChoiceLetter(directChoice?.letter ?? null);
+    if (directChoice?.letter) {
+      highlightTimeoutRef.current = window.setTimeout(() => {
+        setHighlightedChoiceLetter(null);
+        highlightTimeoutRef.current = null;
+      }, 1000);
+    }
+
+    setStatusMessage(
+      directChoice
+        ? `Choix ${directChoice.letter} envoyé !`
+        : "Réponse envoyée !"
+    );
+    if (!directChoice) {
+      setAnswerInput("");
+    }
+  };
+
   return (
-    <div className="h-[100dvh] w-screen overflow-hidden bg-tvos-bg text-white px-8 py-6 flex flex-col justify-between select-none">
-      {/* ================= EN-TÊTE (Titre du jeu, n° Question, Chrono, Code Salle) ================= */}
-      <header className="flex items-center justify-between border-b border-white/15 pb-4 shrink-0 gap-6">
-        {/* Partie gauche : Icône TV + Numéro de question + Titre du jeu */}
-        <div className="flex items-center gap-4 min-w-0">
-          <div className="w-14 h-14 rounded-2xl bg-amber-400/15 border border-amber-400/35 flex items-center justify-center shrink-0">
-            <Tv className="w-8 h-8 text-amber-400" />
-          </div>
-          <div className="min-w-0">
-            {activeQuestionIndex !== null && totalQuestions > 0 && (
-              <div className="text-base xl:text-lg uppercase tracking-[0.18em] text-amber-300 font-extrabold">
-                Question{" "}
-                {Math.min(activeQuestionIndex, totalQuestions - 1) + 1} /{" "}
-                {totalQuestions}
-              </div>
-            )}
-            <h1 className="text-3xl xl:text-4xl font-black tracking-tight truncate">
-              {gameTitle}
-            </h1>
-          </div>
-        </div>
-
-        {/* Partie droite : Chronomètre + Code de la salle */}
-        <div className="flex items-center gap-4 shrink-0">
-          {/* Chronomètre 12s (figé si Pause) */}
-          {remainingSeconds !== null && (
-            <div
-              className={`flex items-center gap-2.5 px-5 py-2.5 rounded-2xl border-2 font-mono text-3xl xl:text-4xl font-black transition ${
-                isPaused
-                  ? "bg-amber-500/20 border-amber-400/60 text-amber-200"
-                  : remainingSeconds <= 3
-                  ? "bg-rose-500/25 border-rose-400 text-rose-200 animate-pulse"
-                  : "bg-sky-500/15 border-sky-400/45 text-sky-200"
-              }`}
-            >
-              <Clock className="w-7 h-7 shrink-0" />
-              <span>{remainingSeconds}s</span>
+    <div className="min-h-screen bg-neutral-950 text-white flex flex-col justify-between p-4 sm:p-5 select-none">
+      <div className="max-w-md w-full mx-auto flex-1 flex flex-col space-y-4">
+        {/* Top Bar */}
+        <header className="flex items-center justify-between border-b border-white/10 pb-3.5 shrink-0">
+          <div>
+            <div className="text-[11px] uppercase tracking-widest text-neutral-400">
+              Salle
             </div>
-          )}
-
-          {/* Code Salle */}
-          <span className="text-lg xl:text-xl font-bold uppercase tracking-wider text-neutral-300">
-            Salle
-          </span>
-          <div className="px-6 py-2.5 rounded-2xl bg-amber-400/15 border-2 border-amber-400/45 text-amber-300 font-mono text-3xl xl:text-4xl font-black tracking-[0.2em]">
-            {sessionCode || "----"}
-          </div>
-        </div>
-      </header>
-
-      {/* ================= CORPS PRINCIPAL (Colonne Question/Réponses + Colonne Classement) ================= */}
-      <main className="flex-1 min-h-0 grid grid-cols-12 gap-7 pt-5">
-        {/* ----------------- COLONNE GAUCHE : QUESTION + 4 CASES DE RÉPONSES ----------------- */}
-        <section className="col-span-7 bg-white/[0.06] border border-white/15 rounded-[2rem] p-7 flex flex-col justify-between gap-5 min-h-0">
-          {/* Zone d'affichage de la question */}
-          <div className="shrink-0 min-h-[22%] flex items-center justify-center text-center px-4">
-            {questionLabel ? (
-              <h2
-                className={`font-black text-white text-center break-words [word-break:normal] hyphens-none ${getQuestionFontSize(
-                  questionLabel
-                )}`}
-              >
-                {questionLabel}
-              </h2>
-            ) : (
-              <p className="text-3xl font-bold text-neutral-400 text-center">
-                En attente du lancement des questions...
-              </p>
-            )}
+            <div className="font-mono text-xl font-bold tracking-widest text-amber-400">
+              {sessionCode || "----"}
+            </div>
           </div>
 
-          {/* Grille 2x2 des 4 cases de réponses (A, B, C, D) */}
-          <div className="w-full flex-1 max-h-[420px] grid grid-cols-2 grid-rows-2 gap-4 self-center">
-            {LETTERS.map((letter, index) => {
-              const style = ANSWER_STYLES[letter];
-              const optionText = options[index] || `Réponse ${letter}`;
-              const isCorrect =
-                isRevealed &&
-                correctLetter !== null &&
-                correctLetter === letter;
-              const isDimmed =
-                isRevealed &&
-                correctLetter !== null &&
-                correctLetter !== letter;
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5">
+              <Trophy className="w-4 h-4 text-amber-400" />
+              <span className="font-mono font-bold text-sm">{myScore} pts</span>
+            </div>
 
-              return (
-                <div
-                  key={letter}
-                  className={`relative w-full h-full rounded-3xl border-2 px-5 py-4 flex items-center justify-center transition-all duration-300 ${
-                    style.bg
-                  } ${style.border} ${
-                    isCorrect
-                      ? "ring-4 ring-emerald-300 scale-[1.01] shadow-2xl"
-                      : isDimmed
-                      ? "opacity-45"
-                      : "shadow-lg"
-                  }`}
+            <div
+              className={`p-2 rounded-xl border ${
+                isConnected
+                  ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-300"
+                  : "bg-rose-500/10 border-rose-500/30 text-rose-300"
+              }`}
+              title={isConnected ? "Connecté" : "Hors ligne"}
+            >
+              {isConnected ? (
+                <Wifi className="w-4 h-4" />
+              ) : (
+                <WifiOff className="w-4 h-4" />
+              )}
+            </div>
+          </div>
+        </header>
+
+        {/* Join Form or Controller */}
+        {!identity ? (
+          <form
+            onSubmit={handleJoinGame}
+            className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4 my-auto"
+          >
+            <div className="flex items-center gap-2 text-amber-400 text-xs uppercase tracking-wider font-semibold">
+              <Sparkles className="w-4 h-4" />
+              <span>Rejoindre la partie</span>
+            </div>
+
+            <h1 className="text-2xl font-bold">Choisis ton pseudo</h1>
+
+            <input
+              type="text"
+              value={nicknameInput}
+              onChange={(e) => setNicknameInput(e.target.value)}
+              placeholder="Ton pseudo..."
+              maxLength={24}
+              className="w-full rounded-2xl bg-black/40 border border-white/15 px-4 py-3 text-white placeholder:text-neutral-500 focus:outline-none focus:border-amber-400"
+            />
+
+            <button
+              type="submit"
+              disabled={!nicknameInput.trim() || isJoining}
+              className="w-full py-3.5 rounded-2xl bg-amber-400 hover:bg-amber-300 disabled:opacity-40 text-black font-bold transition"
+            >
+              {isJoining ? "Connexion..." : "Entrer dans la salle"}
+            </button>
+          </form>
+        ) : (
+          <main className="flex-1 flex flex-col space-y-4">
+            {/* Player Status Card */}
+            <div
+              style={{
+                backgroundColor: myColor.bgHex,
+                borderColor: myColor.borderHex,
+                color: myColor.textHex,
+              }}
+              className="border-2 rounded-3xl p-4 flex items-center justify-between shadow-lg shrink-0"
+            >
+              <div className="flex items-center gap-3">
+                <span
+                  style={{ backgroundColor: myColor.badgeBgHex }}
+                  className="text-3xl flex h-12 w-12 items-center justify-center rounded-2xl"
                 >
-                  {/* Badge lettre (A, B, C, D) dans le coin supérieur gauche */}
-                  <div
-                    className={`absolute top-3 left-3 w-10 h-10 xl:w-11 xl:h-11 rounded-xl border-2 flex items-center justify-center font-black text-xl xl:text-2xl z-10 ${style.badgeBg}`}
-                  >
-                    {letter}
-                  </div>
-
-                  {/* Texte de la réponse centré horizontalement et verticalement sans couper les lettres */}
-                  <div className="w-full h-full flex items-center justify-center text-center px-10 py-2">
-                    <span
-                      className={`font-black text-white text-center whitespace-normal break-normal [word-break:normal] hyphens-none ${getOptionFontSize(
-                        optionText
-                      )}`}
-                    >
-                      {optionText}
-                    </span>
+                  {identity.avatar ?? "🎮"}
+                </span>
+                <div>
+                  <div className="font-black text-lg">{identity.nickname}</div>
+                  <div className="text-xs opacity-90 font-semibold">
+                    {activeQuestionIndex !== null
+                      ? `Question ${activeQuestionIndex + 1}`
+                      : "Quiz"}{" "}
+                    • État : <span className="uppercase">{roundStatus}</span>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </section>
-
-        {/* ----------------- COLONNE DROITE : CLASSEMENT DES JOUEURS ----------------- */}
-        <aside className="col-span-5 bg-white/[0.06] border border-white/15 rounded-[2rem] p-6 flex flex-col gap-4 min-h-0">
-          {/* Titre du classement et compteur de joueurs */}
-          <div className="flex items-center justify-between shrink-0 pb-1">
-            <div className="flex items-center gap-3 text-2xl xl:text-3xl font-black">
-              <Trophy className="w-8 h-8 text-amber-400" />
-              <span>Classement</span>
+              </div>
+              <Gamepad2 className="w-6 h-6 opacity-90" />
             </div>
-            <span className="text-lg font-bold text-neutral-300">
-              {players.length} joueur{players.length > 1 ? "s" : ""}
-            </span>
-          </div>
 
-          {/* Liste des joueurs triés par points */}
-          {rankedPlayers.length === 0 ? (
-            <div className="flex-1 flex items-center justify-center text-2xl text-neutral-400 font-semibold text-center px-4">
-              Aucun joueur dans la partie
-            </div>
-          ) : (
-            <div className="flex-1 min-h-0 flex flex-col gap-3.5 overflow-hidden">
-              {rankedPlayers.map(({ player, score, chosenLetter }, idx) => {
-                const pColor = getUniquePlayerColor(player.id, players);
-                const rank = idx + 1;
-                const hasAnswered = chosenLetter !== null;
-                const answerStyle = chosenLetter
-                  ? ANSWER_STYLES[chosenLetter]
-                  : null;
-
-                return (
-                  <div
-                    key={player.id}
-                    style={{
-                      backgroundColor: pColor.bgHex,
-                      borderColor: pColor.borderHex,
-                      color: pColor.textHex,
-                    }}
-                    className="rounded-3xl border-2 px-5 py-3.5 flex items-center gap-4 shadow-lg shrink-0"
+            {/* Active Question / Action Zone */}
+            <div className="flex-1 flex flex-col justify-between bg-white/5 border border-white/10 rounded-3xl p-4 sm:p-5 space-y-4">
+              {!isPlaying ? (
+                <div className="my-auto py-8 text-center space-y-1">
+                  <p className="text-base font-bold text-amber-300">
+                    {roundStatus === "paused"
+                      ? "Partie en pause"
+                      : roundStatus === "finished"
+                      ? "Partie terminée"
+                      : "Regarde la télé pour la suite..."}
+                  </p>
+                  <p className="text-xs text-neutral-400">
+                    {activeQuestionIndex !== null
+                      ? `Question ${activeQuestionIndex + 1}`
+                      : "En attente"}
+                  </p>
+                </div>
+              ) : parsedOptions.length > 0 ? (
+                <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-4 min-h-[300px]">
+                  {qcmChoices.map((choice) => {
+                    const isHighlighted =
+                      highlightedChoiceLetter === choice.letter;
+                    return (
+                      <button
+                        key={choice.letter}
+                        type="button"
+                        disabled={alreadySubmittedThisQuestion}
+                        onClick={() =>
+                          void handleSubmitAnswer(undefined, {
+                            letter: choice.letter,
+                            optionValue: choice.optionValue,
+                          })
+                        }
+                        style={{
+                          backgroundColor: choice.bgHex,
+                          borderColor: isHighlighted
+                            ? "#ffffff"
+                            : choice.borderHex,
+                          color: choice.textHex,
+                        }}
+                        className={`h-full min-h-[140px] rounded-3xl border-4 flex items-center justify-center text-6xl font-black tracking-tight shadow-xl active:scale-95 transition-all duration-300 ${
+                          isHighlighted ? "scale-105" : "scale-100"
+                        }`}
+                      >
+                        {choice.letter}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <form
+                  onSubmit={handleSubmitAnswer}
+                  className="my-auto space-y-3"
+                >
+                  <input
+                    type="text"
+                    value={answerInput}
+                    onChange={(e) => setAnswerInput(e.target.value)}
+                    disabled={alreadySubmittedThisQuestion}
+                    placeholder="Entre ta réponse..."
+                    className="w-full rounded-2xl bg-black/40 border border-white/15 px-4 py-3 text-white placeholder:text-neutral-500 focus:outline-none focus:border-amber-400 disabled:opacity-40"
+                  />
+                  <button
+                    type="submit"
+                    disabled={
+                      alreadySubmittedThisQuestion || !answerInput.trim()
+                    }
+                    className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-black font-bold transition"
                   >
-                    {/* 1. Numéro de rang à gauche */}
-                    <div
-                      style={{ backgroundColor: pColor.badgeBgHex }}
-                      className="w-12 h-12 xl:w-14 xl:h-14 rounded-2xl flex items-center justify-center font-black text-2xl xl:text-3xl shrink-0"
-                    >
-                      {rank}
-                    </div>
+                    <Send className="w-4 h-4" />
+                    <span>
+                      {alreadySubmittedThisQuestion
+                        ? "Réponse envoyée"
+                        : "Envoyer"}
+                    </span>
+                  </button>
+                </form>
+              )}
 
-                    {/* 2. Pseudo du joueur */}
-                    <div className="flex-1 min-w-0 font-black text-2xl xl:text-3xl truncate">
-                      {player.nickname}
-                    </div>
-
-                    {/* 3. Score en points */}
-                    <div className="w-24 text-right font-mono font-black text-2xl xl:text-3xl shrink-0">
-                      {score} <span className="text-lg font-bold">pts</span>
-                    </div>
-
-                    {/* 4. Pastille d'état de réponse (coche verte ou lettre choisie) */}
-                    <div className="w-14 h-14 flex items-center justify-center shrink-0">
-                      {hasAnswered && !isRevealed && (
-                        <div
-                          title="A répondu"
-                          className="w-12 h-12 xl:w-14 xl:h-14 rounded-full bg-emerald-200 border-2 border-emerald-500 flex items-center justify-center shadow-md"
-                        >
-                          <Check
-                            className="w-8 h-8 text-emerald-700 stroke-[3.5]"
-                            aria-label="V"
-                          />
-                        </div>
-                      )}
-
-                      {hasAnswered && isRevealed && answerStyle && (
-                        <div
-                          style={{
-                            backgroundColor: answerStyle.circleBg,
-                            color: answerStyle.circleText,
-                          }}
-                          className="w-12 h-12 xl:w-14 xl:h-14 rounded-full border-2 border-white flex items-center justify-center font-black text-2xl xl:text-3xl shadow-md"
-                        >
-                          {chosenLetter}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
+              {statusMessage && (
+                <p className="text-xs text-emerald-300 text-center pt-1 font-semibold shrink-0">
+                  {statusMessage}
+                </p>
+              )}
             </div>
-          )}
-        </aside>
-      </main>
+          </main>
+        )}
+      </div>
+
+      <footer className="text-center text-[11px] text-neutral-500 pt-4 shrink-0">
+        Manette Joueur • {sessionCode || "—"}
+      </footer>
     </div>
   );
 }
