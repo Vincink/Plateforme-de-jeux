@@ -94,7 +94,6 @@ type ExtendedPlayer = SessionPlayer & {
   avatarId?: string | null;
 };
 
-// Couleurs des 4 cases de réponses (A, B, C, D)
 const ANSWER_STYLES: Record<
   AnswerLetter,
   {
@@ -136,11 +135,11 @@ const ANSWER_STYLES: Record<
 };
 
 const LETTERS: readonly AnswerLetter[] = ["A", "B", "C", "D"];
-const QUESTION_DURATION_SECONDS = 12; // Durée du chrono par question (en secondes)
-const QUESTIONS_PER_GAME = 15; // Nombre de questions tirées aléatoirement par partie
+const QUESTION_DURATION_SECONDS = 12;
+const QUESTIONS_PER_GAME = 15;
 
 // ============================================================================
-// 2. FONCTIONS UTILITAIRES (Tirage aléatoire, tailles de texte, conversions)
+// 2. FONCTIONS UTILITAIRES
 // ============================================================================
 
 function hashStringToSeed(input: string): number {
@@ -314,6 +313,8 @@ export default function TvQuizPage() {
   const lastTimerResetKeyRef = useRef<string>("");
   const scoredQuestionsRef = useRef<Set<string>>(new Set());
   const isScoringRef = useRef<boolean>(false);
+  const lastResetSignatureRef = useRef<string>("");
+  const isResettingScoresRef = useRef<boolean>(false);
 
   // --- Synchronisation temps réel avec Supabase (session + joueurs + scores) ---
   useEffect(() => {
@@ -501,6 +502,85 @@ export default function TvQuizPage() {
     );
   }, [session]);
 
+  const seriesNumber = useMemo<number>(() => {
+    return Math.max(1, toFiniteNumber(quizState.seriesNumber) ?? 1);
+  }, [quizState]);
+
+  const seriesSeed = useMemo<string>(() => {
+    const rawSeed =
+      typeof quizState.seriesSeed === "string" && quizState.seriesSeed.trim()
+        ? quizState.seriesSeed.trim()
+        : "";
+    return rawSeed || `${session?.id ?? ""}-${sessionCode}-s${seriesNumber}`;
+  }, [quizState.seriesSeed, session?.id, sessionCode, seriesNumber]);
+
+  const sessionStatusLower = useMemo<string>(() => {
+    return String(session?.status ?? "").toLowerCase();
+  }, [session?.status]);
+
+  const isFinishedOrLobbyStatus =
+    sessionStatusLower === "lobby" ||
+    sessionStatusLower === "finished" ||
+    sessionStatusLower === "ended" ||
+    sessionStatusLower === "completed";
+
+  // Réinitialise tous les scores à 0 quand on clique sur "Relancer" (nouvelle série) ou "Terminer" (status lobby / finished / ended / completed)
+  useEffect(() => {
+    if (!supabase || !session?.id) return;
+
+    const resetTrigger = isFinishedOrLobbyStatus
+      ? `${session.id}-status:${sessionStatusLower}`
+      : `${session.id}-series:${seriesNumber}:${seriesSeed}`;
+
+    const shouldReset =
+      isFinishedOrLobbyStatus ||
+      (lastResetSignatureRef.current !== "" &&
+        !lastResetSignatureRef.current.includes(`series:${seriesNumber}:${seriesSeed}`) &&
+        resetTrigger.includes("series:"));
+
+    if (lastResetSignatureRef.current === "") {
+      lastResetSignatureRef.current = resetTrigger;
+      if (!isFinishedOrLobbyStatus) return;
+    }
+
+    if (!shouldReset && lastResetSignatureRef.current === resetTrigger) {
+      return;
+    }
+
+    if (lastResetSignatureRef.current === resetTrigger || isResettingScoresRef.current) {
+      return;
+    }
+
+    lastResetSignatureRef.current = resetTrigger;
+    isResettingScoresRef.current = true;
+    scoredQuestionsRef.current = new Set();
+
+    void (async () => {
+      try {
+        await supabase
+          .from("player_scores")
+          .update({ total_score: 0 })
+          .eq("session_id", session.id);
+
+        setPlayerScoresRows((prev) =>
+          prev.map((row) => ({
+            ...row,
+            total_score: 0,
+          }))
+        );
+      } finally {
+        isResettingScoresRef.current = false;
+      }
+    })();
+  }, [
+    supabase,
+    session?.id,
+    isFinishedOrLobbyStatus,
+    sessionStatusLower,
+    seriesNumber,
+    seriesSeed,
+  ]);
+
   useEffect(() => {
     if (!session || !sessionCode) return;
 
@@ -517,28 +597,10 @@ export default function TvQuizPage() {
       return;
     }
 
-    const status = String(session.status ?? "").toLowerCase();
-    if (
-      status === "lobby" ||
-      status === "finished" ||
-      status === "ended" ||
-      status === "completed"
-    ) {
+    if (isFinishedOrLobbyStatus) {
       router.replace(`/tv/${sessionCode}`);
     }
-  }, [session, sessionCode, quizState, router]);
-
-  const seriesNumber = useMemo<number>(() => {
-    return Math.max(1, toFiniteNumber(quizState.seriesNumber) ?? 1);
-  }, [quizState]);
-
-  const seriesSeed = useMemo<string>(() => {
-    const rawSeed =
-      typeof quizState.seriesSeed === "string" && quizState.seriesSeed.trim()
-        ? quizState.seriesSeed.trim()
-        : "";
-    return rawSeed || `${session?.id ?? ""}-${sessionCode}-s${seriesNumber}`;
-  }, [quizState.seriesSeed, session?.id, sessionCode, seriesNumber]);
+  }, [session, sessionCode, quizState, isFinishedOrLobbyStatus, router]);
 
   const sourceQuestions = useMemo<QuizQuestionItem[]>(() => {
     if (Array.isArray(quizState.questions) && quizState.questions.length > 0) {
@@ -842,7 +904,6 @@ export default function TvQuizPage() {
     );
   }, [currentQuestion]);
 
-  // --- Calcul des points (+3 / -1) à la fin du chrono / révélation, une seule fois par question ---
   useEffect(() => {
     if (
       !supabase ||
