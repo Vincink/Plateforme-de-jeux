@@ -240,6 +240,7 @@ export default function PlayerControllerPage() {
   const [session, setSession] = useState<ExtendedGameSession | null>(null);
   const [players, setPlayers] = useState<SessionPlayer[]>([]);
   const [scores, setScores] = useState<PlayerScore[]>([]);
+  const [localScore, setLocalScore] = useState<number>(0);
   const [submittedQuestionKey, setSubmittedQuestionKey] = useState<
     string | null
   >(null);
@@ -259,8 +260,8 @@ export default function PlayerControllerPage() {
   const highlightTimeoutRef = useRef<number | null>(null);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const settledQuestionsRef = useRef<Set<string>>(new Set());
-  const scoresRef = useRef<PlayerScore[]>(scores);
-  scoresRef.current = scores;
+  const localScoreRef = useRef<number>(localScore);
+  localScoreRef.current = localScore;
 
   const persistPlayerScore = async (
     targetSessionId: string,
@@ -487,7 +488,27 @@ export default function PlayerControllerPage() {
       setPlayers(nextPlayers);
 
       if (scoresData) {
-        setScores(scoresData as PlayerScore[]);
+        const rows = scoresData as PlayerScore[];
+        setScores(rows);
+        try {
+          const saved = localStorage.getItem(`player_identity_${sessionCode}`);
+          const parsed = saved
+            ? (JSON.parse(saved) as Partial<PlayerIdentity>)
+            : null;
+          if (parsed?.playerId) {
+            const match = rows.find((r) => r.player_id === parsed.playerId);
+            if (match) {
+              const rec = match as unknown as {
+                total_score?: number;
+                score?: number;
+              };
+              const dbScore = Math.max(0, rec.total_score ?? rec.score ?? 0);
+              setLocalScore((prev) => Math.max(prev, dbScore));
+            }
+          }
+        } catch {
+          // Ignore storage errors
+        }
       }
 
       try {
@@ -500,6 +521,7 @@ export default function PlayerControllerPage() {
           ) {
             localStorage.removeItem(`player_identity_${sessionCode}`);
             setIdentity(null);
+            setLocalScore(0);
             setStatusMessage("Tu as été exclu de la partie.");
           }
         }
@@ -649,13 +671,15 @@ export default function PlayerControllerPage() {
   const myScore = useMemo(() => {
     if (!identity) return 0;
     const match = scores.find((s) => s.player_id === identity.playerId);
-    if (!match) return 0;
-    const scoreRecord = match as unknown as {
-      total_score?: number;
-      score?: number;
-    };
-    return Math.max(0, scoreRecord.total_score ?? scoreRecord.score ?? 0);
-  }, [identity, scores]);
+    const scoreRecord = match as unknown as
+      | { total_score?: number; score?: number }
+      | undefined;
+    const dbScore = Math.max(
+      0,
+      scoreRecord?.total_score ?? scoreRecord?.score ?? 0
+    );
+    return Math.max(localScore, dbScore);
+  }, [identity, scores, localScore]);
 
   const currentPlayerRecord = useMemo(() => {
     if (!identity) return undefined;
@@ -677,6 +701,7 @@ export default function PlayerControllerPage() {
     [currentPlayerRecord?.id, identity?.playerId, players]
   );
 
+  // Attribution des points uniquement lorsque le chrono arrive à 0 (ou réponse révélée)
   useEffect(() => {
     if (!identity || !currentQuestionKey || !activeQuestion || !isTimerExpired) {
       return;
@@ -705,17 +730,8 @@ export default function PlayerControllerPage() {
       Boolean(correctLetter) && chosenLetter === correctLetter;
     const delta = isCorrect ? 3 : -1;
 
-    const currentMatch = scoresRef.current.find(
-      (s) => s.player_id === identity.playerId
-    );
-    const currentRecord = currentMatch as
-      | { total_score?: number; score?: number }
-      | undefined;
-    const baseScore = Math.max(
-      0,
-      currentRecord?.total_score ?? currentRecord?.score ?? 0
-    );
-    const nextScore = Math.max(0, baseScore + delta);
+    const nextScore = Math.max(0, localScoreRef.current + delta);
+    setLocalScore(nextScore);
 
     setScores((prev) => {
       const exists = prev.some((s) => s.player_id === identity.playerId);
