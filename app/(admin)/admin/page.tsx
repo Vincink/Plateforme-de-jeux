@@ -231,14 +231,16 @@ function resolveQuestionCorrectLetter(question: unknown): string | null {
     q.solution;
 
   if (typeof rawDirect === "number" && rawDirect >= 0 && rawDirect < 4) {
-    return letters[rawDirect];
+    return letters.at(rawDirect) ?? null;
   }
 
   if (typeof rawDirect === "string") {
     const trimmed = rawDirect.trim();
     const upper = trimmed.toUpperCase();
     if (letters.includes(upper)) return upper;
-    if (/^[0-3]$/.test(trimmed)) return letters[Number(trimmed)];
+    if (/^[0-3]$/.test(trimmed)) {
+      return letters.at(Number(trimmed)) ?? null;
+    }
 
     const options = Array.isArray(q.options)
       ? q.options
@@ -254,14 +256,16 @@ function resolveQuestionCorrectLetter(question: unknown): string | null {
           typeof opt === "string" &&
           opt.trim().toLowerCase() === trimmed.toLowerCase()
       );
-      if (idx >= 0 && idx < 4) return letters[idx];
+      if (idx >= 0 && idx < 4) {
+        return letters.at(idx) ?? null;
+      }
     }
   }
 
   const rawIndex =
     q.correctIndex ?? q.correct_index ?? q.answerIndex ?? q.rightIndex;
   if (typeof rawIndex === "number" && rawIndex >= 0 && rawIndex < 4) {
-    return letters[rawIndex];
+    return letters.at(rawIndex) ?? null;
   }
 
   return null;
