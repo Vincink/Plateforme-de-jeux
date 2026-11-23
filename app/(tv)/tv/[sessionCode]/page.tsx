@@ -13,14 +13,45 @@ import type { GameSession, SessionPlayer } from "@/types/game.types";
 // ============================================================================
 
 interface SalonGameState {
+  mode?: string;
   nextSessionCode?: string;
   replacedByCode?: string;
+}
+
+interface GameMeta {
+  title?: string | null;
+  slug?: string | null;
 }
 
 type ExtendedSession = GameSession & {
   game_state?: SalonGameState | null;
   show_qr?: boolean | null;
 };
+
+function isJusteChiffreTarget(
+  state: SalonGameState | null | undefined,
+  meta: GameMeta | null | undefined
+): boolean {
+  const mode = String(state?.mode ?? "").toLowerCase();
+  const title = String(meta?.title ?? "").toLowerCase();
+  const slug = String(meta?.slug ?? "").toLowerCase();
+  return (
+    mode.includes("juste-chiffre") ||
+    mode.includes("juste_chiffre") ||
+    mode.includes("estimation") ||
+    mode.includes("juste-prix") ||
+    mode.includes("proche") ||
+    slug.includes("juste-chiffre") ||
+    slug.includes("juste_chiffre") ||
+    slug.includes("estimation") ||
+    slug.includes("juste-prix") ||
+    slug.includes("proche") ||
+    title.includes("juste chiffre") ||
+    title.includes("estimation") ||
+    title.includes("juste prix") ||
+    title.includes("proche")
+  );
+}
 
 // ============================================================================
 // 2. COMPOSANT PRINCIPAL : SALON TV (/tv/salon)
@@ -32,7 +63,7 @@ export default function TvSalonPage() {
 
   const [session, setSession] = useState<ExtendedSession | null>(null);
   const [players, setPlayers] = useState<SessionPlayer[]>([]);
-  const [gameTitle, setGameTitle] = useState<string>("Grand Quiz tvOS");
+  const [gameMeta, setGameMeta] = useState<GameMeta | null>(null);
   const [joinUrl, setJoinUrl] = useState<string>("");
 
   const activeCode = useMemo(() => {
@@ -45,6 +76,11 @@ export default function TvSalonPage() {
       .toUpperCase();
     return replacement || (session?.code ?? "").toUpperCase();
   }, [session]);
+
+  const gameTitle = useMemo(
+    () => gameMeta?.title || "Grand Quiz tvOS",
+    [gameMeta?.title]
+  );
 
   // --- Construction de l'URL de connexion mobile selon le code actif ---
   useEffect(() => {
@@ -60,16 +96,16 @@ export default function TvSalonPage() {
     let activeSessionId: string | null = null;
     let playersChannel: ReturnType<typeof supabase.channel> | null = null;
 
-    const loadGameTitle = async (gameId: string | null | undefined) => {
+    const loadGameMeta = async (gameId: string | null | undefined) => {
       if (!gameId) return;
       const { data } = await supabase
         .from("games")
-        .select("title")
+        .select("title, slug")
         .eq("id", gameId)
-        .maybeSingle<{ title?: string | null }>();
+        .maybeSingle<GameMeta>();
 
       if (!isMounted) return;
-      if (data?.title) setGameTitle(data.title);
+      if (data) setGameMeta(data);
     };
 
     const loadPlayers = async (targetSessionId: string | null) => {
@@ -86,7 +122,7 @@ export default function TvSalonPage() {
 
     const bindSession = (targetSession: ExtendedSession) => {
       void loadPlayers(targetSession.id);
-      void loadGameTitle(targetSession.game_id);
+      void loadGameMeta(targetSession.game_id);
 
       if (activeSessionId === targetSession.id && playersChannel) {
         return;
@@ -191,14 +227,17 @@ export default function TvSalonPage() {
     };
   }, [supabase]);
 
-  // --- Redirection vers l'écran quiz quand la partie démarre ---
+  // --- Redirection vers l'écran du jeu sélectionné quand la partie démarre ---
   useEffect(() => {
     if (!session || !activeCode) return;
     const status = String(session.status ?? "").toLowerCase();
     if (status === "playing" || status === "paused") {
-      router.replace(`/tv/${activeCode}/quiz`);
+      const targetRoute = isJusteChiffreTarget(session.game_state, gameMeta)
+        ? `/tv/${activeCode}/juste-chiffre`
+        : `/tv/${activeCode}/quiz`;
+      router.replace(targetRoute);
     }
-  }, [session, activeCode, router]);
+  }, [session, activeCode, gameMeta, router]);
 
   // --- Statut affiché (par défaut LOBBY dès qu'une nouvelle salle est créée) ---
   const displayStatus = useMemo(() => {
