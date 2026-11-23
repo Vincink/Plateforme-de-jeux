@@ -217,10 +217,17 @@ function extractOptionsList(
 }
 
 function getOptionFontSize(text: string): string {
-  const len = text.trim().length;
-  if (len <= 14) return "text-4xl xl:text-5xl leading-tight";
-  if (len <= 28) return "text-3xl xl:text-4xl leading-snug";
-  if (len <= 52) return "text-2xl xl:text-3xl leading-snug";
+  const trimmed = text.trim();
+  const longestWordLen = trimmed
+    .split(/\s+/)
+    .reduce((max, word) => Math.max(max, word.length), 0);
+  const len = trimmed.length;
+
+  if (longestWordLen >= 16) return "text-xl xl:text-2xl leading-snug";
+  if (longestWordLen >= 12) return "text-2xl xl:text-3xl leading-snug";
+  if (len <= 12) return "text-4xl xl:text-5xl leading-tight";
+  if (len <= 24) return "text-3xl xl:text-4xl leading-snug";
+  if (len <= 44) return "text-2xl xl:text-3xl leading-snug";
   return "text-xl xl:text-2xl leading-snug";
 }
 
@@ -759,7 +766,7 @@ export default function TvQuizPage() {
               return (
                 <div
                   key={letter}
-                  className={`relative w-full h-full rounded-3xl border-2 p-4 pt-12 flex items-center justify-center transition-all duration-300 overflow-hidden ${
+                  className={`relative w-full h-full rounded-3xl border-2 px-4 py-3 flex items-center justify-center transition-all duration-300 overflow-hidden ${
                     style.bg
                   } ${style.border} ${
                     isCorrect
@@ -771,15 +778,15 @@ export default function TvQuizPage() {
                 >
                   {/* Lettre placée dans le coin supérieur gauche */}
                   <div
-                    className={`absolute top-3 left-3 w-10 h-10 xl:w-11 xl:h-11 rounded-xl border-2 flex items-center justify-center font-black text-xl xl:text-2xl ${style.badgeBg}`}
+                    className={`absolute top-3 left-3 w-10 h-10 xl:w-11 xl:h-11 rounded-xl border-2 flex items-center justify-center font-black text-xl xl:text-2xl z-10 ${style.badgeBg}`}
                   >
                     {letter}
                   </div>
 
-                  {/* Texte de réponse centré au milieu de la case avec taille adaptée */}
-                  <div className="w-full h-full flex items-center justify-center text-center px-3 overflow-hidden">
+                  {/* Texte de réponse centré verticalement et horizontalement sans couper les mots */}
+                  <div className="w-full h-full flex items-center justify-center text-center px-10">
                     <span
-                      className={`font-black text-white text-center whitespace-normal break-words [word-break:normal] hyphens-none line-clamp-3 ${getOptionFontSize(
+                      className={`font-black text-white text-center whitespace-normal break-normal [word-break:normal] hyphens-none line-clamp-3 ${getOptionFontSize(
                         optionText
                       )}`}
                     >
