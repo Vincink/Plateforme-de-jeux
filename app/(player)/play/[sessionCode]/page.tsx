@@ -699,10 +699,8 @@ export default function PlayerControllerPage() {
       Boolean(correctLetter) &&
       Boolean(chosenLetter) &&
       chosenLetter === correctLetter;
-    const earnedPoints = isCorrect
-      ? Math.max(1, Number(activeQuestion?.points ?? 1) || 1)
-      : 0;
-    const nextScore = myScore + earnedPoints;
+    const pointsDelta = isCorrect ? 3 : -1;
+    const nextScore = myScore + pointsDelta;
 
     if (supabase && session?.id) {
       const currentAnswers =
@@ -744,48 +742,44 @@ export default function PlayerControllerPage() {
         return;
       }
 
-      if (earnedPoints > 0) {
-        await supabase.from("player_scores").upsert(
-          {
-            session_id: session.id,
-            player_id: identity.playerId,
-            nickname: identity.nickname,
-            avatar_id: identity.avatarId,
-            total_score: nextScore,
-          },
-          { onConflict: "session_id,player_id" }
-        );
-      }
+      await supabase.from("player_scores").upsert(
+        {
+          session_id: session.id,
+          player_id: identity.playerId,
+          nickname: identity.nickname,
+          avatar_id: identity.avatarId,
+          total_score: nextScore,
+        },
+        { onConflict: "session_id,player_id" }
+      );
 
       setSession((prev) =>
         prev ? { ...prev, game_state: nextGameState } : prev
       );
-      if (earnedPoints > 0) {
-        setScores((prev) => {
-          const exists = prev.some((s) => s.player_id === identity.playerId);
-          if (exists) {
-            return prev.map((s) =>
-              s.player_id === identity.playerId
-                ? ({
-                    ...s,
-                    total_score: nextScore,
-                    score: nextScore,
-                  } as PlayerScore)
-                : s
-            );
-          }
-          return [
-            ...prev,
-            {
-              id: `score-${identity.playerId}`,
-              session_id: session.id,
-              player_id: identity.playerId,
-              total_score: nextScore,
-              score: nextScore,
-            } as unknown as PlayerScore,
-          ];
-        });
-      }
+      setScores((prev) => {
+        const exists = prev.some((s) => s.player_id === identity.playerId);
+        if (exists) {
+          return prev.map((s) =>
+            s.player_id === identity.playerId
+              ? ({
+                  ...s,
+                  total_score: nextScore,
+                  score: nextScore,
+                } as PlayerScore)
+              : s
+          );
+        }
+        return [
+          ...prev,
+          {
+            id: `score-${identity.playerId}`,
+            session_id: session.id,
+            player_id: identity.playerId,
+            total_score: nextScore,
+            score: nextScore,
+          } as unknown as PlayerScore,
+        ];
+      });
     }
 
     clearHighlightTimer();
