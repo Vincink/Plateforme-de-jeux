@@ -230,6 +230,13 @@ function computeRemainingSeconds(
   return Math.max(0, duration - elapsedSeconds);
 }
 
+function extractScoreValue(row: PlayerScore | undefined): number {
+  if (!row) return 0;
+  const rec = row as unknown as { total_score?: number; score?: number };
+  const val = rec.total_score ?? rec.score ?? 0;
+  return typeof val === "number" && Number.isFinite(val) ? Math.max(0, val) : 0;
+}
+
 export default function PlayerControllerPage() {
   const params = useParams<{ sessionCode: string }>();
   const sessionCode = (params?.sessionCode ?? "").toUpperCase();
@@ -270,33 +277,47 @@ export default function PlayerControllerPage() {
   ) => {
     if (!supabase || !targetSessionId) return;
 
-    const { data: existingRow } = await supabase
-      .from("player_scores")
-      .select("id")
-      .eq("session_id", targetSessionId)
-      .eq("player_id", targetIdentity.playerId)
-      .maybeSingle<{ id: string }>();
+    const clampedScore = Math.max(0, nextScore);
 
-    if (existingRow?.id) {
+    const { data: existingRows, error: selectErr } = await supabase
+      .from("player_scores")
+      .select("id, total_score")
+      .eq("session_id", targetSessionId)
+      .eq("player_id", targetIdentity.playerId);
+
+    if (!selectErr && Array.isArray(existingRows) && existingRows.length > 0) {
+      const targetId = (existingRows[0] as { id: string }).id;
       await supabase
         .from("player_scores")
         .update({
           nickname: targetIdentity.nickname,
           avatar_id: targetIdentity.avatarId,
-          total_score: nextScore,
+          total_score: clampedScore,
         })
-        .eq("id", existingRow.id);
+        .eq("id", targetId);
       return;
     }
 
-    await supabase.from("player_scores").insert({
-      session_id: targetSessionId,
-      player_id: targetIdentity.playerId,
-      nickname: targetIdentity.nickname,
-      avatar_id: targetIdentity.avatarId,
-      total_score: nextScore,
-      streak: 0,
-    });
+    const { error: upsertErr } = await supabase.from("player_scores").upsert(
+      {
+        session_id: targetSessionId,
+        player_id: targetIdentity.playerId,
+        nickname: targetIdentity.nickname,
+        avatar_id: targetIdentity.avatarId,
+        total_score: clampedScore,
+      },
+      { onConflict: "session_id,player_id" }
+    );
+
+    if (upsertErr) {
+      await supabase.from("player_scores").insert({
+        session_id: targetSessionId,
+        player_id: targetIdentity.playerId,
+        nickname: targetIdentity.nickname,
+        avatar_id: targetIdentity.avatarId,
+        total_score: clampedScore,
+      });
+    }
   };
 
   const clearHighlightTimer = () => {
@@ -498,11 +519,7 @@ export default function PlayerControllerPage() {
           if (parsed?.playerId) {
             const match = rows.find((r) => r.player_id === parsed.playerId);
             if (match) {
-              const rec = match as unknown as {
-                total_score?: number;
-                score?: number;
-              };
-              const dbScore = Math.max(0, rec.total_score ?? rec.score ?? 0);
+              const dbScore = extractScoreValue(match);
               setLocalScore((prev) => Math.max(prev, dbScore));
             }
           }
@@ -671,13 +688,7 @@ export default function PlayerControllerPage() {
   const myScore = useMemo(() => {
     if (!identity) return 0;
     const match = scores.find((s) => s.player_id === identity.playerId);
-    const scoreRecord = match as unknown as
-      | { total_score?: number; score?: number }
-      | undefined;
-    const dbScore = Math.max(
-      0,
-      scoreRecord?.total_score ?? scoreRecord?.score ?? 0
-    );
+    const dbScore = extractScoreValue(match);
     return Math.max(localScore, dbScore);
   }, [identity, scores, localScore]);
 
@@ -701,7 +712,7 @@ export default function PlayerControllerPage() {
     [currentPlayerRecord?.id, identity?.playerId, players]
   );
 
-  // Attribution des points uniquement lorsque le chrono arrive à 0 (ou réponse révélée)
+  // Attribution des points uniquement lorsque le chrono est arrivé à 0 (ou réponse révélée)
   useEffect(() => {
     if (!identity || !currentQuestionKey || !activeQuestion || !isTimerExpired) {
       return;
@@ -731,6 +742,7 @@ export default function PlayerControllerPage() {
     const delta = isCorrect ? 3 : -1;
 
     const nextScore = Math.max(0, localScoreRef.current + delta);
+    localScoreRef.current = nextScore;
     setLocalScore(nextScore);
 
     setScores((prev) => {
