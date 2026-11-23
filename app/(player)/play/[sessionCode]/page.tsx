@@ -2,19 +2,13 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import {
-  Gamepad2,
-  Trophy,
-  Wifi,
-  WifiOff,
-  Send,
-  Sparkles,
-} from "lucide-react";
+import { Gamepad2, Trophy, Wifi, WifiOff, Sparkles } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   getNextAvailableColorIndex,
   getUniquePlayerColor,
 } from "@/lib/colorsplayer";
+import { QUESTIONS, type QuizQuestion } from "@/lib/questions";
 import type {
   GameSession,
   PlayerScore,
@@ -188,7 +182,6 @@ export default function PlayerControllerPage() {
   const [session, setSession] = useState<ExtendedGameSession | null>(null);
   const [players, setPlayers] = useState<SessionPlayer[]>([]);
   const [scores, setScores] = useState<PlayerScore[]>([]);
-  const [answerInput, setAnswerInput] = useState<string>("");
   const [submittedQuestionKey, setSubmittedQuestionKey] = useState<
     string | null
   >(null);
@@ -269,7 +262,7 @@ export default function PlayerControllerPage() {
   }, [quizState.questionIndex, quizState.currentQuestionIndex]);
 
   const currentQuestionKey = useMemo<string | null>(() => {
-    if (activeQuestionIndex === null) return null;
+    const idx = activeQuestionIndex ?? 0;
     const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
     const seriesSeed =
       typeof quizState.seriesSeed === "string" ? quizState.seriesSeed : "";
@@ -278,7 +271,7 @@ export default function PlayerControllerPage() {
       quizState.questionStartedAt !== null
         ? String(quizState.questionStartedAt)
         : "";
-    return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${startedAt}`;
+    return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${idx}-${startedAt}`;
   }, [
     activeQuestionIndex,
     quizState.seriesNumber,
@@ -292,7 +285,6 @@ export default function PlayerControllerPage() {
     clearHighlightTimer();
     setSubmittedQuestionKey(null);
     setHighlightedChoiceLetter(null);
-    setAnswerInput("");
     setStatusMessage("");
   }, [activeGameId, currentQuestionKey]);
 
@@ -425,23 +417,26 @@ export default function PlayerControllerPage() {
   }, [supabase, sessionCode]);
 
   const activeQuestion = useMemo<QuizQuestionPayload | null>(() => {
-    if (activeQuestionIndex === null) {
-      return quizState.currentQuestion ?? null;
-    }
-    const list = Array.isArray(quizState.questions) ? quizState.questions : [];
-    if (list.length > 0) {
+    const idx = activeQuestionIndex ?? 0;
+    const rawList =
+      Array.isArray(quizState.questions) && quizState.questions.length > 0
+        ? quizState.questions
+        : (QUESTIONS as QuizQuestion[]);
+
+    if (rawList.length > 0) {
       const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
       const seriesSeed =
         typeof quizState.seriesSeed === "string" && quizState.seriesSeed.trim()
           ? quizState.seriesSeed.trim()
           : `${session?.id ?? ""}-${sessionCode}-s${seriesNumber}`;
       const ordered = shuffleWithSeed(
-        list,
+        rawList,
         `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`
-      ).slice(0, Math.min(15, list.length));
-      const safeIdx = Math.min(activeQuestionIndex, ordered.length - 1);
+      ).slice(0, Math.min(15, rawList.length));
+      const safeIdx = Math.min(idx, ordered.length - 1);
       return ordered[safeIdx] ?? null;
     }
+
     return quizState.currentQuestion ?? null;
   }, [
     activeQuestionIndex,
@@ -638,19 +633,14 @@ export default function PlayerControllerPage() {
     }
   };
 
-  const handleSubmitAnswer = async (
-    e?: React.FormEvent,
-    directChoice?: { letter: string; optionValue: string }
-  ) => {
-    if (e) e.preventDefault();
+  const handleSubmitChoice = async (choice: {
+    letter: string;
+    optionValue: string;
+  }) => {
     if (!identity || alreadySubmittedThisQuestion) return;
 
-    const valueToSend = (directChoice?.optionValue ?? answerInput).trim();
-    if (!valueToSend) return;
-
     const round = (activeQuestionIndex ?? 0) + 1;
-    const chosenLetter =
-      directChoice?.letter ?? normalizeAnswerLetter(valueToSend) ?? "";
+    const chosenLetter = choice.letter;
     const correctLetter = resolveCorrectLetter(activeQuestion);
     const isCorrect =
       Boolean(correctLetter) &&
@@ -666,9 +656,7 @@ export default function PlayerControllerPage() {
         quizState.answers && typeof quizState.answers === "object"
           ? { ...quizState.answers }
           : {};
-      if (chosenLetter) {
-        currentAnswers[String(identity.playerId)] = chosenLetter;
-      }
+      currentAnswers[String(identity.playerId)] = chosenLetter;
 
       const nextGameState: QuizGameState = {
         ...quizState,
@@ -683,8 +671,8 @@ export default function PlayerControllerPage() {
             round_number: round,
             action_type: "answer",
             payload: {
-              answer: valueToSend,
-              choice_letter: directChoice?.letter ?? null,
+              answer: choice.optionValue,
+              choice_letter: chosenLetter,
               question_index: activeQuestionIndex ?? 0,
             },
           }),
@@ -749,22 +737,13 @@ export default function PlayerControllerPage() {
 
     clearHighlightTimer();
     setSubmittedQuestionKey(currentQuestionKey);
-    setHighlightedChoiceLetter(directChoice?.letter ?? null);
-    if (directChoice?.letter) {
-      highlightTimeoutRef.current = window.setTimeout(() => {
-        setHighlightedChoiceLetter(null);
-        highlightTimeoutRef.current = null;
-      }, 1000);
-    }
+    setHighlightedChoiceLetter(chosenLetter);
+    highlightTimeoutRef.current = window.setTimeout(() => {
+      setHighlightedChoiceLetter(null);
+      highlightTimeoutRef.current = null;
+    }, 1000);
 
-    setStatusMessage(
-      directChoice
-        ? `Choix ${directChoice.letter} envoyé !`
-        : "Réponse envoyée !"
-    );
-    if (!directChoice) {
-      setAnswerInput("");
-    }
+    setStatusMessage(`Choix ${chosenLetter} envoyé !`);
   };
 
   return (
@@ -882,7 +861,7 @@ export default function PlayerControllerPage() {
                       : "En attente"}
                   </p>
                 </div>
-              ) : parsedOptions.length > 0 ? (
+              ) : (
                 <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-4 min-h-[300px]">
                   {qcmChoices.map((choice) => {
                     const isHighlighted =
@@ -893,7 +872,7 @@ export default function PlayerControllerPage() {
                         type="button"
                         disabled={alreadySubmittedThisQuestion}
                         onClick={() =>
-                          void handleSubmitAnswer(undefined, {
+                          void handleSubmitChoice({
                             letter: choice.letter,
                             optionValue: choice.optionValue,
                           })
@@ -914,34 +893,6 @@ export default function PlayerControllerPage() {
                     );
                   })}
                 </div>
-              ) : (
-                <form
-                  onSubmit={handleSubmitAnswer}
-                  className="my-auto space-y-3"
-                >
-                  <input
-                    type="text"
-                    value={answerInput}
-                    onChange={(e) => setAnswerInput(e.target.value)}
-                    disabled={alreadySubmittedThisQuestion}
-                    placeholder="Entre ta réponse..."
-                    className="w-full rounded-2xl bg-black/40 border border-white/15 px-4 py-3 text-white placeholder:text-neutral-500 focus:outline-none focus:border-amber-400 disabled:opacity-40"
-                  />
-                  <button
-                    type="submit"
-                    disabled={
-                      alreadySubmittedThisQuestion || !answerInput.trim()
-                    }
-                    className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-black font-bold transition"
-                  >
-                    <Send className="w-4 h-4" />
-                    <span>
-                      {alreadySubmittedThisQuestion
-                        ? "Réponse envoyée"
-                        : "Envoyer"}
-                    </span>
-                  </button>
-                </form>
               )}
 
               {statusMessage && (
