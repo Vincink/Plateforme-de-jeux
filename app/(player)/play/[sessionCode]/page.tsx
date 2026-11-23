@@ -40,6 +40,10 @@ interface QuizQuestionPayload {
   answers?: string[] | Record<string, string>;
   correct?: string | number;
   correctIndex?: number;
+  correct_index?: number;
+  correctAnswer?: string | number;
+  correct_answer?: string | number;
+  points?: number;
 }
 
 interface QuizGameState {
@@ -54,6 +58,7 @@ interface QuizGameState {
   currentQuestion?: QuizQuestionPayload | null;
   answers?: Record<string, string>;
   revealed?: boolean;
+  [key: string]: unknown;
 }
 
 type ExtendedGameSession = GameSession & {
@@ -139,6 +144,40 @@ function extractOptions(
   );
 }
 
+function normalizeAnswerLetter(raw: unknown): string | null {
+  if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw <= 3) {
+    return LETTERS[raw] ?? null;
+  }
+  if (typeof raw === "string") {
+    const upper = raw.trim().toUpperCase();
+    if (upper === "A" || upper === "B" || upper === "C" || upper === "D") {
+      return upper;
+    }
+    if (upper === "0" || upper === "1" || upper === "2" || upper === "3") {
+      return LETTERS[Number(upper)] ?? null;
+    }
+  }
+  return null;
+}
+
+function resolveCorrectLetter(
+  question: QuizQuestionPayload | null
+): string | null {
+  if (!question) return null;
+  const rawIdx =
+    typeof question.correctIndex === "number"
+      ? question.correctIndex
+      : typeof question.correct_index === "number"
+      ? question.correct_index
+      : null;
+  if (rawIdx !== null && rawIdx >= 0 && rawIdx <= 3) {
+    return LETTERS[rawIdx] ?? null;
+  }
+  return normalizeAnswerLetter(
+    question.correct ?? question.correctAnswer ?? question.correct_answer
+  );
+}
+
 export default function PlayerControllerPage() {
   const params = useParams<{ sessionCode: string }>();
   const sessionCode = (params?.sessionCode ?? "").toUpperCase();
@@ -150,7 +189,9 @@ export default function PlayerControllerPage() {
   const [players, setPlayers] = useState<SessionPlayer[]>([]);
   const [scores, setScores] = useState<PlayerScore[]>([]);
   const [answerInput, setAnswerInput] = useState<string>("");
-  const [submittedRound, setSubmittedRound] = useState<number | null>(null);
+  const [submittedQuestionKey, setSubmittedQuestionKey] = useState<
+    string | null
+  >(null);
   const [selectedChoiceLetter, setSelectedChoiceLetter] = useState<
     string | null
   >(null);
@@ -201,22 +242,43 @@ export default function PlayerControllerPage() {
 
   const quizState = session?.game_state ?? {};
   const activeGameId = session?.game_id ?? null;
-  const currentRound = session?.current_round ?? 1;
   const roundStatus = session?.status ?? "lobby";
 
+  const activeQuestionIndex = useMemo<number | null>(() => {
+    const rawIdx =
+      quizState.questionIndex ?? quizState.currentQuestionIndex ?? null;
+    if (typeof rawIdx === "number" && Number.isFinite(rawIdx) && rawIdx >= 0) {
+      return Math.floor(rawIdx);
+    }
+    return null;
+  }, [quizState.questionIndex, quizState.currentQuestionIndex]);
+
+  const currentQuestionKey = useMemo<string | null>(() => {
+    if (activeQuestionIndex === null) return null;
+    const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
+    const seriesSeed =
+      typeof quizState.seriesSeed === "string" ? quizState.seriesSeed : "";
+    const startedAt =
+      quizState.questionStartedAt !== undefined &&
+      quizState.questionStartedAt !== null
+        ? String(quizState.questionStartedAt)
+        : "";
+    return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${startedAt}`;
+  }, [
+    activeQuestionIndex,
+    quizState.seriesNumber,
+    quizState.seriesSeed,
+    quizState.questionStartedAt,
+    session?.id,
+    sessionCode,
+  ]);
+
   useEffect(() => {
-    setSubmittedRound(null);
+    setSubmittedQuestionKey(null);
     setSelectedChoiceLetter(null);
     setAnswerInput("");
     setStatusMessage("");
-  }, [activeGameId]);
-
-  useEffect(() => {
-    if (submittedRound !== null && submittedRound !== currentRound) {
-      setSelectedChoiceLetter(null);
-      setStatusMessage("");
-    }
-  }, [currentRound, submittedRound]);
+  }, [activeGameId, currentQuestionKey]);
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
@@ -346,15 +408,6 @@ export default function PlayerControllerPage() {
     };
   }, [supabase, sessionCode]);
 
-  const activeQuestionIndex = useMemo<number | null>(() => {
-    const rawIdx =
-      quizState.questionIndex ?? quizState.currentQuestionIndex ?? null;
-    if (typeof rawIdx === "number" && Number.isFinite(rawIdx) && rawIdx >= 0) {
-      return Math.floor(rawIdx);
-    }
-    return null;
-  }, [quizState.questionIndex, quizState.currentQuestionIndex]);
-
   const activeQuestion = useMemo<QuizQuestionPayload | null>(() => {
     if (activeQuestionIndex === null) {
       return quizState.currentQuestion ?? null;
@@ -384,7 +437,9 @@ export default function PlayerControllerPage() {
     sessionCode,
   ]);
 
-  const alreadySubmittedThisRound = submittedRound === currentRound;
+  const alreadySubmittedThisQuestion =
+    currentQuestionKey !== null &&
+    submittedQuestionKey === currentQuestionKey;
   const isPlaying = roundStatus === "playing";
 
   const parsedOptions = useMemo<string[]>(() => {
@@ -572,32 +627,111 @@ export default function PlayerControllerPage() {
     directChoice?: { letter: string; optionValue: string }
   ) => {
     if (e) e.preventDefault();
-    if (!identity) return;
+    if (!identity || alreadySubmittedThisQuestion) return;
 
     const valueToSend = (directChoice?.optionValue ?? answerInput).trim();
     if (!valueToSend) return;
 
-    const round = session?.current_round ?? 1;
+    const round = (activeQuestionIndex ?? 0) + 1;
+    const chosenLetter =
+      directChoice?.letter ?? normalizeAnswerLetter(valueToSend) ?? "";
+    const correctLetter = resolveCorrectLetter(activeQuestion);
+    const isCorrect =
+      Boolean(correctLetter) &&
+      Boolean(chosenLetter) &&
+      chosenLetter === correctLetter;
+    const earnedPoints = isCorrect
+      ? Math.max(1, Number(activeQuestion?.points ?? 1) || 1)
+      : 0;
+    const nextScore = myScore + earnedPoints;
 
     if (supabase && session?.id) {
-      const { error } = await supabase.from("player_actions").insert({
-        session_id: session.id,
-        player_id: identity.playerId,
-        round_number: round,
-        action_type: "answer",
-        payload: {
-          answer: valueToSend,
-          choice_letter: directChoice?.letter ?? null,
-        },
-      });
+      const currentAnswers =
+        quizState.answers && typeof quizState.answers === "object"
+          ? { ...quizState.answers }
+          : {};
+      if (chosenLetter) {
+        currentAnswers[String(identity.playerId)] = chosenLetter;
+      }
 
-      if (error) {
-        setStatusMessage(`Envoi impossible : ${error.message}`);
+      const nextGameState: QuizGameState = {
+        ...quizState,
+        answers: currentAnswers,
+      };
+
+      const [{ error: actionError }, { error: sessionUpdateError }] =
+        await Promise.all([
+          supabase.from("player_actions").insert({
+            session_id: session.id,
+            player_id: identity.playerId,
+            round_number: round,
+            action_type: "answer",
+            payload: {
+              answer: valueToSend,
+              choice_letter: directChoice?.letter ?? null,
+              question_index: activeQuestionIndex ?? 0,
+            },
+          }),
+          supabase
+            .from("game_sessions")
+            .update({ game_state: nextGameState })
+            .eq("id", session.id),
+        ]);
+
+      if (actionError || sessionUpdateError) {
+        setStatusMessage(
+          `Envoi impossible : ${
+            actionError?.message ?? sessionUpdateError?.message ?? ""
+          }`
+        );
         return;
+      }
+
+      if (earnedPoints > 0) {
+        await supabase.from("player_scores").upsert(
+          {
+            session_id: session.id,
+            player_id: identity.playerId,
+            nickname: identity.nickname,
+            avatar_id: identity.avatarId,
+            total_score: nextScore,
+          },
+          { onConflict: "session_id,player_id" }
+        );
+      }
+
+      setSession((prev) =>
+        prev ? { ...prev, game_state: nextGameState } : prev
+      );
+      if (earnedPoints > 0) {
+        setScores((prev) => {
+          const exists = prev.some((s) => s.player_id === identity.playerId);
+          if (exists) {
+            return prev.map((s) =>
+              s.player_id === identity.playerId
+                ? ({
+                    ...s,
+                    total_score: nextScore,
+                    score: nextScore,
+                  } as PlayerScore)
+                : s
+            );
+          }
+          return [
+            ...prev,
+            {
+              id: `score-${identity.playerId}`,
+              session_id: session.id,
+              player_id: identity.playerId,
+              total_score: nextScore,
+              score: nextScore,
+            } as unknown as PlayerScore,
+          ];
+        });
       }
     }
 
-    setSubmittedRound(round);
+    setSubmittedQuestionKey(currentQuestionKey);
     setSelectedChoiceLetter(directChoice?.letter ?? null);
     setStatusMessage(
       directChoice
@@ -732,7 +866,7 @@ export default function PlayerControllerPage() {
                       <button
                         key={choice.letter}
                         type="button"
-                        disabled={alreadySubmittedThisRound}
+                        disabled={alreadySubmittedThisQuestion}
                         onClick={() =>
                           void handleSubmitAnswer(undefined, {
                             letter: choice.letter,
@@ -745,7 +879,7 @@ export default function PlayerControllerPage() {
                           color: choice.textHex,
                         }}
                         className={`h-full min-h-[140px] rounded-3xl border-4 flex items-center justify-center text-6xl font-black tracking-tight shadow-xl active:scale-95 transition ${
-                          alreadySubmittedThisRound && !isChosen
+                          alreadySubmittedThisQuestion && !isChosen
                             ? "opacity-35"
                             : "opacity-100"
                         }`}
@@ -764,18 +898,22 @@ export default function PlayerControllerPage() {
                     type="text"
                     value={answerInput}
                     onChange={(e) => setAnswerInput(e.target.value)}
-                    disabled={alreadySubmittedThisRound}
+                    disabled={alreadySubmittedThisQuestion}
                     placeholder="Entre ta réponse..."
                     className="w-full rounded-2xl bg-black/40 border border-white/15 px-4 py-3 text-white placeholder:text-neutral-500 focus:outline-none focus:border-amber-400 disabled:opacity-40"
                   />
                   <button
                     type="submit"
-                    disabled={alreadySubmittedThisRound || !answerInput.trim()}
+                    disabled={
+                      alreadySubmittedThisQuestion || !answerInput.trim()
+                    }
                     className="w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:opacity-40 text-black font-bold transition"
                   >
                     <Send className="w-4 h-4" />
                     <span>
-                      {alreadySubmittedThisRound ? "Réponse envoyée" : "Envoyer"}
+                      {alreadySubmittedThisQuestion
+                        ? "Réponse envoyée"
+                        : "Envoyer"}
                     </span>
                   </button>
                 </form>
