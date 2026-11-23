@@ -186,6 +186,73 @@ function generateSeriesSeed(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function hashStringToSeed(input: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function shuffleWithSeed<T>(items: T[], seedKey: string): T[] {
+  const copy = [...items];
+  let seed = hashStringToSeed(seedKey) || 1;
+  const nextRand = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(nextRand() * (i + 1));
+    const itemI = copy[i];
+    const itemJ = copy[j];
+    if (itemI !== undefined && itemJ !== undefined) {
+      copy[i] = itemJ;
+      copy[j] = itemI;
+    }
+  }
+  return copy;
+}
+
+function getQuestionUniqueKey(q: unknown, fallbackIdx: number): string {
+  if (q && typeof q === "object") {
+    const obj = q as Record<string, unknown>;
+    if (obj.id !== undefined && obj.id !== null) return `id:${String(obj.id)}`;
+    const label = String(
+      obj.question ?? obj.prompt ?? obj.title ?? obj.text ?? ""
+    );
+    if (label.trim()) return `txt:${label.trim().toLowerCase()}`;
+  }
+  return `idx:${fallbackIdx}`;
+}
+
+function pickRandomQuestionsSeries<T>(
+  source: T[],
+  count: number,
+  seedSignature: string,
+  excludedKeys: ReadonlySet<string> = new Set()
+): T[] {
+  if (!Array.isArray(source) || source.length === 0) return [];
+  const targetCount = Math.min(count, source.length);
+  const shuffled = shuffleWithSeed(source, seedSignature);
+
+  const freshQuestions = shuffled.filter((item, idx) => {
+    const k = getQuestionUniqueKey(item, idx);
+    return !excludedKeys.has(k);
+  });
+
+  if (freshQuestions.length >= targetCount) {
+    return freshQuestions.slice(0, targetCount);
+  }
+
+  const alreadySeen = shuffled.filter((item, idx) => {
+    const k = getQuestionUniqueKey(item, idx);
+    return excludedKeys.has(k);
+  });
+
+  return [...freshQuestions, ...alreadySeen].slice(0, targetCount);
+}
+
 function formatPlayerAnswer(rawAnswer: unknown): string | null {
   if (rawAnswer === null || rawAnswer === undefined) return null;
   if (typeof rawAnswer === "string" || typeof rawAnswer === "number") {
@@ -344,8 +411,6 @@ export default function AdminConsolePage() {
   const [playerAnswersById, setPlayerAnswersById] = useState<
     Record<string, string>
   >({});
-  const [activeSessionQuestions, setActiveSessionQuestions] =
-    useState<unknown[]>(QUESTIONS);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
   const [dbError, setDbError] = useState<string | null>(null);
@@ -365,6 +430,12 @@ export default function AdminConsolePage() {
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
+
+  const usedQuestionKeysRef = useRef<Set<string>>(new Set());
+  const cachedSeriesRef = useRef<{
+    signature: string;
+    items: unknown[];
+  } | null>(null);
 
   useEffect(() => {
     saveGridLayout(layout);
@@ -482,9 +553,41 @@ export default function AdminConsolePage() {
   const isEndOfSeries =
     totalQuestions > 0 && questionIndex >= totalQuestions - 1;
 
+  const seriesSignature = `${sessionId ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`;
+  const activeSeriesQuestions = (() => {
+    if (
+      cachedSeriesRef.current &&
+      cachedSeriesRef.current.signature === seriesSignature
+    ) {
+      return cachedSeriesRef.current.items;
+    }
+
+    const picked = pickRandomQuestionsSeries(
+      QUESTIONS,
+      QUESTIONS_PER_GAME,
+      seriesSignature,
+      usedQuestionKeysRef.current
+    );
+
+    if (QUESTIONS.length > QUESTIONS_PER_GAME) {
+      if (
+        usedQuestionKeysRef.current.size + picked.length >=
+        QUESTIONS.length
+      ) {
+        usedQuestionKeysRef.current = new Set();
+      }
+      picked.forEach((item, idx) => {
+        usedQuestionKeysRef.current.add(getQuestionUniqueKey(item, idx));
+      });
+    }
+
+    cachedSeriesRef.current = { signature: seriesSignature, items: picked };
+    return picked;
+  })();
+
   const currentQuestionObj =
-    questionIndex >= 0 && questionIndex < activeSessionQuestions.length
-      ? activeSessionQuestions[questionIndex]
+    questionIndex >= 0 && questionIndex < activeSeriesQuestions.length
+      ? activeSeriesQuestions.at(questionIndex) ?? null
       : null;
   const currentCorrectLetter =
     resolveQuestionCorrectLetter(currentQuestionObj);
@@ -528,25 +631,6 @@ export default function AdminConsolePage() {
     return nextAnswers;
   };
 
-  const syncQuestionsFromGameState = (rawGameState: unknown) => {
-    if (!rawGameState || typeof rawGameState !== "object") return;
-    const stateObj = rawGameState as {
-      shuffledQuestions?: unknown;
-      seriesQuestions?: unknown;
-      questions?: unknown;
-    };
-    const candidate = Array.isArray(stateObj.shuffledQuestions)
-      ? stateObj.shuffledQuestions
-      : Array.isArray(stateObj.seriesQuestions)
-      ? stateObj.seriesQuestions
-      : Array.isArray(stateObj.questions)
-      ? stateObj.questions
-      : null;
-    if (candidate && candidate.length > 0) {
-      setActiveSessionQuestions(candidate);
-    }
-  };
-
   // --- Chargement des joueurs, scores et réponses depuis Supabase ---
   const loadPlayersAndScoresForSession = async (targetSessionId: string) => {
     if (!supabase || !isUuid(targetSessionId)) return;
@@ -585,9 +669,11 @@ export default function AdminConsolePage() {
     }
 
     if (sessionRow) {
-      const gs = (sessionRow as { game_state?: unknown }).game_state;
-      setPlayerAnswersById(extractAnswersFromGameState(gs));
-      syncQuestionsFromGameState(gs);
+      setPlayerAnswersById(
+        extractAnswersFromGameState(
+          (sessionRow as { game_state?: unknown }).game_state
+        )
+      );
     }
   };
 
@@ -645,7 +731,6 @@ export default function AdminConsolePage() {
             setPlayerAnswersById(
               extractAnswersFromGameState(nextRow.game_state)
             );
-            syncQuestionsFromGameState(nextRow.game_state);
           }
         }
       )
@@ -798,7 +883,8 @@ export default function AdminConsolePage() {
           setPlayers([]);
           setScores([]);
           setPlayerAnswersById({});
-          setActiveSessionQuestions(QUESTIONS);
+          usedQuestionKeysRef.current = new Set();
+          cachedSeriesRef.current = null;
           await loadPlayersAndScoresForSession(insertResult.data.id);
         }
       }
@@ -899,7 +985,8 @@ export default function AdminConsolePage() {
     setPlayers([]);
     setScores([]);
     setPlayerAnswersById({});
-    setActiveSessionQuestions(QUESTIONS);
+    usedQuestionKeysRef.current = new Set();
+    cachedSeriesRef.current = null;
 
     await syncSessionToDb({
       id: null,
