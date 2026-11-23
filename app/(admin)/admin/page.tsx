@@ -24,6 +24,7 @@ import {
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
+import { QUESTIONS } from "@/lib/questions";
 import type {
   GameSession,
   PlayerScore,
@@ -33,6 +34,9 @@ import type {
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const GRAND_QUIZ_UUID = "6e6d7179-3a56-4d94-9c1d-19ac06a34aaa";
+const QUESTION_DURATION_SECONDS = 12;
 
 function isUuid(value: string | undefined | null): value is string {
   return typeof value === "string" && UUID_REGEX.test(value);
@@ -60,6 +64,10 @@ export default function AdminConsolePage() {
   );
   const [status, setStatus] = useState<SessionStatus>("lobby");
   const [currentRound, setCurrentRound] = useState<number>(1);
+  const [questionIndex, setQuestionIndex] = useState<number>(-1);
+  const [questionStartedAt, setQuestionStartedAt] = useState<string | null>(
+    null
+  );
   const [showQrOnTv, setShowQrOnTv] = useState<boolean>(true);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
@@ -170,6 +178,8 @@ export default function AdminConsolePage() {
     nextStatus: SessionStatus;
     round: number;
     qrVisible: boolean;
+    nextQuestionIndex?: number;
+    nextQuestionStartedAt?: string | null;
   }) => {
     if (!supabase) {
       setDbError(
@@ -186,10 +196,27 @@ export default function AdminConsolePage() {
       return;
     }
 
+    const effectiveQuestionIndex =
+      params.nextQuestionIndex !== undefined
+        ? params.nextQuestionIndex
+        : questionIndex;
+
+    const effectiveStartedAt =
+      params.nextQuestionStartedAt !== undefined
+        ? params.nextQuestionStartedAt
+        : questionStartedAt;
+
+    const isQuizGame =
+      validGameUuid === GRAND_QUIZ_UUID ||
+      (params.game ?? selectedGame)?.slug === "quiz" ||
+      (params.game ?? selectedGame)?.title?.toLowerCase().includes("quiz");
+
+    const hasQuestionStarted = effectiveQuestionIndex >= 0;
+
     setIsSavingSession(true);
     setDbError(null);
     try {
-      const payload = {
+      const basePayload: Record<string, unknown> = {
         code: params.code,
         game_id: validGameUuid,
         status: params.nextStatus,
@@ -197,27 +224,75 @@ export default function AdminConsolePage() {
         show_qr: params.qrVisible,
       };
 
+      if (isQuizGame) {
+        basePayload.game_state = {
+          questionStarted: hasQuestionStarted,
+          roundTriggered: hasQuestionStarted,
+          questionIndex: effectiveQuestionIndex,
+          currentQuestionIndex: effectiveQuestionIndex,
+          questionStartedAt: hasQuestionStarted ? effectiveStartedAt : null,
+          durationSeconds: QUESTION_DURATION_SECONDS,
+          questions: QUESTIONS,
+          revealed: false,
+          answers: {},
+        };
+      }
+
       if (params.id) {
         const { error } = await supabase
           .from("game_sessions")
-          .update(payload)
+          .update(basePayload)
           .eq("id", params.id);
+
         if (error) {
-          setDbError(`Mise à jour session impossible : ${error.message}`);
+          // Repli si la colonne game_state n'existe pas encore dans game_sessions
+          const { error: fallbackError } = await supabase
+            .from("game_sessions")
+            .update({
+              code: params.code,
+              game_id: validGameUuid,
+              status: params.nextStatus,
+              current_round: params.round,
+              show_qr: params.qrVisible,
+            })
+            .eq("id", params.id);
+
+          if (fallbackError) {
+            setDbError(
+              `Mise à jour session impossible : ${fallbackError.message}`
+            );
+          }
         }
       } else {
-        const { data, error } = await supabase
+        let insertResult = await supabase
           .from("game_sessions")
-          .insert(payload)
+          .insert(basePayload)
           .select()
           .single<GameSession>();
-        if (error) {
-          setDbError(`Création session impossible : ${error.message}`);
-        } else if (data?.id) {
-          setSessionId(data.id);
+
+        if (insertResult.error) {
+          insertResult = await supabase
+            .from("game_sessions")
+            .insert({
+              code: params.code,
+              game_id: validGameUuid,
+              status: params.nextStatus,
+              current_round: params.round,
+              show_qr: params.qrVisible,
+            })
+            .select()
+            .single<GameSession>();
+        }
+
+        if (insertResult.error) {
+          setDbError(
+            `Création session impossible : ${insertResult.error.message}`
+          );
+        } else if (insertResult.data?.id) {
+          setSessionId(insertResult.data.id);
           setPlayers([]);
           setScores([]);
-          await loadPlayersAndScoresForSession(data.id);
+          await loadPlayersAndScoresForSession(insertResult.data.id);
         }
       }
     } finally {
@@ -260,6 +335,8 @@ export default function AdminConsolePage() {
             nextStatus: status,
             round: currentRound,
             qrVisible: showQrOnTv,
+            nextQuestionIndex: -1,
+            nextQuestionStartedAt: null,
           });
         }
       } else if (!cancelled) {
@@ -282,6 +359,8 @@ export default function AdminConsolePage() {
     setSessionCode(newCode);
     setStatus("lobby");
     setCurrentRound(1);
+    setQuestionIndex(-1);
+    setQuestionStartedAt(null);
     setPlayers([]);
     setScores([]);
 
@@ -292,11 +371,23 @@ export default function AdminConsolePage() {
       nextStatus: "lobby",
       round: 1,
       qrVisible: showQrOnTv,
+      nextQuestionIndex: -1,
+      nextQuestionStartedAt: null,
     });
   };
 
   const handleStatusChange = async (nextStatus: SessionStatus) => {
     setStatus(nextStatus);
+    const shouldResetQuestions =
+      nextStatus === "lobby" || nextStatus === "finished";
+    const nextIdx = shouldResetQuestions ? -1 : questionIndex;
+    const nextStarted = shouldResetQuestions ? null : questionStartedAt;
+
+    if (shouldResetQuestions) {
+      setQuestionIndex(-1);
+      setQuestionStartedAt(null);
+    }
+
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
@@ -304,12 +395,24 @@ export default function AdminConsolePage() {
       nextStatus,
       round: currentRound,
       qrVisible: showQrOnTv,
+      nextQuestionIndex: nextIdx,
+      nextQuestionStartedAt: nextStarted,
     });
   };
 
   const handleNextRound = async () => {
     const nextRound = currentRound + 1;
+    // Démarre à l'index 0 au 1er clic sur "Manche +1", puis 1, 2, 3...
+    const nextIdx =
+      questionIndex < 0
+        ? 0
+        : Math.min(questionIndex + 1, Math.max(0, QUESTIONS.length - 1));
+    const startedIso = new Date().toISOString();
+
     setCurrentRound(nextRound);
+    setQuestionIndex(nextIdx);
+    setQuestionStartedAt(startedIso);
+
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
@@ -317,6 +420,8 @@ export default function AdminConsolePage() {
       nextStatus: status,
       round: nextRound,
       qrVisible: showQrOnTv,
+      nextQuestionIndex: nextIdx,
+      nextQuestionStartedAt: startedIso,
     });
   };
 
@@ -336,6 +441,8 @@ export default function AdminConsolePage() {
   const handleSelectGame = async (gameId: string) => {
     const targetGame = games.find((g) => g.id === gameId) ?? null;
     setSelectedGameId(gameId);
+    setQuestionIndex(-1);
+    setQuestionStartedAt(null);
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
@@ -343,6 +450,8 @@ export default function AdminConsolePage() {
       nextStatus: status,
       round: currentRound,
       qrVisible: showQrOnTv,
+      nextQuestionIndex: -1,
+      nextQuestionStartedAt: null,
     });
   };
 
@@ -527,6 +636,9 @@ export default function AdminConsolePage() {
                         {selectedGame?.title ?? "Aucun"}
                       </span>{" "}
                       • Manche {currentRound}
+                      {questionIndex >= 0
+                        ? ` • Question ${questionIndex + 1} / ${QUESTIONS.length}`
+                        : ""}
                     </p>
                   </div>
                   <span
