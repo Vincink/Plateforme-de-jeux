@@ -216,6 +216,57 @@ function formatPlayerAnswer(rawAnswer: unknown): string | null {
   return null;
 }
 
+function resolveQuestionCorrectLetter(question: unknown): string | null {
+  if (!question || typeof question !== "object") return null;
+  const q = question as Record<string, unknown>;
+  const letters = ["A", "B", "C", "D"];
+
+  const rawDirect =
+    q.correctAnswer ??
+    q.correct_answer ??
+    q.answer ??
+    q.correct ??
+    q.goodAnswer ??
+    q.rightAnswer ??
+    q.solution;
+
+  if (typeof rawDirect === "number" && rawDirect >= 0 && rawDirect < 4) {
+    return letters[rawDirect];
+  }
+
+  if (typeof rawDirect === "string") {
+    const trimmed = rawDirect.trim();
+    const upper = trimmed.toUpperCase();
+    if (letters.includes(upper)) return upper;
+    if (/^[0-3]$/.test(trimmed)) return letters[Number(trimmed)];
+
+    const options = Array.isArray(q.options)
+      ? q.options
+      : Array.isArray(q.choices)
+      ? q.choices
+      : Array.isArray(q.answers)
+      ? q.answers
+      : null;
+
+    if (options) {
+      const idx = options.findIndex(
+        (opt) =>
+          typeof opt === "string" &&
+          opt.trim().toLowerCase() === trimmed.toLowerCase()
+      );
+      if (idx >= 0 && idx < 4) return letters[idx];
+    }
+  }
+
+  const rawIndex =
+    q.correctIndex ?? q.correct_index ?? q.answerIndex ?? q.rightIndex;
+  if (typeof rawIndex === "number" && rawIndex >= 0 && rawIndex < 4) {
+    return letters[rawIndex];
+  }
+
+  return null;
+}
+
 function getAnswerBadgeStyle(letter: string): {
   bg: string;
   border: string;
@@ -289,6 +340,8 @@ export default function AdminConsolePage() {
   const [playerAnswersById, setPlayerAnswersById] = useState<
     Record<string, string>
   >({});
+  const [activeSessionQuestions, setActiveSessionQuestions] =
+    useState<unknown[]>(QUESTIONS);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
   const [dbError, setDbError] = useState<string | null>(null);
@@ -425,6 +478,16 @@ export default function AdminConsolePage() {
   const isEndOfSeries =
     totalQuestions > 0 && questionIndex >= totalQuestions - 1;
 
+  const currentQuestionObj =
+    questionIndex >= 0 && questionIndex < activeSessionQuestions.length
+      ? activeSessionQuestions[questionIndex]
+      : null;
+  const currentCorrectLetter =
+    resolveQuestionCorrectLetter(currentQuestionObj);
+  const currentCorrectBadgeStyle = currentCorrectLetter
+    ? getAnswerBadgeStyle(currentCorrectLetter)
+    : null;
+
   const resolveValidGameUuid = (
     candidateGame?: CatalogGame | null
   ): string | null => {
@@ -459,6 +522,25 @@ export default function AdminConsolePage() {
       }
     }
     return nextAnswers;
+  };
+
+  const syncQuestionsFromGameState = (rawGameState: unknown) => {
+    if (!rawGameState || typeof rawGameState !== "object") return;
+    const stateObj = rawGameState as {
+      shuffledQuestions?: unknown;
+      seriesQuestions?: unknown;
+      questions?: unknown;
+    };
+    const candidate = Array.isArray(stateObj.shuffledQuestions)
+      ? stateObj.shuffledQuestions
+      : Array.isArray(stateObj.seriesQuestions)
+      ? stateObj.seriesQuestions
+      : Array.isArray(stateObj.questions)
+      ? stateObj.questions
+      : null;
+    if (candidate && candidate.length > 0) {
+      setActiveSessionQuestions(candidate);
+    }
   };
 
   // --- Chargement des joueurs, scores et réponses depuis Supabase ---
@@ -499,11 +581,9 @@ export default function AdminConsolePage() {
     }
 
     if (sessionRow) {
-      setPlayerAnswersById(
-        extractAnswersFromGameState(
-          (sessionRow as { game_state?: unknown }).game_state
-        )
-      );
+      const gs = (sessionRow as { game_state?: unknown }).game_state;
+      setPlayerAnswersById(extractAnswersFromGameState(gs));
+      syncQuestionsFromGameState(gs);
     }
   };
 
@@ -561,6 +641,7 @@ export default function AdminConsolePage() {
             setPlayerAnswersById(
               extractAnswersFromGameState(nextRow.game_state)
             );
+            syncQuestionsFromGameState(nextRow.game_state);
           }
         }
       )
@@ -713,6 +794,7 @@ export default function AdminConsolePage() {
           setPlayers([]);
           setScores([]);
           setPlayerAnswersById({});
+          setActiveSessionQuestions(QUESTIONS);
           await loadPlayersAndScoresForSession(insertResult.data.id);
         }
       }
@@ -813,6 +895,7 @@ export default function AdminConsolePage() {
     setPlayers([]);
     setScores([]);
     setPlayerAnswersById({});
+    setActiveSessionQuestions(QUESTIONS);
 
     await syncSessionToDb({
       id: null,
@@ -1327,19 +1410,39 @@ export default function AdminConsolePage() {
                     ? ` • Question ${questionIndex + 1} / ${totalQuestions}`
                     : ""}
                 </p>
-                <span
-                  className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider shrink-0 ${
-                    status === "playing"
-                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                      : status === "paused"
-                      ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                      : status === "finished"
-                      ? "bg-rose-500/20 text-rose-300 border border-rose-500/30"
-                      : "bg-sky-500/20 text-sky-300 border border-sky-500/30"
-                  }`}
-                >
-                  {status}
-                </span>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {/* Pastille de la bonne réponse à la question en cours */}
+                  {showPlayerAnswersInAdmin &&
+                    currentCorrectLetter &&
+                    currentCorrectBadgeStyle && (
+                      <span
+                        style={{
+                          backgroundColor: currentCorrectBadgeStyle.bg,
+                          borderColor: currentCorrectBadgeStyle.border,
+                          color: currentCorrectBadgeStyle.text,
+                        }}
+                        className="h-7 w-7 rounded-full border-2 flex items-center justify-center font-mono text-xs font-black shadow-md shrink-0"
+                        title={`Bonne réponse : ${currentCorrectLetter}`}
+                      >
+                        {currentCorrectLetter}
+                      </span>
+                    )}
+
+                  <span
+                    className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider shrink-0 ${
+                      status === "playing"
+                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                        : status === "paused"
+                        ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                        : status === "finished"
+                        ? "bg-rose-500/20 text-rose-300 border border-rose-500/30"
+                        : "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                    }`}
+                  >
+                    {status}
+                  </span>
+                </div>
               </div>
 
               {/* Grille des 4 boutons de contrôle de partie */}
