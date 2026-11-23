@@ -1,1108 +1,336 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import Link from "next/link";
-import {
-  Play,
-  Pause,
-  RotateCcw,
-  SkipForward,
-  Square,
-  Users,
-  Trophy,
-  QrCode,
-  Eye,
-  EyeOff,
-  Gamepad2,
-  CheckCircle2,
-  XCircle,
-  Copy,
-  Check,
-  Sparkles,
-  ExternalLink,
-  AlertTriangle,
-} from "lucide-react";
+import React, { useEffect, useMemo, useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { Tv, Users } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
-import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
-import { QUESTIONS } from "@/lib/questions";
-import type {
-  GameSession,
-  PlayerScore,
-  PlayerSession,
-  SessionStatus,
-} from "@/types/game.types";
+import type { GameSession, SessionPlayer } from "@/types/game.types";
 
 // ============================================================================
-// 1. CONSTANTES ET FONCTIONS UTILITAIRES
+// 1. TYPES ET CONSTANTES DU LOBBY TV
 // ============================================================================
 
-const UUID_REGEX =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-const GRAND_QUIZ_UUID = "6e6d7179-3a56-4d94-9c1d-19ac06a34aaa";
-const QUESTION_DURATION_SECONDS = 12; // Durée du chrono par question (en secondes)
-const QUESTIONS_PER_GAME = 15; // Nombre de questions par série
-
-function isUuid(value: string | undefined | null): value is string {
-  return typeof value === "string" && UUID_REGEX.test(value);
+interface LobbyGameState {
+  nextSessionCode?: string;
+  replacedByCode?: string;
 }
 
-// Génère un code de salle aléatoire de 4 caractères
-function generateSessionCode(): string {
-  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  let code = "";
-  for (let i = 0; i < 4; i++) {
-    code += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return code;
-}
-
-// Génère une graine unique pour forcer un nouveau tirage aléatoire à chaque relance
-function generateSeriesSeed(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-}
+type ExtendedSession = GameSession & {
+  game_state?: LobbyGameState | null;
+  show_qr?: boolean | null;
+};
 
 // ============================================================================
-// 2. COMPOSANT PRINCIPAL : CONSOLE ANIMATEUR (ADMIN)
+// 2. COMPOSANT PRINCIPAL : LOBBY TV
 // ============================================================================
 
-export default function AdminConsolePage() {
+export default function TvLobbyPage() {
+  const params = useParams<{ sessionCode: string }>();
+  const router = useRouter();
+  const sessionCode = (params?.sessionCode ?? "").toUpperCase();
   const supabase = getSupabaseBrowserClient();
 
-  // --- États de la session et du quiz ---
-  const [games, setGames] = useState<CatalogGame[]>(INITIAL_GAMES);
-  const [selectedGameId, setSelectedGameId] = useState<string>(
-    INITIAL_GAMES[0]?.id ?? ""
-  );
-  const [sessionId, setSessionId] = useState<string | null>(null);
-  const [sessionCode, setSessionCode] = useState<string>(() =>
-    generateSessionCode()
-  );
-  const [status, setStatus] = useState<SessionStatus>("lobby");
-  const [questionIndex, setQuestionIndex] = useState<number>(-1);
-  const [questionStartedAt, setQuestionStartedAt] = useState<string | null>(
-    null
-  );
-  const [pausedRemainingSeconds, setPausedRemainingSeconds] = useState<
-    number | null
-  >(null);
-  const [seriesNumber, setSeriesNumber] = useState<number>(1);
-  const [seriesSeed, setSeriesSeed] = useState<string>(() =>
-    generateSeriesSeed()
-  );
-  const [showQrOnTv, setShowQrOnTv] = useState<boolean>(true);
-  const [copiedCode, setCopiedCode] = useState<boolean>(false);
-  const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
-  const [dbError, setDbError] = useState<string | null>(null);
+  const [session, setSession] = useState<ExtendedSession | null>(null);
+  const [players, setPlayers] = useState<SessionPlayer[]>([]);
+  const [gameTitle, setGameTitle] = useState<string>("Grand Quiz tvOS");
+  const [joinUrl, setJoinUrl] = useState<string>("");
 
-  // --- États des joueurs et des scores ---
-  const [players, setPlayers] = useState<PlayerSession[]>([]);
-  const [scores, setScores] = useState<PlayerScore[]>([]);
-
-  const selectedGame =
-    games.find((g) => g.id === selectedGameId) ?? games[0];
-
-  const totalQuestions = Math.min(QUESTIONS_PER_GAME, QUESTIONS.length);
-  const isEndOfSeries =
-    totalQuestions > 0 && questionIndex >= totalQuestions - 1;
-
-  const resolveValidGameUuid = (
-    candidateGame?: CatalogGame | null
-  ): string | null => {
-    if (isUuid(candidateGame?.id)) {
-      return candidateGame.id;
-    }
-    const matchedBySlug = candidateGame?.slug
-      ? games.find((g) => g.slug === candidateGame.slug && isUuid(g.id))
-      : undefined;
-    if (matchedBySlug?.id) {
-      return matchedBySlug.id;
-    }
-    const firstDbUuidGame = games.find((g) => isUuid(g.id));
-    return firstDbUuidGame?.id ?? null;
-  };
-
-  // --- Chargement des joueurs et des scores depuis Supabase ---
-  const loadPlayersAndScoresForSession = async (targetSessionId: string) => {
-    if (!supabase || !isUuid(targetSessionId)) return;
-
-    const [{ data: playersData, error: pErr }, { data: scoresData, error: sErr }] =
-      await Promise.all([
-        supabase
-          .from("session_players")
-          .select("*")
-          .eq("session_id", targetSessionId)
-          .order("id", { ascending: true }),
-        supabase
-          .from("player_scores")
-          .select("*")
-          .eq("session_id", targetSessionId),
-      ]);
-
-    if (pErr) {
-      setDbError(`Lecture joueurs impossible : ${pErr.message}`);
-    } else if (playersData) {
-      setPlayers(playersData as PlayerSession[]);
-    }
-
-    if (sErr) {
-      setDbError(`Lecture scores impossible : ${sErr.message}`);
-    } else if (scoresData) {
-      setScores(scoresData as PlayerScore[]);
-    }
-  };
-
-  // --- Écoute temps réel des changements sur les joueurs et scores ---
+  // --- Construction de l'URL de connexion mobile ---
   useEffect(() => {
-    if (!supabase || !sessionId || !isUuid(sessionId)) return;
+    if (typeof window === "undefined" || !sessionCode) return;
+    setJoinUrl(`${window.location.origin}/play/${sessionCode}`);
+  }, [sessionCode]);
 
-    let active = true;
+  // --- Synchronisation temps réel avec Supabase (session + joueurs) ---
+  useEffect(() => {
+    if (!supabase || !sessionCode) return;
 
-    const refresh = async () => {
-      if (!active) return;
-      await loadPlayersAndScoresForSession(sessionId);
+    let isMounted = true;
+    let activeSessionId: string | null = null;
+    let playersChannel: ReturnType<typeof supabase.channel> | null = null;
+
+    const loadGameTitle = async (gameId: string | null | undefined) => {
+      if (!gameId) return;
+      const { data } = await supabase
+        .from("games")
+        .select("title")
+        .eq("id", gameId)
+        .maybeSingle<{ title?: string | null }>();
+
+      if (!isMounted) return;
+      if (data?.title) setGameTitle(data.title);
     };
 
-    void refresh();
+    const loadPlayers = async (targetSessionId: string | null) => {
+      if (!targetSessionId) return;
+      const { data } = await supabase
+        .from("session_players")
+        .select("*")
+        .eq("session_id", targetSessionId)
+        .order("id", { ascending: true });
 
-    const channel = supabase
-      .channel(`admin-session-${sessionId}`)
+      if (!isMounted) return;
+      setPlayers((data as SessionPlayer[] | null) ?? []);
+    };
+
+    const refreshSessionRow = async () => {
+      const { data } = await supabase
+        .from("game_sessions")
+        .select("*")
+        .eq("code", sessionCode)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<ExtendedSession>();
+
+      if (!isMounted || !data) return;
+      setSession(data);
+      if (data.id) {
+        activeSessionId = data.id;
+        void loadPlayers(data.id);
+      }
+      if (data.game_id) {
+        void loadGameTitle(data.game_id);
+      }
+    };
+
+    const bindSession = (targetSession: ExtendedSession) => {
+      void loadPlayers(targetSession.id);
+      void loadGameTitle(targetSession.game_id);
+
+      if (activeSessionId === targetSession.id && playersChannel) {
+        return;
+      }
+
+      activeSessionId = targetSession.id;
+
+      if (playersChannel) {
+        void supabase.removeChannel(playersChannel);
+      }
+
+      playersChannel = supabase
+        .channel(`tv-lobby-players-${targetSession.id}-${Date.now()}`)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "session_players",
+          },
+          () => {
+            if (!isMounted) return;
+            void loadPlayers(targetSession.id);
+            void refreshSessionRow();
+          }
+        )
+        .subscribe();
+    };
+
+    const fetchInitial = async () => {
+      const { data } = await supabase
+        .from("game_sessions")
+        .select("*")
+        .eq("code", sessionCode)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle<ExtendedSession>();
+
+      if (!isMounted) return;
+      if (data) {
+        setSession(data);
+        bindSession(data);
+      }
+    };
+
+    void fetchInitial();
+
+    const sessionChannel = supabase
+      .channel(`tv-lobby-session-${sessionCode}-${Date.now()}`)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
-          table: "session_players",
-          filter: `session_id=eq.${sessionId}`,
+          table: "game_sessions",
+          filter: `code=eq.${sessionCode}`,
         },
-        () => {
-          void refresh();
-        }
-      )
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "player_scores",
-          filter: `session_id=eq.${sessionId}`,
-        },
-        () => {
-          void refresh();
+        (payload) => {
+          if (!isMounted) return;
+          const nextRow = payload.new as ExtendedSession | null;
+          if (!nextRow) {
+            void refreshSessionRow();
+            return;
+          }
+          setSession(nextRow);
+          bindSession(nextRow);
         }
       )
       .subscribe();
 
+    const syncInterval = window.setInterval(() => {
+      if (!isMounted) return;
+      void refreshSessionRow();
+      if (activeSessionId) {
+        void loadPlayers(activeSessionId);
+      }
+    }, 1500);
+
     return () => {
-      active = false;
-      void supabase.removeChannel(channel);
+      isMounted = false;
+      window.clearInterval(syncInterval);
+      void supabase.removeChannel(sessionChannel);
+      if (playersChannel) {
+        void supabase.removeChannel(playersChannel);
+      }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supabase, sessionId]);
+  }, [supabase, sessionCode]);
 
-  // --- Enregistrement / mise à jour de la session dans Supabase ---
-  const syncSessionToDb = async (params: {
-    id?: string | null;
-    code: string;
-    game?: CatalogGame | null;
-    nextStatus: SessionStatus;
-    qrVisible: boolean;
-    nextQuestionIndex?: number;
-    nextQuestionStartedAt?: string | null;
-    nextPausedRemaining?: number | null;
-    nextSeriesNumber?: number;
-    nextSeriesSeed?: string;
-    resetAnswers?: boolean;
-  }) => {
-    if (!supabase) {
-      setDbError(
-        "Client Supabase non initialisé (vérifier NEXT_PUBLIC_SUPABASE_URL / ANON_KEY)."
-      );
-      return;
-    }
-
-    const validGameUuid = resolveValidGameUuid(params.game ?? selectedGame);
-    if (!validGameUuid) {
-      setDbError(
-        "Aucun UUID de jeu trouvé dans la table 'games' Supabase. Vérifie les permissions SELECT sur 'games'."
-      );
-      return;
-    }
-
-    const effectiveQuestionIndex =
-      params.nextQuestionIndex !== undefined
-        ? params.nextQuestionIndex
-        : questionIndex;
-
-    const effectiveStartedAt =
-      params.nextQuestionStartedAt !== undefined
-        ? params.nextQuestionStartedAt
-        : questionStartedAt;
-
-    const effectivePausedRemaining =
-      params.nextPausedRemaining !== undefined
-        ? params.nextPausedRemaining
-        : pausedRemainingSeconds;
-
-    const effectiveSeries =
-      params.nextSeriesNumber !== undefined
-        ? params.nextSeriesNumber
-        : seriesNumber;
-
-    const effectiveSeed =
-      params.nextSeriesSeed !== undefined ? params.nextSeriesSeed : seriesSeed;
-
-    const isQuizGame =
-      validGameUuid === GRAND_QUIZ_UUID ||
-      (params.game ?? selectedGame)?.slug === "quiz" ||
-      (params.game ?? selectedGame)?.title?.toLowerCase().includes("quiz");
-
-    const hasQuestionStarted = effectiveQuestionIndex >= 0;
-    const isPaused = params.nextStatus === "paused";
-
-    setIsSavingSession(true);
-    setDbError(null);
-    try {
-      const basePayload: Record<string, unknown> = {
-        code: params.code,
-        game_id: validGameUuid,
-        status: params.nextStatus,
-        show_qr: params.qrVisible,
-      };
-
-      if (isQuizGame) {
-        basePayload.game_state = {
-          questionStarted: hasQuestionStarted,
-          roundTriggered: hasQuestionStarted,
-          questionIndex: effectiveQuestionIndex,
-          currentQuestionIndex: effectiveQuestionIndex,
-          questionStartedAt: hasQuestionStarted ? effectiveStartedAt : null,
-          durationSeconds: QUESTION_DURATION_SECONDS,
-          isPaused,
-          pausedRemainingSeconds: isPaused ? effectivePausedRemaining : null,
-          seriesNumber: effectiveSeries,
-          seriesSeed: effectiveSeed,
-          questions: QUESTIONS,
-          revealed: false,
-          ...(params.resetAnswers !== false ? { answers: {} } : {}),
-        };
-      }
-
-      if (params.id) {
-        const { error } = await supabase
-          .from("game_sessions")
-          .update(basePayload)
-          .eq("id", params.id);
-
-        if (error) {
-          const { error: fallbackError } = await supabase
-            .from("game_sessions")
-            .update({
-              code: params.code,
-              game_id: validGameUuid,
-              status: params.nextStatus,
-              show_qr: params.qrVisible,
-            })
-            .eq("id", params.id);
-
-          if (fallbackError) {
-            setDbError(
-              `Mise à jour session impossible : ${fallbackError.message}`
-            );
-          }
-        }
-      } else {
-        let insertResult = await supabase
-          .from("game_sessions")
-          .insert(basePayload)
-          .select()
-          .single<GameSession>();
-
-        if (insertResult.error) {
-          insertResult = await supabase
-            .from("game_sessions")
-            .insert({
-              code: params.code,
-              game_id: validGameUuid,
-              status: params.nextStatus,
-              show_qr: params.qrVisible,
-            })
-            .select()
-            .single<GameSession>();
-        }
-
-        if (insertResult.error) {
-          setDbError(
-            `Création session impossible : ${insertResult.error.message}`
-          );
-        } else if (insertResult.data?.id) {
-          setSessionId(insertResult.data.id);
-          setPlayers([]);
-          setScores([]);
-          await loadPlayersAndScoresForSession(insertResult.data.id);
-        }
-      }
-    } finally {
-      setIsSavingSession(false);
-    }
-  };
-
-  // --- Initialisation au chargement de la page admin ---
+  // --- Redirection vers une nouvelle salle ou vers l'écran quiz ---
   useEffect(() => {
-    let cancelled = false;
+    if (!session || !sessionCode) return;
 
-    const init = async () => {
-      if (!supabase) {
-        if (!cancelled) {
-          setDbError("Client Supabase non initialisé.");
-        }
-        return;
-      }
+    const replacementCode = (
+      session.game_state?.nextSessionCode ||
+      session.game_state?.replacedByCode ||
+      ""
+    )
+      .trim()
+      .toUpperCase();
 
-      const { data: dbGames, error: gamesError } = await supabase
-        .from("games")
-        .select("id, slug, title, tagline, min_players, max_players, is_active")
-        .order("title", { ascending: true });
-
-      if (gamesError && !cancelled) {
-        setDbError(`Lecture table 'games' impossible : ${gamesError.message}`);
-      }
-
-      const rows = Array.isArray(dbGames) ? (dbGames as CatalogGame[]) : [];
-      const validRows = rows.filter((g) => isUuid(g.id));
-
-      if (!cancelled && validRows.length > 0) {
-        setGames(validRows);
-        const firstUuidGame = validRows[0];
-        const initialSeed = generateSeriesSeed();
-        if (firstUuidGame) {
-          setSelectedGameId(firstUuidGame.id);
-          setSeriesSeed(initialSeed);
-          await syncSessionToDb({
-            id: null,
-            code: sessionCode,
-            game: firstUuidGame,
-            nextStatus: status,
-            qrVisible: showQrOnTv,
-            nextQuestionIndex: -1,
-            nextQuestionStartedAt: null,
-            nextPausedRemaining: null,
-            nextSeriesNumber: 1,
-            nextSeriesSeed: initialSeed,
-          });
-        }
-      } else if (!cancelled) {
-        setDbError(
-          "Impossible de récupérer les UUID des jeux depuis Supabase ('public.games')."
-        );
-      }
-    };
-
-    void init();
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // ==========================================================================
-  // 3. ACTIONS DE L'ANIMATEUR (Nouvelle salle, Lancer/Relancer, Pause, Question suivante)
-  // ==========================================================================
-
-  // Crée une nouvelle salle et met à jour l'ancienne session avec nextSessionCode sans passer en "finished"
-  const handleCreateNewSession = async () => {
-    const newCode = generateSessionCode();
-    const newSeed = generateSeriesSeed();
-    const previousSessionId = sessionId;
-
-    if (supabase && previousSessionId && isUuid(previousSessionId)) {
-      await supabase
-        .from("game_sessions")
-        .update({
-          status: "lobby",
-          game_state: {
-            nextSessionCode: newCode,
-            replacedByCode: newCode,
-          },
-        })
-        .eq("id", previousSessionId);
-    }
-
-    setSessionId(null);
-    setSessionCode(newCode);
-    setStatus("lobby");
-    setQuestionIndex(-1);
-    setQuestionStartedAt(null);
-    setPausedRemainingSeconds(null);
-    setSeriesNumber(1);
-    setSeriesSeed(newSeed);
-    setPlayers([]);
-    setScores([]);
-
-    await syncSessionToDb({
-      id: null,
-      code: newCode,
-      game: selectedGame,
-      nextStatus: "lobby",
-      qrVisible: showQrOnTv,
-      nextQuestionIndex: -1,
-      nextQuestionStartedAt: null,
-      nextPausedRemaining: null,
-      nextSeriesNumber: 1,
-      nextSeriesSeed: newSeed,
-    });
-  };
-
-  // Gère Lancer, Pause (fige le chrono), Reprendre et Terminer
-  const handleStatusChange = async (nextStatus: SessionStatus) => {
-    const nowMs = Date.now();
-    const shouldResetQuestions =
-      nextStatus === "lobby" || nextStatus === "finished";
-
-    if (shouldResetQuestions) {
-      setStatus(nextStatus);
-      setQuestionIndex(-1);
-      setQuestionStartedAt(null);
-      setPausedRemainingSeconds(null);
-
-      await syncSessionToDb({
-        id: sessionId,
-        code: sessionCode,
-        game: selectedGame,
-        nextStatus,
-        qrVisible: showQrOnTv,
-        nextQuestionIndex: -1,
-        nextQuestionStartedAt: null,
-        nextPausedRemaining: null,
-      });
+    if (replacementCode && replacementCode !== sessionCode) {
+      router.replace(`/tv/${replacementCode}`);
       return;
     }
 
-    // Mise en pause : on calcule et sauvegarde le temps restant exact pour stopper le chrono TV
-    if (nextStatus === "paused") {
-      let remaining = QUESTION_DURATION_SECONDS;
-      if (questionStartedAt) {
-        const startMs = Date.parse(questionStartedAt);
-        if (!Number.isNaN(startMs)) {
-          const elapsed = Math.max(0, (nowMs - startMs) / 1000);
-          remaining = Math.max(0, QUESTION_DURATION_SECONDS - elapsed);
-        }
-      }
-      setStatus("paused");
-      setPausedRemainingSeconds(remaining);
-
-      await syncSessionToDb({
-        id: sessionId,
-        code: sessionCode,
-        game: selectedGame,
-        nextStatus: "paused",
-        qrVisible: showQrOnTv,
-        nextPausedRemaining: remaining,
-        resetAnswers: false,
-      });
-      return;
+    const status = String(session.status ?? "").toLowerCase();
+    if (status === "playing" || status === "paused") {
+      router.replace(`/tv/${sessionCode}/quiz`);
     }
+  }, [session, sessionCode, router]);
 
-    // Reprise après pause ou lancement initial
-    if (nextStatus === "playing") {
-      let resumedStartedAt = questionStartedAt;
-      if (
-        status === "paused" &&
-        pausedRemainingSeconds !== null &&
-        questionIndex >= 0
-      ) {
-        const elapsedBeforePause =
-          QUESTION_DURATION_SECONDS - pausedRemainingSeconds;
-        resumedStartedAt = new Date(
-          nowMs - elapsedBeforePause * 1000
-        ).toISOString();
-      }
-
-      setStatus("playing");
-      setPausedRemainingSeconds(null);
-      setQuestionStartedAt(resumedStartedAt);
-
-      await syncSessionToDb({
-        id: sessionId,
-        code: sessionCode,
-        game: selectedGame,
-        nextStatus: "playing",
-        qrVisible: showQrOnTv,
-        nextQuestionStartedAt: resumedStartedAt,
-        nextPausedRemaining: null,
-        resetAnswers: false,
-      });
+  // --- Statut affiché (par défaut LOBBY pour une nouvelle salle) ---
+  const displayStatus = useMemo(() => {
+    const raw = String(session?.status ?? "lobby").toLowerCase();
+    if (!raw || raw === "finished" || raw === "ended" || raw === "completed") {
+      return "LOBBY";
     }
-  };
+    return raw.toUpperCase();
+  }, [session?.status]);
 
-  // Relance une nouvelle série de 15 questions différente à la fin de la partie
-  const handleRestartNewSeries = async () => {
-    const nextSeries = seriesNumber + 1;
-    const nextSeed = generateSeriesSeed();
-    const startedIso = new Date().toISOString();
-
-    setStatus("playing");
-    setSeriesNumber(nextSeries);
-    setSeriesSeed(nextSeed);
-    setQuestionIndex(0);
-    setQuestionStartedAt(startedIso);
-    setPausedRemainingSeconds(null);
-
-    await syncSessionToDb({
-      id: sessionId,
-      code: sessionCode,
-      game: selectedGame,
-      nextStatus: "playing",
-      qrVisible: showQrOnTv,
-      nextQuestionIndex: 0,
-      nextQuestionStartedAt: startedIso,
-      nextPausedRemaining: null,
-      nextSeriesNumber: nextSeries,
-      nextSeriesSeed: nextSeed,
-      resetAnswers: true,
-    });
-  };
-
-  // Passe à la question suivante (index 0 au 1er clic, puis 1, 2, ... jusqu'à 14)
-  const handleNextQuestion = async () => {
-    const nextIdx =
-      questionIndex < 0
-        ? 0
-        : Math.min(questionIndex + 1, Math.max(0, totalQuestions - 1));
-    const startedIso = new Date().toISOString();
-
-    setStatus("playing");
-    setQuestionIndex(nextIdx);
-    setQuestionStartedAt(startedIso);
-    setPausedRemainingSeconds(null);
-
-    await syncSessionToDb({
-      id: sessionId,
-      code: sessionCode,
-      game: selectedGame,
-      nextStatus: "playing",
-      qrVisible: showQrOnTv,
-      nextQuestionIndex: nextIdx,
-      nextQuestionStartedAt: startedIso,
-      nextPausedRemaining: null,
-      resetAnswers: true,
-    });
-  };
-
-  const handleToggleQr = async () => {
-    const nextQr = !showQrOnTv;
-    setShowQrOnTv(nextQr);
-    await syncSessionToDb({
-      id: sessionId,
-      code: sessionCode,
-      game: selectedGame,
-      nextStatus: status,
-      qrVisible: nextQr,
-      resetAnswers: false,
-    });
-  };
-
-  const handleSelectGame = async (gameId: string) => {
-    const targetGame = games.find((g) => g.id === gameId) ?? null;
-    setSelectedGameId(gameId);
-    setQuestionIndex(-1);
-    setQuestionStartedAt(null);
-    setPausedRemainingSeconds(null);
-    await syncSessionToDb({
-      id: sessionId,
-      code: sessionCode,
-      game: targetGame,
-      nextStatus: status,
-      qrVisible: showQrOnTv,
-      nextQuestionIndex: -1,
-      nextQuestionStartedAt: null,
-      nextPausedRemaining: null,
-    });
-  };
-
-  const handleCopyCode = async () => {
-    try {
-      await navigator.clipboard.writeText(sessionCode);
-      setCopiedCode(true);
-      setTimeout(() => setCopiedCode(false), 2000);
-    } catch {
-      // Ignore clipboard errors
-    }
-  };
-
-  const handleToggleGameActive = (gameId: string) => {
-    setGames((prev) =>
-      prev.map((g) =>
-        g.id === gameId ? { ...g, is_active: !g.is_active } : g
-      )
-    );
-  };
-
-  const getPlayerScoreValue = (playerId: string): number => {
-    const match = scores.find((s) => s.player_id === playerId);
-    if (!match) return 0;
-    const record = match as unknown as {
-      total_score?: number;
-      score?: number;
-    };
-    return record.total_score ?? record.score ?? 0;
-  };
-
-  const handleKickPlayer = async (playerId: string) => {
-    setPlayers((prev) => prev.filter((p) => p.id !== playerId));
-    setScores((prev) => prev.filter((s) => s.player_id !== playerId));
-
-    if (!supabase || !sessionId || !isUuid(sessionId)) return;
-
-    const [{ error: sErr }, { error: pErr }] = await Promise.all([
-      supabase
-        .from("player_scores")
-        .delete()
-        .eq("session_id", sessionId)
-        .eq("player_id", playerId),
-      supabase
-        .from("session_players")
-        .delete()
-        .eq("session_id", sessionId)
-        .eq("id", playerId),
-    ]);
-
-    if (sErr || pErr) {
-      setDbError(
-        `Exclusion joueur impossible : ${sErr?.message ?? pErr?.message}`
-      );
-    }
-  };
-
-  const handleAdjustScore = async (playerId: string, delta: number) => {
-    const current = getPlayerScoreValue(playerId);
-    const nextScore = Math.max(0, current + delta);
-
-    setScores((prev) => {
-      const exists = prev.some((s) => s.player_id === playerId);
-      if (exists) {
-        return prev.map((s) =>
-          s.player_id === playerId
-            ? ({ ...s, total_score: nextScore, score: nextScore } as PlayerScore)
-            : s
-        );
-      }
-      return [
-        ...prev,
-        {
-          id: `score-${playerId}`,
-          session_id: sessionId ?? sessionCode,
-          player_id: playerId,
-          total_score: nextScore,
-          score: nextScore,
-        } as unknown as PlayerScore,
-      ];
-    });
-
-    if (!supabase || !sessionId || !isUuid(sessionId)) return;
-
-    const targetPlayer = players.find((p) => p.id === playerId);
-    const { error } = await supabase.from("player_scores").upsert(
-      {
-        session_id: sessionId,
-        player_id: playerId,
-        nickname: targetPlayer?.nickname ?? "Joueur",
-        avatar_id:
-          (targetPlayer as unknown as { avatar_id?: string })?.avatar_id ??
-          "gamepad",
-        total_score: nextScore,
-      },
-      { onConflict: "session_id,player_id" }
-    );
-
-    if (error) {
-      setDbError(`Mise à jour score impossible : ${error.message}`);
-    }
-  };
+  const showQr = session?.show_qr !== false;
 
   // ==========================================================================
-  // 4. RENDU VISUEL DE LA CONSOLE ADMIN (JSX)
+  // 3. RENDU VISUEL DU LOBBY TV (JSX)
   // ==========================================================================
   return (
-    <div className="min-h-screen bg-neutral-950 text-white p-5 md:p-8">
-      <div className="max-w-7xl mx-auto space-y-6">
-        {/* ================= EN-TÊTE (Titre, Code Salle, Ouvrir TV, Nouvelle Salle) ================= */}
-        <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-white/10 pb-5">
-          <div>
-            <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-neutral-400">
-              <Sparkles className="w-4 h-4 text-amber-400" />
-              <span>Console Animateur</span>
+    <div className="min-h-[100dvh] w-screen overflow-hidden bg-neutral-950 text-white px-8 py-6 flex flex-col justify-between select-none">
+      {/* ================= EN-TÊTE (Titre du jeu, Statut, Code Salle) ================= */}
+      <header className="flex items-center justify-between border-b border-white/15 pb-4 shrink-0 gap-6">
+        <div className="flex items-center gap-4 min-w-0">
+          <div className="w-14 h-14 rounded-2xl bg-amber-400/15 border border-amber-400/35 flex items-center justify-center shrink-0">
+            <Tv className="w-8 h-8 text-amber-400" />
+          </div>
+          <div className="min-w-0">
+            <div className="text-xs xl:text-sm uppercase tracking-[0.2em] text-amber-300 font-extrabold">
+              Écran TV
             </div>
-            <h1 className="text-3xl font-bold tracking-tight mt-1">
-              Contrôle de Partie
+            <h1 className="text-3xl xl:text-4xl font-black tracking-tight truncate">
+              {gameTitle}
             </h1>
           </div>
-
-          <div className="flex flex-wrap items-center gap-3">
-            {/* Code Salle + bouton copier */}
-            <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-2xl px-4 py-2.5">
-              <span className="text-xs text-neutral-400 uppercase tracking-wider">
-                Code Salle
-              </span>
-              <span className="font-mono text-2xl font-bold tracking-widest text-amber-400">
-                {sessionCode}
-              </span>
-              <button
-                type="button"
-                onClick={handleCopyCode}
-                className="p-1.5 rounded-lg bg-white/5 hover:bg-white/15 transition"
-                title="Copier le code"
-              >
-                {copiedCode ? (
-                  <Check className="w-4 h-4 text-emerald-400" />
-                ) : (
-                  <Copy className="w-4 h-4 text-neutral-300" />
-                )}
-              </button>
-            </div>
-
-            {/* Lien ouverture écran TV */}
-            <Link
-              href={`/tv/${sessionCode}`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 font-semibold text-sm transition"
-            >
-              <span>Ouvrir TV</span>
-              <ExternalLink className="w-4 h-4" />
-            </Link>
-
-            {/* Bouton création nouvelle salle */}
-            <button
-              type="button"
-              onClick={handleCreateNewSession}
-              disabled={isSavingSession}
-              className="px-4 py-2.5 rounded-2xl bg-white text-black font-semibold text-sm hover:bg-neutral-200 disabled:opacity-60 transition"
-            >
-              {isSavingSession ? "Enregistrement..." : "Nouvelle Salle"}
-            </button>
-          </div>
-        </header>
-
-        {/* Message d'erreur Supabase éventuel */}
-        {dbError ? (
-          <div className="flex items-center gap-3 rounded-2xl border border-rose-500/40 bg-rose-500/15 px-4 py-3 text-sm text-rose-200">
-            <AlertTriangle className="w-5 h-5 shrink-0 text-rose-400" />
-            <span>{dbError}</span>
-          </div>
-        ) : null}
-
-        {/* ================= CORPS PRINCIPAL (Contrôles & Catalogue à gauche, Joueurs à droite) ================= */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* ----------------- COLONNE GAUCHE : ÉTAT DE PARTIE, QR TV ET CATALOGUE ----------------- */}
-          <main className="lg:col-span-7 xl:col-span-8 space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {/* Carte : État de la partie & Boutons de contrôle */}
-              <section className="md:col-span-2 bg-white/5 border border-white/10 rounded-3xl p-6 space-y-6">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-lg font-semibold">État de la partie</h2>
-                    <p className="text-sm text-neutral-400">
-                      Jeu actif :{" "}
-                      <span className="text-white font-medium">
-                        {selectedGame?.title ?? "Aucun"}
-                      </span>
-                      {questionIndex >= 0
-                        ? ` • Question ${questionIndex + 1} / ${totalQuestions}`
-                        : ""}
-                    </p>
-                  </div>
-                  <span
-                    className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider shrink-0 ${
-                      status === "playing"
-                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                        : status === "paused"
-                        ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
-                        : status === "finished"
-                        ? "bg-rose-500/20 text-rose-300 border border-rose-500/30"
-                        : "bg-sky-500/20 text-sky-300 border border-sky-500/30"
-                    }`}
-                  >
-                    {status}
-                  </span>
-                </div>
-
-                {/* Grille des 4 boutons de contrôle de partie */}
-                <div className="grid grid-cols-2 gap-3">
-                  {/* Bouton Lancer (ou Relancer au bout des 15 questions) */}
-                  {isEndOfSeries ? (
-                    <button
-                      type="button"
-                      onClick={() => void handleRestartNewSeries()}
-                      className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-sky-500 hover:bg-sky-400 text-black font-semibold transition"
-                    >
-                      <RotateCcw className="w-4 h-4" />
-                      <span>Relancer</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled={status === "playing"}
-                      onClick={() => void handleStatusChange("playing")}
-                      className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/25 disabled:text-emerald-200/50 disabled:cursor-not-allowed text-black font-semibold transition"
-                    >
-                      <Play className="w-4 h-4" />
-                      <span>Lancer</span>
-                    </button>
-                  )}
-
-                  {/* Bouton Pause (arrête le chronomètre) */}
-                  <button
-                    type="button"
-                    disabled={status !== "playing"}
-                    onClick={() => void handleStatusChange("paused")}
-                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed text-amber-300 border border-amber-500/30 font-semibold transition"
-                  >
-                    <Pause className="w-4 h-4" />
-                    <span>Pause</span>
-                  </button>
-
-                  {/* Bouton Question suivante */}
-                  <button
-                    type="button"
-                    disabled={isEndOfSeries}
-                    onClick={() => void handleNextQuestion()}
-                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold transition"
-                  >
-                    <SkipForward className="w-4 h-4" />
-                    <span>
-                      {questionIndex < 0
-                        ? "Lancer Question 1"
-                        : "Question suivante"}
-                    </span>
-                  </button>
-
-                  {/* Bouton Terminer */}
-                  <button
-                    type="button"
-                    onClick={() => void handleStatusChange("finished")}
-                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-semibold transition"
-                  >
-                    <Square className="w-4 h-4" />
-                    <span>Terminer</span>
-                  </button>
-                </div>
-              </section>
-
-              {/* Carte : Affichage / Masquage du QR Code sur TV */}
-              <section className="bg-white/5 border border-white/10 rounded-3xl p-6 flex flex-col justify-between space-y-4">
-                <div>
-                  <h2 className="text-lg font-semibold flex items-center gap-2">
-                    <QrCode className="w-5 h-5 text-sky-400" />
-                    <span>Écran TV</span>
-                  </h2>
-                  <p className="text-sm text-neutral-400 mt-1">
-                    QR code de connexion sur la télévision.
-                  </p>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => void handleToggleQr()}
-                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 font-medium transition"
-                >
-                  {showQrOnTv ? (
-                    <>
-                      <EyeOff className="w-4 h-4 text-amber-400" />
-                      <span>Masquer QR</span>
-                    </>
-                  ) : (
-                    <>
-                      <Eye className="w-4 h-4 text-emerald-400" />
-                      <span>Afficher QR</span>
-                    </>
-                  )}
-                </button>
-              </section>
-            </div>
-
-            {/* Carte : Catalogue des jeux */}
-            <section className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4">
-              <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold flex items-center gap-2">
-                  <Gamepad2 className="w-5 h-5 text-purple-400" />
-                  <span>Catalogue des jeux</span>
-                </h2>
-                <span className="text-xs text-neutral-400">
-                  {games.filter((g) => g.is_active).length} / {games.length}{" "}
-                  actifs
-                </span>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {games.map((game) => {
-                  const isSelected = game.id === selectedGame?.id;
-                  return (
-                    <div
-                      key={game.id}
-                      onClick={() => void handleSelectGame(game.id)}
-                      className={`cursor-pointer rounded-2xl p-4 border transition flex flex-col justify-between gap-4 ${
-                        isSelected
-                          ? "bg-white/15 border-white/40"
-                          : "bg-black/30 border-white/10 hover:border-white/25"
-                      }`}
-                    >
-                      <div>
-                        <div className="flex items-center justify-between gap-2">
-                          <h3 className="font-semibold text-base">
-                            {game.title}
-                          </h3>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleToggleGameActive(game.id);
-                            }}
-                            className="text-xs flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15"
-                          >
-                            {game.is_active ? (
-                              <>
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                                <span className="text-emerald-300">Actif</span>
-                              </>
-                            ) : (
-                              <>
-                                <XCircle className="w-3.5 h-3.5 text-neutral-500" />
-                                <span className="text-neutral-400">
-                                  Inactif
-                                </span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                        {game.tagline && (
-                          <p className="text-xs text-neutral-400 mt-1">
-                            {game.tagline}
-                          </p>
-                        )}
-                      </div>
-
-                      <div className="flex items-center justify-between text-xs text-neutral-400 pt-2 border-t border-white/5">
-                        <span>
-                          {game.min_players}–{game.max_players ?? "∞"} joueurs
-                        </span>
-                        {isSelected && (
-                          <span className="text-amber-400 font-medium">
-                            Sélectionné
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </section>
-          </main>
-
-          {/* ----------------- COLONNE DROITE : JOUEURS CONNECTÉS & SCORES ----------------- */}
-          <aside className="lg:col-span-5 xl:col-span-4 lg:sticky lg:top-6 bg-white/5 border border-white/10 rounded-3xl p-5 space-y-4">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                <Users className="w-5 h-5 text-emerald-400" />
-                <span>Joueurs ({players.length})</span>
-              </h2>
-              <div className="flex items-center gap-1.5 text-xs text-neutral-400">
-                <Trophy className="w-4 h-4 text-amber-400" />
-                <span>Scores</span>
-              </div>
-            </div>
-
-            {players.length === 0 ? (
-              <p className="text-sm text-neutral-400 py-8 text-center">
-                Aucun joueur connecté pour le moment.
-              </p>
-            ) : (
-              <div className="space-y-3 max-h-[calc(100vh-14rem)] overflow-y-auto pr-1">
-                {players.map((player) => {
-                  const color = getUniquePlayerColor(player.id, players);
-
-                  return (
-                    <div
-                      key={player.id}
-                      style={{
-                        backgroundColor: color.bgHex,
-                        borderColor: color.borderHex,
-                        color: color.textHex,
-                      }}
-                      className="p-3.5 rounded-2xl border-2 space-y-3 shadow-md"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2.5 min-w-0">
-                          <span
-                            style={{ backgroundColor: color.badgeBgHex }}
-                            className="text-xl flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
-                          >
-                            {player.avatar ?? "🎮"}
-                          </span>
-                          <div className="min-w-0">
-                            <div className="font-bold truncate flex items-center gap-1.5">
-                              <span className="truncate">{player.nickname}</span>
-                              {player.is_host && (
-                                <span
-                                  style={{ backgroundColor: color.badgeBgHex }}
-                                  className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full shrink-0"
-                                >
-                                  Hôte
-                                </span>
-                              )}
-                            </div>
-                            <span className="text-[11px] opacity-90 block">
-                              {player.is_connected ? "Connecté" : "Déconnecté"}
-                            </span>
-                          </div>
-                        </div>
-
-                        {!player.is_host && (
-                          <button
-                            type="button"
-                            onClick={() => void handleKickPlayer(player.id)}
-                            className="px-2.5 py-1.5 rounded-xl bg-black/35 hover:bg-black/55 text-xs font-bold transition shrink-0"
-                          >
-                            Exclure
-                          </button>
-                        )}
-                      </div>
-
-                      {/* Contrôles score -1 / +1 */}
-                      <div
-                        style={{ backgroundColor: color.badgeBgHex }}
-                        className="flex items-center justify-between rounded-xl px-3 py-1.5"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => void handleAdjustScore(player.id, -1)}
-                          className="px-3 py-1 rounded-lg bg-black/30 hover:bg-black/50 text-sm font-black transition"
-                        >
-                          -1
-                        </button>
-                        <span
-                          style={{ color: color.scoreHex }}
-                          className="font-mono text-lg font-black text-center"
-                        >
-                          {getPlayerScoreValue(player.id)} pts
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => void handleAdjustScore(player.id, 1)}
-                          className="px-3 py-1 rounded-lg bg-black/30 hover:bg-black/50 text-sm font-black transition"
-                        >
-                          +1
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </aside>
         </div>
-      </div>
+
+        <div className="flex items-center gap-4 shrink-0">
+          <span className="px-4 py-1.5 rounded-xl bg-white/10 border border-white/15 text-sm font-black uppercase tracking-widest text-neutral-200">
+            {displayStatus}
+          </span>
+          <div className="px-6 py-2.5 rounded-2xl bg-amber-400/15 border-2 border-amber-400/45 text-amber-300 font-mono text-3xl xl:text-4xl font-black tracking-[0.2em]">
+            {sessionCode || "----"}
+          </div>
+        </div>
+      </header>
+
+      {/* ================= CORPS PRINCIPAL (Joueurs connectés + QR Code) ================= */}
+      <main className="flex-1 min-h-0 grid grid-cols-12 gap-7 py-6">
+        {/* Colonne gauche : Joueurs connectés */}
+        <section className="col-span-7 bg-white/[0.05] border border-white/15 rounded-[2rem] p-7 flex flex-col gap-5 min-h-0">
+          <div className="flex items-center justify-between shrink-0">
+            <div className="flex items-center gap-3 text-2xl xl:text-3xl font-black">
+              <Users className="w-8 h-8 text-amber-400" />
+              <span>Joueurs connectés ({players.length})</span>
+            </div>
+            <span className="text-lg font-mono font-bold text-neutral-400">
+              Code : {sessionCode}
+            </span>
+          </div>
+
+          {players.length === 0 ? (
+            <div className="flex-1 flex items-center justify-center text-2xl text-neutral-400 font-semibold text-center px-6">
+              En attente des joueurs sur leur téléphone...
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-4 overflow-y-auto pr-1">
+              {players.map((player) => {
+                const pColor = getUniquePlayerColor(player.id, players);
+                return (
+                  <div
+                    key={player.id}
+                    style={{
+                      backgroundColor: pColor.bgHex,
+                      borderColor: pColor.borderHex,
+                      color: pColor.textHex,
+                    }}
+                    className="rounded-3xl border-2 px-5 py-4 flex items-center gap-4 shadow-lg"
+                  >
+                    <span
+                      style={{ backgroundColor: pColor.badgeBgHex }}
+                      className="w-12 h-12 rounded-2xl flex items-center justify-center text-2xl shrink-0"
+                    >
+                      {player.avatar ?? "🎮"}
+                    </span>
+                    <span className="font-black text-2xl truncate">
+                      {player.nickname}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        {/* Colonne droite : QR Code de connexion */}
+        <aside className="col-span-5 bg-white/[0.05] border border-white/15 rounded-[2rem] p-7 flex flex-col items-center justify-center text-center gap-5 min-h-0">
+          {showQr && joinUrl ? (
+            <>
+              <div className="bg-white p-5 rounded-3xl shadow-2xl">
+                <QRCodeSVG value={joinUrl} size={210} />
+              </div>
+              <div className="space-y-1.5">
+                <h2 className="text-2xl xl:text-3xl font-black">
+                  Rejoindre la partie
+                </h2>
+                <p className="text-base xl:text-lg text-neutral-300">
+                  Scanne le QR code ou entre le code{" "}
+                  <span className="font-mono font-black text-amber-300">
+                    {sessionCode}
+                  </span>
+                </p>
+              </div>
+            </>
+          ) : (
+            <p className="text-xl text-neutral-400 font-semibold">
+              QR code masqué par l&apos;animateur
+            </p>
+          )}
+        </aside>
+      </main>
+
+      {/* ================= PIED DE PAGE ================= */}
+      <footer className="flex items-center justify-between text-sm text-neutral-400 border-t border-white/10 pt-3 shrink-0">
+        <span>tvOS Party</span>
+        <span className="font-mono">Salle {sessionCode}</span>
+      </footer>
     </div>
   );
 }
