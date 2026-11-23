@@ -435,22 +435,17 @@ export default function PlayerControllerPage() {
     return null;
   }, [quizState.questionIndex, quizState.currentQuestionIndex]);
 
+  // Clé stable par question et série (indépendante des micro-variations de questionStartedAt)
   const currentQuestionKey = useMemo<string | null>(() => {
     if (activeQuestionIndex === null) return null;
     const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
     const seriesSeed =
       typeof quizState.seriesSeed === "string" ? quizState.seriesSeed : "";
-    const startedAt =
-      quizState.questionStartedAt !== undefined &&
-      quizState.questionStartedAt !== null
-        ? String(quizState.questionStartedAt)
-        : "";
-    return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${startedAt}`;
+    return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}`;
   }, [
     activeQuestionIndex,
     quizState.seriesNumber,
     quizState.seriesSeed,
-    quizState.questionStartedAt,
     session?.id,
     sessionCode,
   ]);
