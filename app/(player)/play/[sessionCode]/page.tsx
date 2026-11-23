@@ -67,6 +67,13 @@ interface WakeLockSentinelLike {
   release: () => Promise<void>;
 }
 
+interface PendingQuestionSnapshot {
+  key: string;
+  question: QuizQuestionPayload;
+  options: string[];
+  chosenLetter: string | null;
+}
+
 const CHOICE_STYLES = [
   {
     letter: "A",
@@ -268,6 +275,8 @@ export default function PlayerControllerPage() {
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const settledQuestionsRef = useRef<Set<string>>(new Set());
   const currentScoreRef = useRef<number>(0);
+  const activeSnapshotRef = useRef<PendingQuestionSnapshot | null>(null);
+  const prevQuestionKeyRef = useRef<string | null>(null);
 
   const persistPlayerScore = async (
     targetSessionId: string,
@@ -438,7 +447,170 @@ export default function PlayerControllerPage() {
     sessionCode,
   ]);
 
+  const activeQuestion = useMemo<QuizQuestionPayload | null>(() => {
+    const idx = activeQuestionIndex ?? 0;
+    const rawList =
+      Array.isArray(quizState.questions) && quizState.questions.length > 0
+        ? quizState.questions
+        : (QUESTIONS as QuizQuestion[]);
+
+    if (rawList.length > 0) {
+      const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
+      const seriesSeed =
+        typeof quizState.seriesSeed === "string" && quizState.seriesSeed.trim()
+          ? quizState.seriesSeed.trim()
+          : `${session?.id ?? ""}-${sessionCode}-s${seriesNumber}`;
+      const ordered = shuffleWithSeed(
+        rawList,
+        `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`
+      ).slice(0, Math.min(15, rawList.length));
+      const safeIdx = Math.min(idx, ordered.length - 1);
+      return ordered[safeIdx] ?? null;
+    }
+
+    return quizState.currentQuestion ?? null;
+  }, [
+    activeQuestionIndex,
+    quizState.questions,
+    quizState.currentQuestion,
+    quizState.seriesNumber,
+    quizState.seriesSeed,
+    session?.id,
+    sessionCode,
+  ]);
+
+  const parsedOptions = useMemo<string[]>(() => {
+    const raw =
+      activeQuestion?.options ??
+      activeQuestion?.choices ??
+      activeQuestion?.answers;
+    return extractOptions(raw);
+  }, [activeQuestion]);
+
+  const settleSnapshot = (snapshot: PendingQuestionSnapshot | null) => {
+    if (!identity || !snapshot) return;
+
+    const settlementKey = `${identity.playerId}::${snapshot.key}`;
+    if (settledQuestionsRef.current.has(settlementKey)) return;
+
+    const stateAnswer = normalizeAnswerLetter(
+      quizState.answers?.[String(identity.playerId)],
+      snapshot.options
+    );
+    const chosenLetter = snapshot.chosenLetter ?? stateAnswer;
+
+    settledQuestionsRef.current.add(settlementKey);
+
+    if (!chosenLetter) {
+      setStatusMessage("Temps écoulé • 0 pt");
+      return;
+    }
+
+    const correctLetter = resolveCorrectLetter(
+      snapshot.question,
+      snapshot.options
+    );
+    const isCorrect = Boolean(correctLetter) && chosenLetter === correctLetter;
+    const delta = isCorrect ? 3 : -1;
+
+    const baseScore = Math.max(
+      currentScoreRef.current,
+      extractScoreValue(scores.find((s) => s.player_id === identity.playerId))
+    );
+    const nextScore = Math.max(0, baseScore + delta);
+    currentScoreRef.current = nextScore;
+    setLocalScore(nextScore);
+
+    setScores((prev) => {
+      const exists = prev.some((s) => s.player_id === identity.playerId);
+      if (exists) {
+        return prev.map((s) =>
+          s.player_id === identity.playerId
+            ? ({
+                ...s,
+                total_score: nextScore,
+                score: nextScore,
+              } as PlayerScore)
+            : s
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: `score-${identity.playerId}`,
+          session_id: session?.id ?? sessionCode,
+          player_id: identity.playerId,
+          total_score: nextScore,
+          score: nextScore,
+        } as unknown as PlayerScore,
+      ];
+    });
+
+    if (session?.id) {
+      void persistPlayerScore(session.id, identity, nextScore);
+    }
+
+    setStatusMessage(
+      isCorrect
+        ? "Temps écoulé • Bonne réponse (+3 pts)"
+        : "Temps écoulé • Mauvaise réponse (-1 pt)"
+    );
+  };
+
+  // Maintient un snapshot fiable de la question courante et de la réponse choisie
   useEffect(() => {
+    if (!currentQuestionKey || !activeQuestion) return;
+
+    const chosenLetter =
+      submittedQuestionKey === currentQuestionKey
+        ? submittedChoiceLetter
+        : normalizeAnswerLetter(
+            quizState.answers?.[String(identity?.playerId ?? "")],
+            parsedOptions
+          );
+
+    if (
+      activeSnapshotRef.current &&
+      activeSnapshotRef.current.key === currentQuestionKey
+    ) {
+      activeSnapshotRef.current = {
+        ...activeSnapshotRef.current,
+        question: activeQuestion,
+        options: parsedOptions,
+        chosenLetter: chosenLetter ?? activeSnapshotRef.current.chosenLetter,
+      };
+    } else {
+      activeSnapshotRef.current = {
+        key: currentQuestionKey,
+        question: activeQuestion,
+        options: parsedOptions,
+        chosenLetter,
+      };
+    }
+  }, [
+    currentQuestionKey,
+    activeQuestion,
+    parsedOptions,
+    submittedQuestionKey,
+    submittedChoiceLetter,
+    quizState.answers,
+    identity?.playerId,
+  ]);
+
+  // Quand la clé de question change (ex: clic sur "Question suivante"),
+  // on règle d'abord la question précédente si elle ne l'a pas encore été, puis on réinitialise l'état de réponse
+  useEffect(() => {
+    const previousKey = prevQuestionKeyRef.current;
+    if (
+      previousKey &&
+      previousKey !== currentQuestionKey &&
+      activeSnapshotRef.current &&
+      activeSnapshotRef.current.key === previousKey
+    ) {
+      settleSnapshot(activeSnapshotRef.current);
+    }
+
+    prevQuestionKeyRef.current = currentQuestionKey;
     clearHighlightTimer();
     setSubmittedQuestionKey(null);
     setSubmittedChoiceLetter(null);
@@ -450,7 +622,8 @@ export default function PlayerControllerPage() {
         : DEFAULT_QUESTION_DURATION_SECONDS
     );
     setStatusMessage("");
-  }, [activeGameId, currentQuestionKey, quizState.durationSeconds]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeGameId, currentQuestionKey]);
 
   useEffect(() => {
     if (
@@ -478,6 +651,22 @@ export default function PlayerControllerPage() {
     quizState.pausedRemainingSeconds,
     quizState,
   ]);
+
+  const alreadySubmittedThisQuestion =
+    currentQuestionKey !== null &&
+    submittedQuestionKey === currentQuestionKey;
+  const isTimerExpired =
+    activeQuestionIndex !== null &&
+    roundStatus === "playing" &&
+    (remainingSeconds <= 0 || Boolean(quizState.revealed));
+  const isPlaying = roundStatus === "playing" && !isTimerExpired;
+
+  // Règle la question en cours dès que le chrono est expiré ou que la réponse est révélée
+  useEffect(() => {
+    if (!isTimerExpired || !activeSnapshotRef.current) return;
+    settleSnapshot(activeSnapshotRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTimerExpired, identity?.playerId, currentQuestionKey]);
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
@@ -514,8 +703,9 @@ export default function PlayerControllerPage() {
             const match = rows.find((r) => r.player_id === parsed.playerId);
             if (match) {
               const dbScore = extractScoreValue(match);
-              setLocalScore(dbScore);
-              currentScoreRef.current = Math.max(currentScoreRef.current, dbScore);
+              const syncedScore = Math.max(currentScoreRef.current, dbScore);
+              currentScoreRef.current = syncedScore;
+              setLocalScore(syncedScore);
             }
           }
         } catch {
@@ -626,55 +816,6 @@ export default function PlayerControllerPage() {
     };
   }, [supabase, sessionCode]);
 
-  const activeQuestion = useMemo<QuizQuestionPayload | null>(() => {
-    const idx = activeQuestionIndex ?? 0;
-    const rawList =
-      Array.isArray(quizState.questions) && quizState.questions.length > 0
-        ? quizState.questions
-        : (QUESTIONS as QuizQuestion[]);
-
-    if (rawList.length > 0) {
-      const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
-      const seriesSeed =
-        typeof quizState.seriesSeed === "string" && quizState.seriesSeed.trim()
-          ? quizState.seriesSeed.trim()
-          : `${session?.id ?? ""}-${sessionCode}-s${seriesNumber}`;
-      const ordered = shuffleWithSeed(
-        rawList,
-        `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`
-      ).slice(0, Math.min(15, rawList.length));
-      const safeIdx = Math.min(idx, ordered.length - 1);
-      return ordered[safeIdx] ?? null;
-    }
-
-    return quizState.currentQuestion ?? null;
-  }, [
-    activeQuestionIndex,
-    quizState.questions,
-    quizState.currentQuestion,
-    quizState.seriesNumber,
-    quizState.seriesSeed,
-    session?.id,
-    sessionCode,
-  ]);
-
-  const alreadySubmittedThisQuestion =
-    currentQuestionKey !== null &&
-    submittedQuestionKey === currentQuestionKey;
-  const isTimerExpired =
-    activeQuestionIndex !== null &&
-    roundStatus === "playing" &&
-    (remainingSeconds <= 0 || Boolean(quizState.revealed));
-  const isPlaying = roundStatus === "playing" && !isTimerExpired;
-
-  const parsedOptions = useMemo<string[]>(() => {
-    const raw =
-      activeQuestion?.options ??
-      activeQuestion?.choices ??
-      activeQuestion?.answers;
-    return extractOptions(raw);
-  }, [activeQuestion]);
-
   const qcmChoices = useMemo(() => {
     return CHOICE_STYLES.map((style, idx) => ({
       ...style,
@@ -710,91 +851,6 @@ export default function PlayerControllerPage() {
       ),
     [currentPlayerRecord?.id, identity?.playerId, players]
   );
-
-  useEffect(() => {
-    if (!identity || !currentQuestionKey || !activeQuestion || !isTimerExpired) {
-      return;
-    }
-
-    const settlementKey = `${identity.playerId}::${currentQuestionKey}`;
-    if (settledQuestionsRef.current.has(settlementKey)) return;
-
-    const chosenLetter =
-      submittedQuestionKey === currentQuestionKey
-        ? submittedChoiceLetter
-        : normalizeAnswerLetter(
-            quizState.answers?.[String(identity.playerId)],
-            parsedOptions
-          );
-
-    settledQuestionsRef.current.add(settlementKey);
-
-    if (!chosenLetter) {
-      setStatusMessage("Temps écoulé • 0 pt");
-      return;
-    }
-
-    const correctLetter = resolveCorrectLetter(activeQuestion, parsedOptions);
-    const isCorrect =
-      Boolean(correctLetter) && chosenLetter === correctLetter;
-    const delta = isCorrect ? 3 : -1;
-
-    const baseScore = Math.max(
-      currentScoreRef.current,
-      extractScoreValue(scores.find((s) => s.player_id === identity.playerId))
-    );
-    const nextScore = Math.max(0, baseScore + delta);
-    currentScoreRef.current = nextScore;
-    setLocalScore(nextScore);
-
-    setScores((prev) => {
-      const exists = prev.some((s) => s.player_id === identity.playerId);
-      if (exists) {
-        return prev.map((s) =>
-          s.player_id === identity.playerId
-            ? ({
-                ...s,
-                total_score: nextScore,
-                score: nextScore,
-              } as PlayerScore)
-            : s
-        );
-      }
-      return [
-        ...prev,
-        {
-          id: `score-${identity.playerId}`,
-          session_id: session?.id ?? sessionCode,
-          player_id: identity.playerId,
-          total_score: nextScore,
-          score: nextScore,
-        } as unknown as PlayerScore,
-      ];
-    });
-
-    if (session?.id) {
-      void persistPlayerScore(session.id, identity, nextScore);
-    }
-
-    setStatusMessage(
-      isCorrect
-        ? "Temps écoulé • Bonne réponse (+3 pts)"
-        : "Temps écoulé • Mauvaise réponse (-1 pt)"
-    );
-  }, [
-    identity,
-    currentQuestionKey,
-    activeQuestion,
-    parsedOptions,
-    isTimerExpired,
-    quizState.answers,
-    submittedQuestionKey,
-    submittedChoiceLetter,
-    scores,
-    supabase,
-    session?.id,
-    sessionCode,
-  ]);
 
   const handleJoinGame = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -928,6 +984,15 @@ export default function PlayerControllerPage() {
 
     const round = (activeQuestionIndex ?? 0) + 1;
     const chosenLetter = choice.letter;
+
+    if (currentQuestionKey && activeQuestion) {
+      activeSnapshotRef.current = {
+        key: currentQuestionKey,
+        question: activeQuestion,
+        options: parsedOptions,
+        chosenLetter,
+      };
+    }
 
     if (supabase && session?.id) {
       const currentAnswers =
