@@ -16,7 +16,6 @@ import {
   getUniquePlayerColor,
 } from "@/lib/colorsplayer";
 import type {
-  GameContent,
   GameSession,
   PlayerScore,
   SessionPlayer,
@@ -30,11 +29,35 @@ interface PlayerIdentity {
   avatar: string;
 }
 
-type QuizContentRow = GameContent & {
-  prompt?: string | null;
-  question?: string | null;
-  points?: number | null;
-  round_type?: string | null;
+interface QuizQuestionPayload {
+  id?: string | number;
+  question?: string;
+  prompt?: string;
+  title?: string;
+  text?: string;
+  options?: string[] | Record<string, string>;
+  choices?: string[] | Record<string, string>;
+  answers?: string[] | Record<string, string>;
+  correct?: string | number;
+  correctIndex?: number;
+}
+
+interface QuizGameState {
+  questionStarted?: boolean;
+  roundTriggered?: boolean;
+  questionIndex?: number | null;
+  currentQuestionIndex?: number | null;
+  questionStartedAt?: string | number | null;
+  seriesNumber?: number;
+  seriesSeed?: string;
+  questions?: QuizQuestionPayload[];
+  currentQuestion?: QuizQuestionPayload | null;
+  answers?: Record<string, string>;
+  revealed?: boolean;
+}
+
+type ExtendedGameSession = GameSession & {
+  game_state?: QuizGameState | null;
 };
 
 const CHOICE_STYLES = [
@@ -64,6 +87,58 @@ const CHOICE_STYLES = [
   },
 ] as const;
 
+const LETTERS = ["A", "B", "C", "D"] as const;
+
+function hashStringToSeed(input: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function shuffleWithSeed<T>(items: T[], seedKey: string): T[] {
+  const copy = [...items];
+  let seed = hashStringToSeed(seedKey) || 1;
+  const nextRand = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(nextRand() * (i + 1));
+    const itemI = copy[i];
+    const itemJ = copy[j];
+    if (itemI !== undefined && itemJ !== undefined) {
+      copy[i] = itemJ;
+      copy[j] = itemI;
+    }
+  }
+  return copy;
+}
+
+function extractOptions(
+  rawOptions: QuizQuestionPayload["options"]
+): string[] {
+  if (!rawOptions) return [];
+  if (Array.isArray(rawOptions)) {
+    return rawOptions.map((item) => String(item));
+  }
+  if (typeof rawOptions === "string") {
+    try {
+      const decoded = JSON.parse(rawOptions) as unknown;
+      if (Array.isArray(decoded)) {
+        return decoded.map((item) => String(item));
+      }
+    } catch {
+      return [];
+    }
+  }
+  return LETTERS.map((letter) => String(rawOptions[letter] ?? "")).filter(
+    Boolean
+  );
+}
+
 export default function PlayerControllerPage() {
   const params = useParams<{ sessionCode: string }>();
   const sessionCode = (params?.sessionCode ?? "").toUpperCase();
@@ -71,12 +146,9 @@ export default function PlayerControllerPage() {
 
   const [identity, setIdentity] = useState<PlayerIdentity | null>(null);
   const [nicknameInput, setNicknameInput] = useState<string>("");
-  const [session, setSession] = useState<GameSession | null>(null);
+  const [session, setSession] = useState<ExtendedGameSession | null>(null);
   const [players, setPlayers] = useState<SessionPlayer[]>([]);
   const [scores, setScores] = useState<PlayerScore[]>([]);
-  const [currentContent, setCurrentContent] = useState<QuizContentRow | null>(
-    null
-  );
   const [answerInput, setAnswerInput] = useState<string>("");
   const [submittedRound, setSubmittedRound] = useState<number | null>(null);
   const [selectedChoiceLetter, setSelectedChoiceLetter] = useState<
@@ -127,6 +199,7 @@ export default function PlayerControllerPage() {
     };
   }, [sessionCode]);
 
+  const quizState = session?.game_state ?? {};
   const activeGameId = session?.game_id ?? null;
   const currentRound = session?.current_round ?? 1;
   const roundStatus = session?.status ?? "lobby";
@@ -150,7 +223,6 @@ export default function PlayerControllerPage() {
 
     let isMounted = true;
     let childrenChannel: ReturnType<typeof supabase.channel> | null = null;
-    let contentChannel: ReturnType<typeof supabase.channel> | null = null;
 
     const loadPlayersAndScores = async (targetSessionId: string) => {
       const [{ data: playersData }, { data: scoresData }] = await Promise.all([
@@ -191,39 +263,12 @@ export default function PlayerControllerPage() {
       }
     };
 
-    const loadActiveContent = async (
-      targetGameId: string | null | undefined,
-      roundNumber: number
-    ) => {
-      if (!targetGameId) {
-        if (isMounted) setCurrentContent(null);
-        return;
-      }
-      const { data } = await supabase
-        .from("game_contents")
-        .select("*")
-        .eq("game_id", targetGameId)
-        .order("sort_order", { ascending: true });
-
-      if (!isMounted) return;
-      const items = Array.isArray(data) ? (data as QuizContentRow[]) : [];
-      const idx = Math.max(0, roundNumber - 1);
-      setCurrentContent(items[idx] ?? null);
-    };
-
-    const bindSessionData = (targetSession: GameSession) => {
+    const bindSessionData = (targetSession: ExtendedGameSession) => {
       if (childrenChannel) {
         void supabase.removeChannel(childrenChannel);
       }
-      if (contentChannel) {
-        void supabase.removeChannel(contentChannel);
-      }
 
       void loadPlayersAndScores(targetSession.id);
-      void loadActiveContent(
-        targetSession.game_id,
-        targetSession.current_round ?? 1
-      );
 
       childrenChannel = supabase
         .channel(`play-children-${targetSession.id}`)
@@ -252,27 +297,6 @@ export default function PlayerControllerPage() {
           }
         )
         .subscribe();
-
-      if (targetSession.game_id) {
-        contentChannel = supabase
-          .channel(`play-content-${targetSession.game_id}`)
-          .on(
-            "postgres_changes",
-            {
-              event: "*",
-              schema: "public",
-              table: "game_contents",
-              filter: `game_id=eq.${targetSession.game_id}`,
-            },
-            () => {
-              void loadActiveContent(
-                targetSession.game_id,
-                targetSession.current_round ?? 1
-              );
-            }
-          )
-          .subscribe();
-      }
     };
 
     const fetchInitialSession = async () => {
@@ -282,7 +306,7 @@ export default function PlayerControllerPage() {
         .eq("code", sessionCode)
         .order("updated_at", { ascending: false })
         .limit(1)
-        .maybeSingle<GameSession>();
+        .maybeSingle<ExtendedGameSession>();
 
       if (!isMounted) return;
       if (data) {
@@ -305,7 +329,7 @@ export default function PlayerControllerPage() {
         },
         (payload) => {
           if (!isMounted) return;
-          const nextRow = payload.new as GameSession | null;
+          const nextRow = payload.new as ExtendedGameSession | null;
           if (!nextRow) return;
           setSession(nextRow);
           bindSessionData(nextRow);
@@ -319,32 +343,57 @@ export default function PlayerControllerPage() {
       if (childrenChannel) {
         void supabase.removeChannel(childrenChannel);
       }
-      if (contentChannel) {
-        void supabase.removeChannel(contentChannel);
-      }
     };
   }, [supabase, sessionCode]);
+
+  const activeQuestionIndex = useMemo<number | null>(() => {
+    const rawIdx =
+      quizState.questionIndex ?? quizState.currentQuestionIndex ?? null;
+    if (typeof rawIdx === "number" && Number.isFinite(rawIdx) && rawIdx >= 0) {
+      return Math.floor(rawIdx);
+    }
+    return null;
+  }, [quizState.questionIndex, quizState.currentQuestionIndex]);
+
+  const activeQuestion = useMemo<QuizQuestionPayload | null>(() => {
+    if (activeQuestionIndex === null) {
+      return quizState.currentQuestion ?? null;
+    }
+    const list = Array.isArray(quizState.questions) ? quizState.questions : [];
+    if (list.length > 0) {
+      const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
+      const seriesSeed =
+        typeof quizState.seriesSeed === "string" && quizState.seriesSeed.trim()
+          ? quizState.seriesSeed.trim()
+          : `${session?.id ?? ""}-${sessionCode}-s${seriesNumber}`;
+      const ordered = shuffleWithSeed(
+        list,
+        `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`
+      ).slice(0, Math.min(15, list.length));
+      const safeIdx = Math.min(activeQuestionIndex, ordered.length - 1);
+      return ordered[safeIdx] ?? null;
+    }
+    return quizState.currentQuestion ?? null;
+  }, [
+    activeQuestionIndex,
+    quizState.questions,
+    quizState.currentQuestion,
+    quizState.seriesNumber,
+    quizState.seriesSeed,
+    session?.id,
+    sessionCode,
+  ]);
 
   const alreadySubmittedThisRound = submittedRound === currentRound;
   const isPlaying = roundStatus === "playing";
 
   const parsedOptions = useMemo<string[]>(() => {
-    const raw = currentContent?.options as unknown;
-    if (Array.isArray(raw)) {
-      return raw.map((item) => String(item));
-    }
-    if (typeof raw === "string") {
-      try {
-        const decoded = JSON.parse(raw) as unknown;
-        if (Array.isArray(decoded)) {
-          return decoded.map((item) => String(item));
-        }
-      } catch {
-        // Ignore invalid JSON string
-      }
-    }
-    return [];
-  }, [currentContent?.options]);
+    const raw =
+      activeQuestion?.options ??
+      activeQuestion?.choices ??
+      activeQuestion?.answers;
+    return extractOptions(raw);
+  }, [activeQuestion]);
 
   const qcmChoices = useMemo(() => {
     return CHOICE_STYLES.map((style, idx) => ({
@@ -402,7 +451,7 @@ export default function PlayerControllerPage() {
           .eq("code", sessionCode)
           .order("updated_at", { ascending: false })
           .limit(1)
-          .maybeSingle<GameSession>();
+          .maybeSingle<ExtendedGameSession>();
         targetSession = data ?? null;
         if (data) {
           setSession(data);
@@ -648,8 +697,10 @@ export default function PlayerControllerPage() {
                 <div>
                   <div className="font-black text-lg">{identity.nickname}</div>
                   <div className="text-xs opacity-90 font-semibold">
-                    Manche {currentRound} • État :{" "}
-                    <span className="uppercase">{roundStatus}</span>
+                    {activeQuestionIndex !== null
+                      ? `Question ${activeQuestionIndex + 1}`
+                      : "Quiz"}{" "}
+                    • État : <span className="uppercase">{roundStatus}</span>
                   </div>
                 </div>
               </div>
@@ -668,7 +719,9 @@ export default function PlayerControllerPage() {
                       : "Regarde la télé pour la suite..."}
                   </p>
                   <p className="text-xs text-neutral-400">
-                    Manche {currentRound}
+                    {activeQuestionIndex !== null
+                      ? `Question ${activeQuestionIndex + 1}`
+                      : "En attente"}
                   </p>
                 </div>
               ) : parsedOptions.length > 0 ? (
