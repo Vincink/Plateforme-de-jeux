@@ -260,6 +260,7 @@ export default function PlayerControllerPage() {
   const [remainingSeconds, setRemainingSeconds] = useState<number>(
     DEFAULT_QUESTION_DURATION_SECONDS
   );
+  const [hadActiveRound, setHadActiveRound] = useState<boolean>(false);
   const [isConnected, setIsConnected] = useState<boolean>(true);
   const [isJoining, setIsJoining] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>("");
@@ -435,17 +436,22 @@ export default function PlayerControllerPage() {
     return null;
   }, [quizState.questionIndex, quizState.currentQuestionIndex]);
 
-  // Clé stable par question et série (indépendante des micro-variations de questionStartedAt)
   const currentQuestionKey = useMemo<string | null>(() => {
     if (activeQuestionIndex === null) return null;
     const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
     const seriesSeed =
       typeof quizState.seriesSeed === "string" ? quizState.seriesSeed : "";
-    return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}`;
+    const startedAt =
+      quizState.questionStartedAt !== undefined &&
+      quizState.questionStartedAt !== null
+        ? String(quizState.questionStartedAt)
+        : "";
+    return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${startedAt}`;
   }, [
     activeQuestionIndex,
     quizState.seriesNumber,
     quizState.seriesSeed,
+    quizState.questionStartedAt,
     session?.id,
     sessionCode,
   ]);
@@ -455,12 +461,17 @@ export default function PlayerControllerPage() {
     setSubmittedQuestionKey(null);
     setSubmittedChoiceLetter(null);
     setHighlightedChoiceLetter(null);
+    setHadActiveRound(false);
     setStatusMessage("");
   }, [activeGameId, currentQuestionKey]);
 
   useEffect(() => {
     const updateTimer = () => {
-      setRemainingSeconds(computeRemainingSeconds(quizState, Date.now()));
+      const nextRemaining = computeRemainingSeconds(quizState, Date.now());
+      setRemainingSeconds(nextRemaining);
+      if (roundStatus === "playing" && nextRemaining > 0) {
+        setHadActiveRound(true);
+      }
     };
 
     updateTimer();
@@ -473,6 +484,7 @@ export default function PlayerControllerPage() {
     return () => window.clearInterval(intervalId);
   }, [
     activeQuestionIndex,
+    roundStatus,
     quizState.questionStartedAt,
     quizState.durationSeconds,
     quizState.isPaused,
@@ -707,9 +719,14 @@ export default function PlayerControllerPage() {
     [currentPlayerRecord?.id, identity?.playerId, players]
   );
 
-  // Attribution des points uniquement lorsque le chrono est arrivé à 0 (ou réponse révélée)
   useEffect(() => {
-    if (!identity || !currentQuestionKey || !activeQuestion || !isTimerExpired) {
+    if (
+      !identity ||
+      !currentQuestionKey ||
+      !activeQuestion ||
+      !isTimerExpired ||
+      !hadActiveRound
+    ) {
       return;
     }
 
@@ -780,6 +797,7 @@ export default function PlayerControllerPage() {
     activeQuestion,
     parsedOptions,
     isTimerExpired,
+    hadActiveRound,
     quizState.answers,
     submittedQuestionKey,
     submittedChoiceLetter,
