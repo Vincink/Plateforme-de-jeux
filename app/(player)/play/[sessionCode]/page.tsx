@@ -280,6 +280,13 @@ export default function PlayerControllerPage() {
   const currentScoreRef = useRef<number>(0);
   const snapshotRef = useRef<QuestionSnapshot | null>(null);
   const prevQuestionKeyRef = useRef<string | null>(null);
+  const identityRef = useRef<PlayerIdentity | null>(null);
+  const sessionRef = useRef<ExtendedGameSession | null>(null);
+  const scoresRef = useRef<PlayerScore[]>([]);
+
+  identityRef.current = identity;
+  sessionRef.current = session;
+  scoresRef.current = scores;
 
   const persistPlayerScore = async (
     targetSessionId: string,
@@ -399,6 +406,7 @@ export default function PlayerControllerPage() {
             avatar: parsed.avatar ?? "🎮",
           };
           setIdentity(restored);
+          identityRef.current = restored;
           setNicknameInput(restored.nickname);
         }
       }
@@ -494,13 +502,16 @@ export default function PlayerControllerPage() {
     snapshot: QuestionSnapshot | null,
     updateMessage: boolean
   ) => {
-    if (!identity || !snapshot) return;
+    const activeIdentity = identityRef.current;
+    const activeSession = sessionRef.current;
+    if (!activeIdentity || !snapshot) return;
 
-    const settlementKey = `${identity.playerId}::${snapshot.key}`;
+    const settlementKey = `${activeIdentity.playerId}::${snapshot.key}`;
     if (settledQuestionsRef.current.has(settlementKey)) return;
 
+    const latestAnswers = activeSession?.game_state?.answers;
     const stateAnswer = normalizeAnswerLetter(
-      quizState.answers?.[String(identity.playerId)],
+      latestAnswers?.[String(activeIdentity.playerId)],
       snapshot.options
     );
     const chosenLetter = snapshot.chosenLetter ?? stateAnswer;
@@ -521,41 +532,42 @@ export default function PlayerControllerPage() {
     const isCorrect = Boolean(correctLetter) && chosenLetter === correctLetter;
     const delta = isCorrect ? 3 : -1;
 
-    const baseScore = Math.max(
-      currentScoreRef.current,
-      extractScoreValue(scores.find((s) => s.player_id === identity.playerId))
+    const dbRowScore = extractScoreValue(
+      scoresRef.current.find((s) => s.player_id === activeIdentity.playerId)
     );
+    const baseScore = Math.max(currentScoreRef.current, dbRowScore);
     const nextScore = Math.max(0, baseScore + delta);
     currentScoreRef.current = nextScore;
     setLocalScore(nextScore);
 
     setScores((prev) => {
-      const exists = prev.some((s) => s.player_id === identity.playerId);
-      if (exists) {
-        return prev.map((s) =>
-          s.player_id === identity.playerId
-            ? ({
-                ...s,
-                total_score: nextScore,
-                score: nextScore,
-              } as PlayerScore)
-            : s
-        );
-      }
-      return [
-        ...prev,
-        {
-          id: `score-${identity.playerId}`,
-          session_id: session?.id ?? sessionCode,
-          player_id: identity.playerId,
-          total_score: nextScore,
-          score: nextScore,
-        } as unknown as PlayerScore,
-      ];
+      const exists = prev.some((s) => s.player_id === activeIdentity.playerId);
+      const updated = exists
+        ? prev.map((s) =>
+            s.player_id === activeIdentity.playerId
+              ? ({
+                  ...s,
+                  total_score: nextScore,
+                  score: nextScore,
+                } as PlayerScore)
+              : s
+          )
+        : [
+            ...prev,
+            {
+              id: `score-${activeIdentity.playerId}`,
+              session_id: activeSession?.id ?? sessionCode,
+              player_id: activeIdentity.playerId,
+              total_score: nextScore,
+              score: nextScore,
+            } as unknown as PlayerScore,
+          ];
+      scoresRef.current = updated;
+      return updated;
     });
 
-    if (session?.id) {
-      void persistPlayerScore(session.id, identity, nextScore);
+    if (activeSession?.id) {
+      void persistPlayerScore(activeSession.id, activeIdentity, nextScore);
     }
 
     if (updateMessage) {
@@ -703,6 +715,7 @@ export default function PlayerControllerPage() {
       if (scoresData) {
         const rows = scoresData as PlayerScore[];
         setScores(rows);
+        scoresRef.current = rows;
         try {
           const saved = localStorage.getItem(`player_identity_${sessionCode}`);
           const parsed = saved
@@ -732,6 +745,7 @@ export default function PlayerControllerPage() {
           ) {
             localStorage.removeItem(`player_identity_${sessionCode}`);
             setIdentity(null);
+            identityRef.current = null;
             setLocalScore(0);
             currentScoreRef.current = 0;
             setStatusMessage("Tu as été exclu de la partie.");
@@ -790,6 +804,7 @@ export default function PlayerControllerPage() {
       if (!isMounted) return;
       if (data) {
         setSession(data);
+        sessionRef.current = data;
         bindSessionData(data);
       }
     };
@@ -811,6 +826,7 @@ export default function PlayerControllerPage() {
           const nextRow = payload.new as ExtendedGameSession | null;
           if (!nextRow) return;
           setSession(nextRow);
+          sessionRef.current = nextRow;
           bindSessionData(nextRow);
         }
       )
@@ -883,6 +899,7 @@ export default function PlayerControllerPage() {
         targetSession = data ?? null;
         if (data) {
           setSession(data);
+          sessionRef.current = data;
         }
       }
 
@@ -905,6 +922,7 @@ export default function PlayerControllerPage() {
       };
 
       setIdentity(newIdentity);
+      identityRef.current = newIdentity;
 
       try {
         localStorage.setItem(
@@ -976,7 +994,10 @@ export default function PlayerControllerPage() {
           ]);
 
         if (playersData) setPlayers(playersData as SessionPlayer[]);
-        if (scoresData) setScores(scoresData as PlayerScore[]);
+        if (scoresData) {
+          setScores(scoresData as PlayerScore[]);
+          scoresRef.current = scoresData as PlayerScore[];
+        }
       }
 
       setStatusMessage("Connecté à la partie !");
@@ -1043,9 +1064,11 @@ export default function PlayerControllerPage() {
         return;
       }
 
-      setSession((prev) =>
-        prev ? { ...prev, game_state: nextGameState } : prev
-      );
+      setSession((prev) => {
+        const updated = prev ? { ...prev, game_state: nextGameState } : prev;
+        sessionRef.current = updated;
+        return updated;
+      });
     }
 
     clearHighlightTimer();
