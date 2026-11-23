@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Check, Clock, Trophy, Tv } from "lucide-react";
+import { Award, Check, Clock, Crown, Medal, Trophy, Tv } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import { QUESTIONS, type QuizQuestion } from "@/lib/questions";
@@ -524,7 +524,7 @@ export default function TvQuizPage() {
     sessionStatusLower === "ended" ||
     sessionStatusLower === "completed";
 
-  // Réinitialise tous les scores à 0 quand on clique sur "Relancer" (nouvelle série) ou "Terminer" (status lobby / finished / ended / completed)
+  // Réinitialise tous les scores à 0 quand on clique sur "Relancer" (nouvelle série) ou "Terminer"
   useEffect(() => {
     if (!supabase || !session?.id) return;
 
@@ -535,7 +535,9 @@ export default function TvQuizPage() {
     const shouldReset =
       isFinishedOrLobbyStatus ||
       (lastResetSignatureRef.current !== "" &&
-        !lastResetSignatureRef.current.includes(`series:${seriesNumber}:${seriesSeed}`) &&
+        !lastResetSignatureRef.current.includes(
+          `series:${seriesNumber}:${seriesSeed}`
+        ) &&
         resetTrigger.includes("series:"));
 
     if (lastResetSignatureRef.current === "") {
@@ -547,7 +549,10 @@ export default function TvQuizPage() {
       return;
     }
 
-    if (lastResetSignatureRef.current === resetTrigger || isResettingScoresRef.current) {
+    if (
+      lastResetSignatureRef.current === resetTrigger ||
+      isResettingScoresRef.current
+    ) {
       return;
     }
 
@@ -1071,6 +1076,23 @@ export default function TvQuizPage() {
   }, [players, scoresMap, answersMap]);
 
   const totalQuestions = questions.length;
+  const isLastQuestionCompleted =
+    !isFinishedOrLobbyStatus &&
+    totalQuestions > 0 &&
+    activeQuestionIndex !== null &&
+    activeQuestionIndex >= totalQuestions - 1 &&
+    isRevealed;
+
+  const topThreePlayers = useMemo(() => {
+    return rankedPlayers.slice(0, 3);
+  }, [rankedPlayers]);
+
+  const podiumSlots = useMemo(() => {
+    const first = topThreePlayers[0];
+    const second = topThreePlayers[1];
+    const third = topThreePlayers[2];
+    return { first, second, third };
+  }, [topThreePlayers]);
 
   return (
     <div className="h-[100dvh] w-screen overflow-hidden bg-tvos-bg text-white px-8 py-6 flex flex-col justify-between select-none">
@@ -1269,6 +1291,168 @@ export default function TvQuizPage() {
           )}
         </aside>
       </main>
+
+      {/* ================= GRANDE CASE PODIUM FIN DE SÉRIE ================= */}
+      {isLastQuestionCompleted && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-8">
+          <div className="w-full max-w-5xl h-[82vh] bg-neutral-900/95 border-2 border-amber-400/50 rounded-[2.5rem] p-8 flex flex-col justify-between shadow-2xl">
+            {/* Partie supérieure : PODIUM */}
+            <div className="text-center shrink-0 border-b border-white/15 pb-5">
+              <div className="inline-flex items-center gap-3 px-6 py-2 rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-300 text-lg font-extrabold uppercase tracking-[0.22em] mb-2">
+                <Crown className="w-6 h-6 text-amber-400" />
+                <span>Fin des {totalQuestions} questions</span>
+              </div>
+              <h2 className="text-5xl xl:text-6xl font-black uppercase tracking-[0.18em] text-amber-300">
+                PODIUM
+              </h2>
+            </div>
+
+            {/* Centre : Podium des 3 premiers */}
+            <div className="flex-1 min-h-0 grid grid-cols-3 items-end gap-6 pt-8">
+              {/* 2e place (gauche) */}
+              <div className="flex flex-col items-center gap-4 h-[78%]">
+                {podiumSlots.second ? (
+                  <>
+                    <div className="flex items-center gap-3 w-full">
+                      <div
+                        style={{
+                          backgroundColor: getUniquePlayerColor(
+                            podiumSlots.second.player.id,
+                            players
+                          ).bgHex,
+                          borderColor: getUniquePlayerColor(
+                            podiumSlots.second.player.id,
+                            players
+                          ).borderHex,
+                          color: getUniquePlayerColor(
+                            podiumSlots.second.player.id,
+                            players
+                          ).textHex,
+                        }}
+                        className="flex-1 min-w-0 rounded-2xl border-2 px-4 py-3 font-black text-2xl xl:text-3xl truncate shadow-lg"
+                      >
+                        {podiumSlots.second.player.nickname}
+                      </div>
+                      <div
+                        title="Coupe en argent"
+                        className="w-14 h-14 rounded-2xl bg-slate-300/20 border-2 border-slate-300 flex items-center justify-center text-slate-200 shrink-0 shadow-md"
+                      >
+                        <Medal className="w-8 h-8 text-slate-200" />
+                      </div>
+                    </div>
+                    <div className="w-full flex-1 rounded-t-3xl bg-slate-400/20 border-2 border-slate-300/50 flex flex-col items-center justify-center gap-2 p-4">
+                      <span className="text-4xl font-black text-slate-200">
+                        2e
+                      </span>
+                      <span className="font-mono text-2xl font-black text-white">
+                        {podiumSlots.second.score} pts
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="w-full h-full rounded-t-3xl bg-white/5 border border-white/10 flex items-center justify-center text-neutral-500 font-bold">
+                    —
+                  </div>
+                )}
+              </div>
+
+              {/* 1re place (centre) */}
+              <div className="flex flex-col items-center gap-4 h-full">
+                {podiumSlots.first ? (
+                  <>
+                    <div className="flex items-center gap-3 w-full">
+                      <div
+                        style={{
+                          backgroundColor: getUniquePlayerColor(
+                            podiumSlots.first.player.id,
+                            players
+                          ).bgHex,
+                          borderColor: getUniquePlayerColor(
+                            podiumSlots.first.player.id,
+                            players
+                          ).borderHex,
+                          color: getUniquePlayerColor(
+                            podiumSlots.first.player.id,
+                            players
+                          ).textHex,
+                        }}
+                        className="flex-1 min-w-0 rounded-2xl border-2 px-5 py-3.5 font-black text-2xl xl:text-4xl truncate shadow-xl"
+                      >
+                        {podiumSlots.first.player.nickname}
+                      </div>
+                      <div
+                        title="Coupe en or"
+                        className="w-16 h-16 rounded-2xl bg-amber-400/25 border-2 border-amber-300 flex items-center justify-center text-amber-300 shrink-0 shadow-lg"
+                      >
+                        <Trophy className="w-9 h-9 text-amber-300" />
+                      </div>
+                    </div>
+                    <div className="w-full flex-1 rounded-t-3xl bg-amber-400/20 border-2 border-amber-300/70 flex flex-col items-center justify-center gap-2 p-4 shadow-2xl">
+                      <span className="text-5xl font-black text-amber-300">
+                        1er
+                      </span>
+                      <span className="font-mono text-3xl font-black text-white">
+                        {podiumSlots.first.score} pts
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="w-full h-full rounded-t-3xl bg-white/5 border border-white/10 flex items-center justify-center text-neutral-500 font-bold">
+                    —
+                  </div>
+                )}
+              </div>
+
+              {/* 3e place (droite) */}
+              <div className="flex flex-col items-center gap-4 h-[64%]">
+                {podiumSlots.third ? (
+                  <>
+                    <div className="flex items-center gap-3 w-full">
+                      <div
+                        style={{
+                          backgroundColor: getUniquePlayerColor(
+                            podiumSlots.third.player.id,
+                            players
+                          ).bgHex,
+                          borderColor: getUniquePlayerColor(
+                            podiumSlots.third.player.id,
+                            players
+                          ).borderHex,
+                          color: getUniquePlayerColor(
+                            podiumSlots.third.player.id,
+                            players
+                          ).textHex,
+                        }}
+                        className="flex-1 min-w-0 rounded-2xl border-2 px-4 py-3 font-black text-2xl xl:text-3xl truncate shadow-lg"
+                      >
+                        {podiumSlots.third.player.nickname}
+                      </div>
+                      <div
+                        title="Coupe en bronze"
+                        className="w-14 h-14 rounded-2xl bg-orange-500/20 border-2 border-orange-400 flex items-center justify-center text-orange-300 shrink-0 shadow-md"
+                      >
+                        <Award className="w-8 h-8 text-orange-300" />
+                      </div>
+                    </div>
+                    <div className="w-full flex-1 rounded-t-3xl bg-orange-500/15 border-2 border-orange-400/50 flex flex-col items-center justify-center gap-2 p-4">
+                      <span className="text-4xl font-black text-orange-300">
+                        3e
+                      </span>
+                      <span className="font-mono text-2xl font-black text-white">
+                        {podiumSlots.third.score} pts
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="w-full h-full rounded-t-3xl bg-white/5 border border-white/10 flex items-center justify-center text-neutral-500 font-bold">
+                    —
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
