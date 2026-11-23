@@ -90,6 +90,8 @@ type ExtendedPlayer = SessionPlayer & {
   totalPoints?: number | string | null;
   player_id?: string | number | null;
   user_id?: string | number | null;
+  avatar_id?: string | null;
+  avatarId?: string | null;
 };
 
 // Couleurs des 4 cases de réponses (A, B, C, D)
@@ -898,7 +900,7 @@ export default function TvQuizPage() {
           updates.push({
             playerId: playerIdStr,
             nickname: player.nickname,
-            avatarId: player.avatar_id ?? "gamepad",
+            avatarId: player.avatar_id ?? player.avatarId ?? "gamepad",
             nextScore,
           });
         }
