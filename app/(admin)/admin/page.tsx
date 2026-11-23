@@ -420,7 +420,6 @@ export default function AdminConsolePage() {
       await supabase
         .from("game_sessions")
         .update({
-          status: "finished",
           game_state: {
             nextSessionCode: newCode,
             replacedByCode: newCode,
