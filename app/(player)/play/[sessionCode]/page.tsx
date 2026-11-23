@@ -452,7 +452,7 @@ export default function PlayerControllerPage() {
 
   const activeQuestion = useMemo<QuizQuestionPayload | null>(() => {
     const idx = activeQuestionIndex ?? 0;
-    const rawList =
+    const rawList: QuizQuestionPayload[] =
       Array.isArray(quizState.questions) && quizState.questions.length > 0
         ? quizState.questions
         : (QUESTIONS as QuizQuestion[]);
@@ -463,7 +463,7 @@ export default function PlayerControllerPage() {
         typeof quizState.seriesSeed === "string" && quizState.seriesSeed.trim()
           ? quizState.seriesSeed.trim()
           : `${session?.id ?? ""}-${sessionCode}-s${seriesNumber}`;
-      const ordered = shuffleWithSeed(
+      const ordered = shuffleWithSeed<QuizQuestionPayload>(
         rawList,
         `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`
       ).slice(0, Math.min(15, rawList.length));
