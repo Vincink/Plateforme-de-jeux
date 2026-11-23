@@ -410,7 +410,7 @@ export default function AdminConsolePage() {
   // 3. ACTIONS DE L'ANIMATEUR (Nouvelle salle, Lancer/Relancer, Pause, Question suivante)
   // ==========================================================================
 
-  // Crée une nouvelle salle et notifie l'ancienne session pour basculer la TV sur le nouveau code
+  // Crée une nouvelle salle et met à jour l'ancienne session avec nextSessionCode sans passer en "finished"
   const handleCreateNewSession = async () => {
     const newCode = generateSessionCode();
     const newSeed = generateSeriesSeed();
@@ -420,6 +420,7 @@ export default function AdminConsolePage() {
       await supabase
         .from("game_sessions")
         .update({
+          status: "lobby",
           game_state: {
             nextSessionCode: newCode,
             replacedByCode: newCode,
