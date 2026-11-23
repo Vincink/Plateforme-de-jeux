@@ -262,6 +262,42 @@ export default function PlayerControllerPage() {
   const scoresRef = useRef<PlayerScore[]>(scores);
   scoresRef.current = scores;
 
+  const persistPlayerScore = async (
+    targetSessionId: string,
+    targetIdentity: PlayerIdentity,
+    nextScore: number
+  ) => {
+    if (!supabase || !targetSessionId) return;
+
+    const { data: existingRow } = await supabase
+      .from("player_scores")
+      .select("id")
+      .eq("session_id", targetSessionId)
+      .eq("player_id", targetIdentity.playerId)
+      .maybeSingle<{ id: string }>();
+
+    if (existingRow?.id) {
+      await supabase
+        .from("player_scores")
+        .update({
+          nickname: targetIdentity.nickname,
+          avatar_id: targetIdentity.avatarId,
+          total_score: nextScore,
+        })
+        .eq("id", existingRow.id);
+      return;
+    }
+
+    await supabase.from("player_scores").insert({
+      session_id: targetSessionId,
+      player_id: targetIdentity.playerId,
+      nickname: targetIdentity.nickname,
+      avatar_id: targetIdentity.avatarId,
+      total_score: nextScore,
+      streak: 0,
+    });
+  };
+
   const clearHighlightTimer = () => {
     if (highlightTimeoutRef.current !== null) {
       window.clearTimeout(highlightTimeoutRef.current);
@@ -641,7 +677,6 @@ export default function PlayerControllerPage() {
     [currentPlayerRecord?.id, identity?.playerId, players]
   );
 
-  // Attribution des points uniquement lorsque le chrono est arrivé à 0 (ou réponse révélée)
   useEffect(() => {
     if (!identity || !currentQuestionKey || !activeQuestion || !isTimerExpired) {
       return;
@@ -707,19 +742,8 @@ export default function PlayerControllerPage() {
       ];
     });
 
-    if (supabase && session?.id) {
-      void supabase
-        .from("player_scores")
-        .upsert(
-          {
-            session_id: session.id,
-            player_id: identity.playerId,
-            nickname: identity.nickname,
-            avatar_id: identity.avatarId,
-            total_score: nextScore,
-          },
-          { onConflict: "session_id,player_id" }
-        );
+    if (session?.id) {
+      void persistPlayerScore(session.id, identity, nextScore);
     }
 
     setStatusMessage(
@@ -840,17 +864,7 @@ export default function PlayerControllerPage() {
           return;
         }
 
-        await supabase.from("player_scores").upsert(
-          {
-            session_id: targetSession.id,
-            player_id: newIdentity.playerId,
-            nickname: newIdentity.nickname,
-            avatar_id: newIdentity.avatarId,
-            total_score: 0,
-            streak: 0,
-          },
-          { onConflict: "session_id,player_id", ignoreDuplicates: true }
-        );
+        await persistPlayerScore(targetSession.id, newIdentity, 0);
 
         const [{ data: playersData }, { data: scoresData }] =
           await Promise.all([
