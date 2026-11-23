@@ -137,10 +137,79 @@ const ANSWER_STYLES: Record<
 const LETTERS: readonly AnswerLetter[] = ["A", "B", "C", "D"];
 const QUESTION_DURATION_SECONDS = 12;
 const QUESTIONS_PER_GAME = 15;
+const PODIUM_DELAY_MS = 3000;
 
 // ============================================================================
-// 2. FONCTIONS UTILITAIRES
+// 2. FONCTIONS UTILITAIRES & SON D'APPLAUDISSEMENTS
 // ============================================================================
+
+function playApplauseSound(): () => void {
+  if (typeof window === "undefined") return () => {};
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+  if (!AudioCtx) return () => {};
+
+  let ctx: AudioContext | null = null;
+  const timeouts: number[] = [];
+
+  try {
+    ctx = new AudioCtx();
+    if (ctx.state === "suspended") {
+      void ctx.resume().catch(() => {});
+    }
+
+    const totalDuration = 2.6;
+    const sampleRate = ctx.sampleRate;
+    const bufferSize = Math.floor(sampleRate * totalDuration);
+    const buffer = ctx.createBuffer(1, bufferSize, sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < bufferSize; i++) {
+      const t = i / sampleRate;
+      const env = Math.sin(Math.min(1, t / 0.25) * (Math.PI / 2)) *
+        Math.pow(Math.max(0, 1 - t / totalDuration), 1.35);
+      const clapBurst = Math.pow(0.5 + 0.5 * Math.sin(t * 2 * Math.PI * 11), 3);
+      const white = Math.random() * 2 - 1;
+      data[i] = white * env * (0.35 + 0.65 * clapBurst);
+    }
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+
+    const bandpass = ctx.createBiquadFilter();
+    bandpass.type = "bandpass";
+    bandpass.frequency.value = 1650;
+    bandpass.Q.value = 0.7;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.01, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.45, ctx.currentTime + 0.2);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + totalDuration);
+
+    source.connect(bandpass);
+    bandpass.connect(gain);
+    gain.connect(ctx.destination);
+    source.start();
+
+    const closeId = window.setTimeout(() => {
+      if (ctx && ctx.state !== "closed") {
+        void ctx.close().catch(() => {});
+      }
+    }, (totalDuration + 0.2) * 1000);
+    timeouts.push(closeId);
+  } catch {
+    // Ignore audio errors
+  }
+
+  return () => {
+    timeouts.forEach((id) => window.clearTimeout(id));
+    if (ctx && ctx.state !== "closed") {
+      void ctx.close().catch(() => {});
+    }
+  };
+}
 
 function hashStringToSeed(input: string): number {
   let hash = 2166136261;
@@ -303,6 +372,7 @@ export default function TvQuizPage() {
   const [frozenRemainingSeconds, setFrozenRemainingSeconds] = useState<
     number | null
   >(null);
+  const [isPodiumVisible, setIsPodiumVisible] = useState<boolean>(false);
 
   const usedQuestionKeysRef = useRef<Set<string>>(new Set());
   const lastRecordedSeriesKeyRef = useRef<string>("");
@@ -315,6 +385,7 @@ export default function TvQuizPage() {
   const isScoringRef = useRef<boolean>(false);
   const lastResetSignatureRef = useRef<string>("");
   const isResettingScoresRef = useRef<boolean>(false);
+  const hasPlayedApplauseForSeriesRef = useRef<string>("");
 
   // --- Synchronisation temps réel avec Supabase (session + joueurs + scores) ---
   useEffect(() => {
@@ -559,6 +630,8 @@ export default function TvQuizPage() {
     lastResetSignatureRef.current = resetTrigger;
     isResettingScoresRef.current = true;
     scoredQuestionsRef.current = new Set();
+    hasPlayedApplauseForSeriesRef.current = "";
+    setIsPodiumVisible(false);
 
     void (async () => {
       try {
@@ -1083,6 +1156,35 @@ export default function TvQuizPage() {
     activeQuestionIndex >= totalQuestions - 1 &&
     isRevealed;
 
+  // Petit délai avant d'afficher le podium pour laisser voir la révélation de la dernière question
+  useEffect(() => {
+    if (!isLastQuestionCompleted) {
+      setIsPodiumVisible(false);
+      return;
+    }
+
+    const timerId = window.setTimeout(() => {
+      setIsPodiumVisible(true);
+    }, PODIUM_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(timerId);
+    };
+  }, [isLastQuestionCompleted]);
+
+  // Son d'applaudissements lorsque le podium s'affiche
+  useEffect(() => {
+    if (!isPodiumVisible || !session?.id) return;
+    const playKey = `${session.id}-s${seriesNumber}-${seriesSeed}`;
+    if (hasPlayedApplauseForSeriesRef.current === playKey) return;
+    hasPlayedApplauseForSeriesRef.current = playKey;
+
+    const cleanupAudio = playApplauseSound();
+    return () => {
+      cleanupAudio();
+    };
+  }, [isPodiumVisible, session?.id, seriesNumber, seriesSeed]);
+
   const topThreePlayers = useMemo(() => {
     return rankedPlayers.slice(0, 3);
   }, [rankedPlayers]);
@@ -1096,6 +1198,32 @@ export default function TvQuizPage() {
 
   return (
     <div className="h-[100dvh] w-screen overflow-hidden bg-tvos-bg text-white px-8 py-6 flex flex-col justify-between select-none">
+      <style jsx>{`
+        @keyframes podiumJump {
+          0%, 100% {
+            transform: translateY(0) scale(1);
+          }
+          25% {
+            transform: translateY(-16px) scale(1.03);
+          }
+          50% {
+            transform: translateY(0) scale(0.98);
+          }
+          75% {
+            transform: translateY(-9px) scale(1.015);
+          }
+        }
+        .podium-jump-1 {
+          animation: podiumJump 1.15s ease-in-out infinite;
+        }
+        .podium-jump-2 {
+          animation: podiumJump 1.15s ease-in-out 0.18s infinite;
+        }
+        .podium-jump-3 {
+          animation: podiumJump 1.15s ease-in-out 0.36s infinite;
+        }
+      `}</style>
+
       {/* ================= EN-TÊTE ================= */}
       <header className="flex items-center justify-between border-b border-white/15 pb-4 shrink-0 gap-6">
         <div className="flex items-center gap-4 min-w-0">
@@ -1293,7 +1421,7 @@ export default function TvQuizPage() {
       </main>
 
       {/* ================= GRANDE CASE PODIUM FIN DE SÉRIE ================= */}
-      {isLastQuestionCompleted && (
+      {isLastQuestionCompleted && isPodiumVisible && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-8">
           <div className="w-full max-w-5xl h-[82vh] bg-neutral-900/95 border-2 border-amber-400/50 rounded-[2.5rem] p-8 flex flex-col justify-between shadow-2xl">
             {/* Partie supérieure : PODIUM */}
@@ -1313,7 +1441,7 @@ export default function TvQuizPage() {
               <div className="flex flex-col items-center gap-4 h-[78%]">
                 {podiumSlots.second ? (
                   <>
-                    <div className="flex items-center gap-3 w-full">
+                    <div className="podium-jump-2 flex items-center gap-3 w-full">
                       <div
                         style={{
                           backgroundColor: getUniquePlayerColor(
@@ -1360,7 +1488,7 @@ export default function TvQuizPage() {
               <div className="flex flex-col items-center gap-4 h-full">
                 {podiumSlots.first ? (
                   <>
-                    <div className="flex items-center gap-3 w-full">
+                    <div className="podium-jump-1 flex items-center gap-3 w-full">
                       <div
                         style={{
                           backgroundColor: getUniquePlayerColor(
@@ -1407,7 +1535,7 @@ export default function TvQuizPage() {
               <div className="flex flex-col items-center gap-4 h-[64%]">
                 {podiumSlots.third ? (
                   <>
-                    <div className="flex items-center gap-3 w-full">
+                    <div className="podium-jump-3 flex items-center gap-3 w-full">
                       <div
                         style={{
                           backgroundColor: getUniquePlayerColor(
