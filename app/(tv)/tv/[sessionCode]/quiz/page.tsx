@@ -226,7 +226,7 @@ function extractOptionsList(
   return LETTERS.map((letter) => String(rawOptions[letter] ?? ""));
 }
 
-// Adapte la taille du texte d'une réponse pour éviter de couper les mots longs
+// Adapte la taille du texte d'une réponse pour éviter de couper les mots longs et garder de la marge
 function getOptionFontSize(text: string): string {
   const trimmed = text.trim();
   const longestWordLen = trimmed
@@ -234,12 +234,12 @@ function getOptionFontSize(text: string): string {
     .reduce((max, word) => Math.max(max, word.length), 0);
   const len = trimmed.length;
 
-  if (longestWordLen >= 16) return "text-xl xl:text-2xl leading-snug";
-  if (longestWordLen >= 12) return "text-2xl xl:text-3xl leading-snug";
-  if (len <= 12) return "text-4xl xl:text-5xl leading-tight";
-  if (len <= 24) return "text-3xl xl:text-4xl leading-snug";
-  if (len <= 44) return "text-2xl xl:text-3xl leading-snug";
-  return "text-xl xl:text-2xl leading-snug";
+  if (longestWordLen >= 13) return "text-lg xl:text-2xl leading-relaxed";
+  if (longestWordLen >= 9) return "text-xl xl:text-3xl leading-relaxed";
+  if (len <= 10) return "text-3xl xl:text-4xl leading-relaxed";
+  if (len <= 22) return "text-2xl xl:text-3xl leading-relaxed";
+  if (len <= 42) return "text-xl xl:text-2xl leading-relaxed";
+  return "text-lg xl:text-xl leading-relaxed";
 }
 
 // Adapte la taille du texte de la question selon sa longueur
@@ -793,7 +793,7 @@ export default function TvQuizPage() {
               return (
                 <div
                   key={letter}
-                  className={`relative w-full h-full rounded-3xl border-2 px-4 py-3 flex items-center justify-center transition-all duration-300 overflow-hidden ${
+                  className={`relative w-full h-full rounded-3xl border-2 px-5 py-4 flex items-center justify-center transition-all duration-300 ${
                     style.bg
                   } ${style.border} ${
                     isCorrect
@@ -810,10 +810,10 @@ export default function TvQuizPage() {
                     {letter}
                   </div>
 
-                  {/* Texte de la réponse centré horizontalement et verticalement */}
-                  <div className="w-full h-full flex items-center justify-center text-center px-10">
+                  {/* Texte de la réponse centré horizontalement et verticalement sans couper les lettres */}
+                  <div className="w-full h-full flex items-center justify-center text-center px-10 py-2">
                     <span
-                      className={`font-black text-white text-center whitespace-normal break-normal [word-break:normal] hyphens-none line-clamp-3 ${getOptionFontSize(
+                      className={`font-black text-white text-center whitespace-normal break-normal [word-break:normal] hyphens-none ${getOptionFontSize(
                         optionText
                       )}`}
                     >
