@@ -124,6 +124,35 @@ const ANSWER_STYLES: Record<
 
 const LETTERS: readonly AnswerLetter[] = ["A", "B", "C", "D"];
 const QUESTION_DURATION_SECONDS = 12;
+const QUESTIONS_PER_GAME = 15;
+
+function hashStringToSeed(input: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function pickRandomQuestionsSeries(
+  source: QuizQuestionItem[],
+  count: number,
+  seedKey: string
+): QuizQuestionItem[] {
+  if (!Array.isArray(source) || source.length === 0) return [];
+  const copy = [...source];
+  let seed = hashStringToSeed(seedKey) || 1;
+  const nextRand = () => {
+    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(nextRand() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy.slice(0, Math.min(count, copy.length));
+}
 
 function toFiniteNumber(raw: unknown): number | null {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
@@ -184,8 +213,9 @@ function extractOptionsList(
 
 function getOptionFontSize(text: string): string {
   const len = text.trim().length;
-  if (len <= 22) return "text-3xl xl:text-4xl leading-snug";
-  if (len <= 48) return "text-2xl xl:text-3xl leading-snug";
+  if (len <= 14) return "text-4xl xl:text-5xl leading-tight";
+  if (len <= 28) return "text-3xl xl:text-4xl leading-snug";
+  if (len <= 52) return "text-2xl xl:text-3xl leading-snug";
   return "text-xl xl:text-2xl leading-snug";
 }
 
@@ -375,23 +405,44 @@ export default function TvQuizPage() {
   }, [session]);
 
   const questions = useMemo<QuizQuestionItem[]>(() => {
+    const seedKey = `${session?.id ?? ""}-${sessionCode}`;
     if (Array.isArray(quizState.questions) && quizState.questions.length > 0) {
-      return quizState.questions;
+      return pickRandomQuestionsSeries(
+        quizState.questions,
+        QUESTIONS_PER_GAME,
+        seedKey
+      );
     }
     if (
       Array.isArray(quizState.quizQuestions) &&
       quizState.quizQuestions.length > 0
     ) {
-      return quizState.quizQuestions;
+      return pickRandomQuestionsSeries(
+        quizState.quizQuestions,
+        QUESTIONS_PER_GAME,
+        seedKey
+      );
     }
     if (Array.isArray(quizState.items) && quizState.items.length > 0) {
-      return quizState.items;
+      return pickRandomQuestionsSeries(
+        quizState.items,
+        QUESTIONS_PER_GAME,
+        seedKey
+      );
     }
     if (Array.isArray(session?.questions) && session.questions.length > 0) {
-      return session.questions;
+      return pickRandomQuestionsSeries(
+        session.questions,
+        QUESTIONS_PER_GAME,
+        seedKey
+      );
     }
-    return QUESTIONS as QuizQuestion[];
-  }, [quizState, session]);
+    return pickRandomQuestionsSeries(
+      QUESTIONS as QuizQuestion[],
+      QUESTIONS_PER_GAME,
+      seedKey
+    );
+  }, [quizState, session, sessionCode]);
 
   // Démarrage de l'index à 0 uniquement lorsque "Manche +1" a été déclenché au moins une fois
   const activeQuestionIndex = useMemo<number | null>(() => {
@@ -703,7 +754,7 @@ export default function TvQuizPage() {
               return (
                 <div
                   key={letter}
-                  className={`relative w-full h-full rounded-3xl border-2 p-4 flex items-center transition-all duration-300 overflow-hidden ${
+                  className={`relative w-full h-full rounded-3xl border-2 p-4 pt-12 flex items-center justify-center transition-all duration-300 overflow-hidden ${
                     style.bg
                   } ${style.border} ${
                     isCorrect
@@ -713,15 +764,15 @@ export default function TvQuizPage() {
                       : "shadow-lg"
                   }`}
                 >
-                  {/* Lettre fixe sur la gauche de la case */}
+                  {/* Lettre placée dans le coin supérieur gauche */}
                   <div
-                    className={`w-12 h-12 xl:w-14 xl:h-14 rounded-2xl border-2 flex items-center justify-center font-black text-2xl xl:text-3xl shrink-0 ${style.badgeBg}`}
+                    className={`absolute top-3 left-3 w-10 h-10 xl:w-11 xl:h-11 rounded-xl border-2 flex items-center justify-center font-black text-xl xl:text-2xl ${style.badgeBg}`}
                   >
                     {letter}
                   </div>
 
-                  {/* Texte de réponse centré verticalement et horizontalement sans jamais couper un mot */}
-                  <div className="flex-1 h-full flex items-center justify-center text-center px-3 overflow-hidden">
+                  {/* Texte de réponse centré au milieu de la case avec taille adaptée */}
+                  <div className="w-full h-full flex items-center justify-center text-center px-3 overflow-hidden">
                     <span
                       className={`font-black text-white text-center whitespace-normal break-words [word-break:normal] hyphens-none line-clamp-3 ${getOptionFontSize(
                         optionText
