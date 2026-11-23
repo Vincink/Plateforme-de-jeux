@@ -394,14 +394,13 @@ export default function PlayerControllerPage() {
 
     updateTimer();
 
-    if (roundStatus !== "playing" || activeQuestionIndex === null) {
+    if (activeQuestionIndex === null) {
       return;
     }
 
     const intervalId = window.setInterval(updateTimer, 200);
     return () => window.clearInterval(intervalId);
   }, [
-    roundStatus,
     activeQuestionIndex,
     quizState.questionStartedAt,
     quizState.durationSeconds,
@@ -573,7 +572,9 @@ export default function PlayerControllerPage() {
   const alreadySubmittedThisQuestion =
     currentQuestionKey !== null &&
     submittedQuestionKey === currentQuestionKey;
-  const isTimerExpired = remainingSeconds <= 0;
+  const isTimerExpired =
+    activeQuestionIndex !== null &&
+    (remainingSeconds <= 0 || Boolean(quizState.revealed));
   const isPlaying = roundStatus === "playing" && !isTimerExpired;
 
   const parsedOptions = useMemo<string[]>(() => {
@@ -624,13 +625,9 @@ export default function PlayerControllerPage() {
 
   // Attribution des points uniquement lorsque le chrono est arrivé à 0 (ou réponse révélée)
   useEffect(() => {
-    if (!identity || !currentQuestionKey || !activeQuestion) return;
-
-    const shouldAwardPoints =
-      roundStatus === "playing" &&
-      (isTimerExpired || Boolean(quizState.revealed));
-
-    if (!shouldAwardPoints) return;
+    if (!identity || !currentQuestionKey || !activeQuestion || !isTimerExpired) {
+      return;
+    }
 
     const settlementKey = `${identity.playerId}::${currentQuestionKey}`;
     if (settledQuestionsRef.current.has(settlementKey)) return;
@@ -701,9 +698,7 @@ export default function PlayerControllerPage() {
     identity,
     currentQuestionKey,
     activeQuestion,
-    roundStatus,
     isTimerExpired,
-    quizState.revealed,
     quizState.answers,
     submittedQuestionKey,
     submittedChoiceLetter,
