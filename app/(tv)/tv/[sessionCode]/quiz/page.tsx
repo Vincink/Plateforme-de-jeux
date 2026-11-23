@@ -2,9 +2,10 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Check, Trophy, Tv } from "lucide-react";
+import { Check, Clock, Trophy, Tv } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
+import { QUESTIONS, type QuizQuestion } from "@/lib/questions";
 import type { GameSession, SessionPlayer } from "@/types/game.types";
 
 type AnswerLetter = "A" | "B" | "C" | "D";
@@ -15,9 +16,10 @@ interface QuizQuestionItem {
   prompt?: string;
   title?: string;
   text?: string;
-  options?: string[];
-  choices?: string[];
-  answers?: string[];
+  options?: string[] | Partial<Record<AnswerLetter, string>>;
+  choices?: string[] | Partial<Record<AnswerLetter, string>>;
+  answers?: string[] | Partial<Record<AnswerLetter, string>>;
+  correct?: AnswerLetter | string;
   correctIndex?: number;
   correct_index?: number;
   correctAnswer?: AnswerLetter | string;
@@ -30,9 +32,20 @@ interface QuizStatePayload {
   items?: QuizQuestionItem[];
   currentQuestion?: QuizQuestionItem | null;
   activeQuestion?: QuizQuestionItem | null;
-  currentQuestionIndex?: number;
-  current_question_index?: number;
-  questionIndex?: number;
+  questionStarted?: boolean;
+  question_started?: boolean;
+  roundTriggered?: boolean;
+  round_triggered?: boolean;
+  questionIndex?: number | null;
+  question_index?: number | null;
+  currentQuestionIndex?: number | null;
+  current_question_index?: number | null;
+  questionStartedAt?: string | number | null;
+  question_started_at?: string | number | null;
+  roundStartedAt?: string | number | null;
+  round_started_at?: string | number | null;
+  durationSeconds?: number;
+  duration_seconds?: number;
   answers?: Record<string, AnswerLetter | string>;
   revealed?: boolean;
   showAnswers?: boolean;
@@ -49,8 +62,11 @@ type ExtendedSession = GameSession & {
   state?: QuizStatePayload | null;
   quiz_state?: QuizStatePayload | null;
   questions?: QuizQuestionItem[] | null;
+  question_index?: number | null;
   currentQuestionIndex?: number | null;
   current_question_index?: number | null;
+  question_started_at?: string | number | null;
+  round_started_at?: string | number | null;
   scores?: Record<string, number | string> | null;
   points?: Record<string, number | string> | null;
   playerScores?: Record<string, number | string> | null;
@@ -107,12 +123,30 @@ const ANSWER_STYLES: Record<
 };
 
 const LETTERS: readonly AnswerLetter[] = ["A", "B", "C", "D"];
+const QUESTION_DURATION_SECONDS = 12;
 
 function toFiniteNumber(raw: unknown): number | null {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
   if (typeof raw === "string" && raw.trim() !== "") {
     const parsed = Number(raw);
     if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function parseTimestampMs(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return raw < 1e12 ? raw * 1000 : raw;
+  }
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const asNum = Number(raw);
+    if (Number.isFinite(asNum)) {
+      return asNum < 1e12 ? asNum * 1000 : asNum;
+    }
+    const parsedDate = Date.parse(raw);
+    if (!Number.isNaN(parsedDate)) {
+      return parsedDate;
+    }
   }
   return null;
 }
@@ -131,6 +165,21 @@ function normalizeAnswerLetter(raw: unknown): AnswerLetter | null {
     }
   }
   return null;
+}
+
+function extractOptionsList(
+  rawOptions: QuizQuestionItem["options"]
+): string[] {
+  if (!rawOptions) return ["", "", "", ""];
+  if (Array.isArray(rawOptions)) {
+    return [
+      String(rawOptions[0] ?? ""),
+      String(rawOptions[1] ?? ""),
+      String(rawOptions[2] ?? ""),
+      String(rawOptions[3] ?? ""),
+    ];
+  }
+  return LETTERS.map((letter) => String(rawOptions[letter] ?? ""));
 }
 
 function getOptionFontSize(text: string): string {
@@ -156,6 +205,10 @@ export default function TvQuizPage() {
   const [session, setSession] = useState<ExtendedSession | null>(null);
   const [players, setPlayers] = useState<ExtendedPlayer[]>([]);
   const [gameTitle, setGameTitle] = useState<string>("Le Grand Quiz");
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const [localQuestionStartMs, setLocalQuestionStartMs] = useState<
+    number | null
+  >(null);
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
@@ -322,30 +375,126 @@ export default function TvQuizPage() {
   }, [session]);
 
   const questions = useMemo<QuizQuestionItem[]>(() => {
-    if (Array.isArray(quizState.questions)) return quizState.questions;
-    if (Array.isArray(quizState.quizQuestions)) return quizState.quizQuestions;
-    if (Array.isArray(quizState.items)) return quizState.items;
-    if (Array.isArray(session?.questions)) return session.questions;
-    return [];
+    if (Array.isArray(quizState.questions) && quizState.questions.length > 0) {
+      return quizState.questions;
+    }
+    if (
+      Array.isArray(quizState.quizQuestions) &&
+      quizState.quizQuestions.length > 0
+    ) {
+      return quizState.quizQuestions;
+    }
+    if (Array.isArray(quizState.items) && quizState.items.length > 0) {
+      return quizState.items;
+    }
+    if (Array.isArray(session?.questions) && session.questions.length > 0) {
+      return session.questions;
+    }
+    return QUESTIONS as QuizQuestion[];
   }, [quizState, session]);
 
-  const currentQuestionIndex = useMemo(() => {
-    const rawIdx =
+  // Démarrage de l'index à 0 uniquement lorsque "Manche +1" a été déclenché au moins une fois
+  const activeQuestionIndex = useMemo<number | null>(() => {
+    const explicitIndex =
+      quizState.questionIndex ??
+      quizState.question_index ??
       quizState.currentQuestionIndex ??
       quizState.current_question_index ??
-      quizState.questionIndex ??
+      session?.question_index ??
       session?.currentQuestionIndex ??
-      session?.current_question_index ??
-      0;
-    return Math.max(0, Number(rawIdx) || 0);
+      session?.current_question_index;
+
+    const hasExplicitFlag = Boolean(
+      quizState.questionStarted ||
+        quizState.question_started ||
+        quizState.roundTriggered ||
+        quizState.round_triggered
+    );
+
+    if (typeof explicitIndex === "number" && Number.isFinite(explicitIndex)) {
+      if (explicitIndex < 0) return null;
+      if (explicitIndex === 0 && !hasExplicitFlag) {
+        const roundVal = session?.current_round ?? 1;
+        return roundVal > 1 ? 0 : null;
+      }
+      return Math.max(0, Math.floor(explicitIndex));
+    }
+
+    if (hasExplicitFlag) {
+      const roundVal = Math.max(1, Number(session?.current_round ?? 1) || 1);
+      return roundVal - 1;
+    }
+
+    return null;
   }, [quizState, session]);
 
   const currentQuestion = useMemo<QuizQuestionItem | null>(() => {
+    if (activeQuestionIndex === null) return null;
     if (questions.length > 0) {
-      return questions[currentQuestionIndex] ?? questions[0] ?? null;
+      const safeIndex = Math.min(activeQuestionIndex, questions.length - 1);
+      return questions[safeIndex] ?? null;
     }
     return quizState.currentQuestion ?? quizState.activeQuestion ?? null;
-  }, [questions, currentQuestionIndex, quizState]);
+  }, [activeQuestionIndex, questions, quizState]);
+
+  const remoteStartMs = useMemo<number | null>(() => {
+    return (
+      parseTimestampMs(quizState.questionStartedAt) ??
+      parseTimestampMs(quizState.question_started_at) ??
+      parseTimestampMs(quizState.roundStartedAt) ??
+      parseTimestampMs(quizState.round_started_at) ??
+      parseTimestampMs(session?.question_started_at) ??
+      parseTimestampMs(session?.round_started_at)
+    );
+  }, [quizState, session]);
+
+  useEffect(() => {
+    if (activeQuestionIndex === null || !currentQuestion) {
+      setLocalQuestionStartMs(null);
+      return;
+    }
+    const startStamp = remoteStartMs ?? Date.now();
+    setLocalQuestionStartMs(startStamp);
+    setNowMs(Date.now());
+  }, [activeQuestionIndex, currentQuestion, remoteStartMs]);
+
+  useEffect(() => {
+    if (activeQuestionIndex === null || !currentQuestion) return;
+    const interval = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 200);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [activeQuestionIndex, currentQuestion]);
+
+  const durationSeconds = useMemo<number>(() => {
+    const rawDuration =
+      toFiniteNumber(quizState.durationSeconds) ??
+      toFiniteNumber(quizState.duration_seconds) ??
+      QUESTION_DURATION_SECONDS;
+    return Math.max(1, Math.round(rawDuration));
+  }, [quizState]);
+
+  const remainingSeconds = useMemo<number | null>(() => {
+    if (activeQuestionIndex === null || !currentQuestion) return null;
+    const effectiveStart = remoteStartMs ?? localQuestionStartMs ?? nowMs;
+    const elapsedSeconds = Math.max(0, (nowMs - effectiveStart) / 1000);
+    return Math.max(0, Math.ceil(durationSeconds - elapsedSeconds));
+  }, [
+    activeQuestionIndex,
+    currentQuestion,
+    remoteStartMs,
+    localQuestionStartMs,
+    nowMs,
+    durationSeconds,
+  ]);
+
+  const isTimerExpired =
+    activeQuestionIndex !== null &&
+    currentQuestion !== null &&
+    remainingSeconds !== null &&
+    remainingSeconds <= 0;
 
   const questionLabel = useMemo<string>(() => {
     if (!currentQuestion) return "";
@@ -362,14 +511,8 @@ export default function TvQuizPage() {
     const rawOptions =
       currentQuestion?.options ||
       currentQuestion?.choices ||
-      currentQuestion?.answers ||
-      [];
-    return [
-      rawOptions[0] ?? "",
-      rawOptions[1] ?? "",
-      rawOptions[2] ?? "",
-      rawOptions[3] ?? "",
-    ];
+      currentQuestion?.answers;
+    return extractOptionsList(rawOptions);
   }, [currentQuestion]);
 
   const answersMap = quizState.answers ?? {};
@@ -406,7 +549,8 @@ export default function TvQuizPage() {
     quizState.revealed ||
       quizState.showAnswers ||
       quizState.show_answers ||
-      allPlayersAnswered
+      allPlayersAnswered ||
+      isTimerExpired
   );
 
   const correctLetter = useMemo<AnswerLetter | null>(() => {
@@ -421,7 +565,9 @@ export default function TvQuizPage() {
       return LETTERS[rawIdx] ?? null;
     }
     return normalizeAnswerLetter(
-      currentQuestion.correctAnswer ?? currentQuestion.correct_answer
+      currentQuestion.correct ??
+        currentQuestion.correctAnswer ??
+        currentQuestion.correct_answer
     );
   }, [currentQuestion]);
 
@@ -484,11 +630,10 @@ export default function TvQuizPage() {
           <div className="min-w-0">
             <div className="text-base xl:text-lg uppercase tracking-[0.18em] text-amber-300 font-extrabold">
               Manche {currentRound}
-              {totalQuestions > 0
-                ? ` • Question ${Math.min(
-                    currentQuestionIndex + 1,
-                    totalQuestions
-                  )} / ${totalQuestions}`
+              {activeQuestionIndex !== null && totalQuestions > 0
+                ? ` • Question ${
+                    Math.min(activeQuestionIndex, totalQuestions - 1) + 1
+                  } / ${totalQuestions}`
                 : ""}
             </div>
             <h1 className="text-3xl xl:text-4xl font-black tracking-tight truncate">
@@ -498,6 +643,19 @@ export default function TvQuizPage() {
         </div>
 
         <div className="flex items-center gap-4 shrink-0">
+          {remainingSeconds !== null && (
+            <div
+              className={`flex items-center gap-2.5 px-5 py-2.5 rounded-2xl border-2 font-mono text-3xl xl:text-4xl font-black transition ${
+                remainingSeconds <= 3
+                  ? "bg-rose-500/25 border-rose-400 text-rose-200 animate-pulse"
+                  : "bg-sky-500/15 border-sky-400/45 text-sky-200"
+              }`}
+            >
+              <Clock className="w-7 h-7 shrink-0" />
+              <span>{remainingSeconds}s</span>
+            </div>
+          )}
+
           <span className="text-lg xl:text-xl font-bold uppercase tracking-wider text-neutral-300">
             Salle
           </span>
