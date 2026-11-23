@@ -5,7 +5,7 @@ import Link from "next/link";
 import {
   Play,
   Pause,
-  RotateCcw,
+  SkipForward,
   Square,
   Users,
   Trophy,
@@ -32,16 +32,22 @@ import type {
   SessionStatus,
 } from "@/types/game.types";
 
+// ============================================================================
+// 1. CONSTANTES ET FONCTIONS UTILITAIRES
+// ============================================================================
+
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const GRAND_QUIZ_UUID = "6e6d7179-3a56-4d94-9c1d-19ac06a34aaa";
-const QUESTION_DURATION_SECONDS = 12;
+const QUESTION_DURATION_SECONDS = 12; // Durée du chrono par question (en secondes)
+const QUESTIONS_PER_GAME = 15; // Nombre de questions par partie
 
 function isUuid(value: string | undefined | null): value is string {
   return typeof value === "string" && UUID_REGEX.test(value);
 }
 
+// Génère un code de salle aléatoire de 4 caractères
 function generateSessionCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
@@ -51,9 +57,14 @@ function generateSessionCode(): string {
   return code;
 }
 
+// ============================================================================
+// 2. COMPOSANT PRINCIPAL : CONSOLE ANIMATEUR (ADMIN)
+// ============================================================================
+
 export default function AdminConsolePage() {
   const supabase = getSupabaseBrowserClient();
 
+  // --- États de la session et du quiz ---
   const [games, setGames] = useState<CatalogGame[]>(INITIAL_GAMES);
   const [selectedGameId, setSelectedGameId] = useState<string>(
     INITIAL_GAMES[0]?.id ?? ""
@@ -63,7 +74,6 @@ export default function AdminConsolePage() {
     generateSessionCode()
   );
   const [status, setStatus] = useState<SessionStatus>("lobby");
-  const [currentRound, setCurrentRound] = useState<number>(1);
   const [questionIndex, setQuestionIndex] = useState<number>(-1);
   const [questionStartedAt, setQuestionStartedAt] = useState<string | null>(
     null
@@ -73,6 +83,7 @@ export default function AdminConsolePage() {
   const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
   const [dbError, setDbError] = useState<string | null>(null);
 
+  // --- États des joueurs et des scores ---
   const [players, setPlayers] = useState<PlayerSession[]>([]);
   const [scores, setScores] = useState<PlayerScore[]>([]);
 
@@ -95,6 +106,7 @@ export default function AdminConsolePage() {
     return firstDbUuidGame?.id ?? null;
   };
 
+  // --- Chargement des joueurs et des scores depuis Supabase ---
   const loadPlayersAndScoresForSession = async (targetSessionId: string) => {
     if (!supabase || !isUuid(targetSessionId)) return;
 
@@ -124,6 +136,7 @@ export default function AdminConsolePage() {
     }
   };
 
+  // --- Écoute temps réel des changements sur les joueurs et scores ---
   useEffect(() => {
     if (!supabase || !sessionId || !isUuid(sessionId)) return;
 
@@ -171,12 +184,12 @@ export default function AdminConsolePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, sessionId]);
 
+  // --- Enregistrement / mise à jour de la session dans Supabase ---
   const syncSessionToDb = async (params: {
     id?: string | null;
     code: string;
     game?: CatalogGame | null;
     nextStatus: SessionStatus;
-    round: number;
     qrVisible: boolean;
     nextQuestionIndex?: number;
     nextQuestionStartedAt?: string | null;
@@ -220,7 +233,6 @@ export default function AdminConsolePage() {
         code: params.code,
         game_id: validGameUuid,
         status: params.nextStatus,
-        current_round: params.round,
         show_qr: params.qrVisible,
       };
 
@@ -252,7 +264,6 @@ export default function AdminConsolePage() {
               code: params.code,
               game_id: validGameUuid,
               status: params.nextStatus,
-              current_round: params.round,
               show_qr: params.qrVisible,
             })
             .eq("id", params.id);
@@ -277,7 +288,6 @@ export default function AdminConsolePage() {
               code: params.code,
               game_id: validGameUuid,
               status: params.nextStatus,
-              current_round: params.round,
               show_qr: params.qrVisible,
             })
             .select()
@@ -300,6 +310,7 @@ export default function AdminConsolePage() {
     }
   };
 
+  // --- Initialisation au chargement de la page admin ---
   useEffect(() => {
     let cancelled = false;
 
@@ -333,7 +344,6 @@ export default function AdminConsolePage() {
             code: sessionCode,
             game: firstUuidGame,
             nextStatus: status,
-            round: currentRound,
             qrVisible: showQrOnTv,
             nextQuestionIndex: -1,
             nextQuestionStartedAt: null,
@@ -353,12 +363,15 @@ export default function AdminConsolePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ==========================================================================
+  // 3. ACTIONS DE L'ANIMATEUR (Nouvelle salle, Lancer, Pause, Question suivante, etc.)
+  // ==========================================================================
+
   const handleCreateNewSession = async () => {
     const newCode = generateSessionCode();
     setSessionId(null);
     setSessionCode(newCode);
     setStatus("lobby");
-    setCurrentRound(1);
     setQuestionIndex(-1);
     setQuestionStartedAt(null);
     setPlayers([]);
@@ -369,7 +382,6 @@ export default function AdminConsolePage() {
       code: newCode,
       game: selectedGame,
       nextStatus: "lobby",
-      round: 1,
       qrVisible: showQrOnTv,
       nextQuestionIndex: -1,
       nextQuestionStartedAt: null,
@@ -393,23 +405,21 @@ export default function AdminConsolePage() {
       code: sessionCode,
       game: selectedGame,
       nextStatus,
-      round: currentRound,
       qrVisible: showQrOnTv,
       nextQuestionIndex: nextIdx,
       nextQuestionStartedAt: nextStarted,
     });
   };
 
-  const handleNextRound = async () => {
-    const nextRound = currentRound + 1;
-    // Démarre à l'index 0 au 1er clic sur "Manche +1", puis 1, 2, 3...
+  // Passe à la question suivante (index 0 au 1er clic, puis 1, 2, 3...)
+  const handleNextQuestion = async () => {
+    const maxQuestionsCount = Math.min(QUESTIONS_PER_GAME, QUESTIONS.length);
     const nextIdx =
       questionIndex < 0
         ? 0
-        : Math.min(questionIndex + 1, Math.max(0, QUESTIONS.length - 1));
+        : Math.min(questionIndex + 1, Math.max(0, maxQuestionsCount - 1));
     const startedIso = new Date().toISOString();
 
-    setCurrentRound(nextRound);
     setQuestionIndex(nextIdx);
     setQuestionStartedAt(startedIso);
 
@@ -418,7 +428,6 @@ export default function AdminConsolePage() {
       code: sessionCode,
       game: selectedGame,
       nextStatus: status,
-      round: nextRound,
       qrVisible: showQrOnTv,
       nextQuestionIndex: nextIdx,
       nextQuestionStartedAt: startedIso,
@@ -433,7 +442,6 @@ export default function AdminConsolePage() {
       code: sessionCode,
       game: selectedGame,
       nextStatus: status,
-      round: currentRound,
       qrVisible: nextQr,
     });
   };
@@ -448,7 +456,6 @@ export default function AdminConsolePage() {
       code: sessionCode,
       game: targetGame,
       nextStatus: status,
-      round: currentRound,
       qrVisible: showQrOnTv,
       nextQuestionIndex: -1,
       nextQuestionStartedAt: null,
@@ -555,10 +562,15 @@ export default function AdminConsolePage() {
     }
   };
 
+  const totalQuestions = Math.min(QUESTIONS_PER_GAME, QUESTIONS.length);
+
+  // ==========================================================================
+  // 4. RENDU VISUEL DE LA CONSOLE ADMIN (JSX)
+  // ==========================================================================
   return (
     <div className="min-h-screen bg-neutral-950 text-white p-5 md:p-8">
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* Header */}
+        {/* ================= EN-TÊTE (Titre, Code Salle, Ouvrir TV, Nouvelle Salle) ================= */}
         <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-white/10 pb-5">
           <div>
             <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-neutral-400">
@@ -571,6 +583,7 @@ export default function AdminConsolePage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
+            {/* Code Salle + bouton copier */}
             <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-2xl px-4 py-2.5">
               <span className="text-xs text-neutral-400 uppercase tracking-wider">
                 Code Salle
@@ -592,6 +605,7 @@ export default function AdminConsolePage() {
               </button>
             </div>
 
+            {/* Lien ouverture écran TV */}
             <Link
               href={`/tv/${sessionCode}`}
               target="_blank"
@@ -602,6 +616,7 @@ export default function AdminConsolePage() {
               <ExternalLink className="w-4 h-4" />
             </Link>
 
+            {/* Bouton création nouvelle salle */}
             <button
               type="button"
               onClick={handleCreateNewSession}
@@ -613,6 +628,7 @@ export default function AdminConsolePage() {
           </div>
         </header>
 
+        {/* Message d'erreur Supabase éventuel */}
         {dbError ? (
           <div className="flex items-center gap-3 rounded-2xl border border-rose-500/40 bg-rose-500/15 px-4 py-3 text-sm text-rose-200">
             <AlertTriangle className="w-5 h-5 shrink-0 text-rose-400" />
@@ -620,12 +636,12 @@ export default function AdminConsolePage() {
           </div>
         ) : null}
 
-        {/* Layout 2 colonnes : Contrôles & Jeux à gauche, Joueurs à droite */}
+        {/* ================= CORPS PRINCIPAL (Contrôles & Catalogue à gauche, Joueurs à droite) ================= */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          {/* Colonne gauche : État de partie, Écran TV et Catalogue */}
+          {/* ----------------- COLONNE GAUCHE : ÉTAT DE PARTIE, QR TV ET CATALOGUE ----------------- */}
           <main className="lg:col-span-7 xl:col-span-8 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {/* État de la partie */}
+              {/* Carte : État de la partie & Boutons de contrôle */}
               <section className="md:col-span-2 bg-white/5 border border-white/10 rounded-3xl p-6 space-y-6">
                 <div className="flex items-center justify-between gap-2">
                   <div>
@@ -634,10 +650,9 @@ export default function AdminConsolePage() {
                       Jeu actif :{" "}
                       <span className="text-white font-medium">
                         {selectedGame?.title ?? "Aucun"}
-                      </span>{" "}
-                      • Manche {currentRound}
+                      </span>
                       {questionIndex >= 0
-                        ? ` • Question ${questionIndex + 1} / ${QUESTIONS.length}`
+                        ? ` • Question ${questionIndex + 1} / ${totalQuestions}`
                         : ""}
                     </p>
                   </div>
@@ -656,6 +671,7 @@ export default function AdminConsolePage() {
                   </span>
                 </div>
 
+                {/* Grille des 4 boutons de contrôle de partie */}
                 <div className="grid grid-cols-2 gap-3">
                   <button
                     type="button"
@@ -677,11 +693,15 @@ export default function AdminConsolePage() {
 
                   <button
                     type="button"
-                    onClick={() => void handleNextRound()}
+                    onClick={() => void handleNextQuestion()}
                     className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-semibold transition"
                   >
-                    <RotateCcw className="w-4 h-4" />
-                    <span>Manche +1</span>
+                    <SkipForward className="w-4 h-4" />
+                    <span>
+                      {questionIndex < 0
+                        ? "Lancer Question 1"
+                        : "Question suivante"}
+                    </span>
                   </button>
 
                   <button
@@ -695,7 +715,7 @@ export default function AdminConsolePage() {
                 </div>
               </section>
 
-              {/* Options écran TV */}
+              {/* Carte : Affichage / Masquage du QR Code sur TV */}
               <section className="bg-white/5 border border-white/10 rounded-3xl p-6 flex flex-col justify-between space-y-4">
                 <div>
                   <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -727,7 +747,7 @@ export default function AdminConsolePage() {
               </section>
             </div>
 
-            {/* Catalogue des jeux */}
+            {/* Carte : Catalogue des jeux */}
             <section className="bg-white/5 border border-white/10 rounded-3xl p-6 space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -805,7 +825,7 @@ export default function AdminConsolePage() {
             </section>
           </main>
 
-          {/* Colonne droite : Joueurs connectés & Modération */}
+          {/* ----------------- COLONNE DROITE : JOUEURS CONNECTÉS & SCORES ----------------- */}
           <aside className="lg:col-span-5 xl:col-span-4 lg:sticky lg:top-6 bg-white/5 border border-white/10 rounded-3xl p-5 space-y-4">
             <div className="flex items-center justify-between border-b border-white/10 pb-3">
               <h2 className="text-lg font-semibold flex items-center gap-2">
