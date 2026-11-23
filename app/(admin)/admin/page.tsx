@@ -1358,4 +1358,308 @@ export default function AdminConsolePage() {
                     type="button"
                     disabled={status === "playing"}
                     onClick={() => void handleStatusChange("playing")}
-                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/25 disabled:text-emerald-200/50
+                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/25 disabled:text-emerald-200/50 disabled:cursor-not-allowed text-black font-semibold transition"
+                  >
+                    <Play className="w-4 h-4" />
+                    <span>Lancer</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  disabled={status !== "playing"}
+                  onClick={() => void handleStatusChange("paused")}
+                  className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed text-amber-300 border border-amber-500/30 font-semibold transition"
+                >
+                  <Pause className="w-4 h-4" />
+                  <span>Pause</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isEndOfSeries}
+                  onClick={() => void handleNextQuestion()}
+                  className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold transition"
+                >
+                  <SkipForward className="w-4 h-4" />
+                  <span className="truncate">
+                    {questionIndex < 0
+                      ? "Lancer Question 1"
+                      : "Question suivante"}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void handleStatusChange("finished")}
+                  className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-semibold transition"
+                >
+                  <Square className="w-4 h-4" />
+                  <span>Terminer</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Case 2 : Affichage / Masquage du QR Code sur TV */}
+          {renderWidgetFrame(
+            "qr",
+            "Écran TV",
+            <Eye className="w-5 h-5 text-sky-400 shrink-0" />,
+            <div className="flex-1 flex flex-col justify-between gap-4">
+              <p className="text-sm text-neutral-400">
+                QR code de connexion sur la télévision.
+              </p>
+
+              <button
+                type="button"
+                onClick={() => void handleToggleQr()}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 font-medium transition"
+              >
+                {showQrOnTv ? (
+                  <>
+                    <EyeOff className="w-4 h-4 text-amber-400" />
+                    <span>Masquer QR</span>
+                  </>
+                ) : (
+                  <>
+                    <Eye className="w-4 h-4 text-emerald-400" />
+                    <span>Afficher QR</span>
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Case 3 : Catalogue des jeux */}
+          {renderWidgetFrame(
+            "catalog",
+            "Catalogue des jeux",
+            <Gamepad2 className="w-5 h-5 text-purple-400 shrink-0" />,
+            <div className="flex-1 flex flex-col gap-3">
+              <div className="flex items-center justify-end">
+                <span className="text-xs text-neutral-400">
+                  {games.filter((g) => g.is_active).length} / {games.length}{" "}
+                  actifs
+                </span>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {games.map((game) => {
+                  const isSelected = game.id === selectedGame?.id;
+                  return (
+                    <div
+                      key={game.id}
+                      onClick={() => void handleSelectGame(game.id)}
+                      className={`cursor-pointer rounded-2xl p-4 border transition flex flex-col justify-between gap-4 ${
+                        isSelected
+                          ? "bg-white/15 border-white/40"
+                          : "bg-black/30 border-white/10 hover:border-white/25"
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-2">
+                          <h3 className="font-semibold text-base">
+                            {game.title}
+                          </h3>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleToggleGameActive(game.id);
+                            }}
+                            className="text-xs flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15"
+                          >
+                            {game.is_active ? (
+                              <>
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                <span className="text-emerald-300">Actif</span>
+                              </>
+                            ) : (
+                              <>
+                                <XCircle className="w-3.5 h-3.5 text-neutral-500" />
+                                <span className="text-neutral-400">
+                                  Inactif
+                                </span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                        {game.tagline && (
+                          <p className="text-xs text-neutral-400 mt-1">
+                            {game.tagline}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center justify-between text-xs text-neutral-400 pt-2 border-t border-white/5">
+                        <span>
+                          {game.min_players}–{game.max_players ?? "∞"} joueurs
+                        </span>
+                        {isSelected && (
+                          <span className="text-amber-400 font-medium">
+                            Sélectionné
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Case 4 : Joueurs connectés & scores */}
+          {renderWidgetFrame(
+            "players",
+            `Joueurs (${players.length})`,
+            <Users className="w-5 h-5 text-emerald-400 shrink-0" />,
+            <div className="flex-1 flex flex-col gap-3 min-h-0">
+              <div className="flex items-center justify-between gap-2 text-xs text-neutral-400 border-b border-white/10 pb-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setShowPlayerAnswersInAdmin((prev) => !prev)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-neutral-200 font-medium transition"
+                >
+                  {showPlayerAnswersInAdmin ? (
+                    <>
+                      <EyeOff className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Masquer réponses</span>
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Afficher réponses</span>
+                    </>
+                  )}
+                </button>
+
+                <div className="flex items-center gap-1.5">
+                  <Trophy className="w-4 h-4 text-amber-400" />
+                  <span>Scores</span>
+                </div>
+              </div>
+
+              {players.length === 0 ? (
+                <p className="text-sm text-neutral-400 py-8 text-center my-auto">
+                  Aucun joueur connecté pour le moment.
+                </p>
+              ) : (
+                <div className="space-y-3 overflow-y-auto pr-1 flex-1">
+                  {players.map((player) => {
+                    const color = getUniquePlayerColor(player.id, players);
+                    const answerValue = playerAnswersById[player.id] ?? null;
+                    const badgeStyle = answerValue
+                      ? getAnswerBadgeStyle(answerValue)
+                      : null;
+
+                    return (
+                      <div
+                        key={player.id}
+                        style={{
+                          backgroundColor: color.bgHex,
+                          borderColor: color.borderHex,
+                          color: color.textHex,
+                        }}
+                        className="p-3.5 rounded-2xl border-2 space-y-3 shadow-md"
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <span
+                              style={{ backgroundColor: color.badgeBgHex }}
+                              className="text-xl flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+                            >
+                              {player.avatar ?? "🎮"}
+                            </span>
+                            <div className="min-w-0">
+                              <div className="font-bold truncate flex items-center gap-1.5">
+                                <span className="truncate">
+                                  {player.nickname}
+                                </span>
+                                {player.is_host && (
+                                  <span
+                                    style={{ backgroundColor: color.badgeBgHex }}
+                                    className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full shrink-0"
+                                  >
+                                    Hôte
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-[11px] opacity-90 block">
+                                {player.is_connected
+                                  ? "Connecté"
+                                  : "Déconnecté"}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            {/* Pastille ronde avec la lettre et la couleur de la réponse */}
+                            {showPlayerAnswersInAdmin &&
+                              answerValue &&
+                              badgeStyle && (
+                                <span
+                                  style={{
+                                    backgroundColor: badgeStyle.bg,
+                                    borderColor: badgeStyle.border,
+                                    color: badgeStyle.text,
+                                  }}
+                                  className="h-8 w-8 rounded-full border-2 flex items-center justify-center font-mono text-sm font-black shadow-md shrink-0"
+                                  title={`Réponse : ${answerValue}`}
+                                >
+                                  {answerValue}
+                                </span>
+                              )}
+
+                            {!player.is_host && (
+                              <button
+                                type="button"
+                                onClick={() => void handleKickPlayer(player.id)}
+                                className="px-2.5 py-1.5 rounded-xl bg-black/35 hover:bg-black/55 text-xs font-bold transition shrink-0"
+                              >
+                                Exclure
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Contrôles score -1 / +1 */}
+                        <div
+                          style={{ backgroundColor: color.badgeBgHex }}
+                          className="flex items-center justify-between rounded-xl px-3 py-1.5"
+                        >
+                          <button
+                            type="button"
+                            onClick={() =>
+                              void handleAdjustScore(player.id, -1)
+                            }
+                            className="px-3 py-1 rounded-lg bg-black/30 hover:bg-black/50 text-sm font-black transition"
+                          >
+                            -1
+                          </button>
+                          <span
+                            style={{ color: color.scoreHex }}
+                            className="font-mono text-lg font-black text-center"
+                          >
+                            {getPlayerScoreValue(player.id)} pts
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => void handleAdjustScore(player.id, 1)}
+                            className="px-3 py-1 rounded-lg bg-black/30 hover:bg-black/50 text-sm font-black transition"
+                          >
+                            +1
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
