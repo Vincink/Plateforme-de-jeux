@@ -42,16 +42,12 @@ import type {
   SessionStatus,
 } from "@/types/game.types";
 
-// ============================================================================
-// 1. CONSTANTES ET FONCTIONS UTILITAIRES
-// ============================================================================
-
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const GRAND_QUIZ_UUID = "6e6d7179-3a56-4d94-9c1d-19ac06a34aaa";
-const QUESTION_DURATION_SECONDS = 12; // Durée du chrono par question (en secondes)
-const QUESTIONS_PER_GAME = 15; // Nombre de questions par série
+const QUESTION_DURATION_SECONDS = 12;
+const QUESTIONS_PER_GAME = 15;
 
 const JUSTE_CHIFFRE_MIN = 1;
 const JUSTE_CHIFFRE_MAX = 1000;
@@ -66,10 +62,10 @@ type WidgetId = "controls" | "qr" | "catalog" | "players";
 
 interface GridWidgetItem {
   id: WidgetId;
-  col: number; // 0..11 (0-based)
-  colSpan: number; // 1..12
-  row: number; // 0-based
-  rowSpan: number; // in row units
+  col: number;
+  colSpan: number;
+  row: number;
+  rowSpan: number;
   minColSpan: number;
   minRowSpan: number;
 }
@@ -139,7 +135,7 @@ function loadSavedGridLayout(): Record<WidgetId, GridWidgetItem> {
     const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
     if (!raw) return DEFAULT_GRID_LAYOUT;
     const parsed = JSON.parse(raw) as Partial<Record<WidgetId, Partial<GridWidgetItem>>>;
-    const result: Record<WidgetId, GridWidgetItem> = {
+    return {
       controls: clampLayoutItem({
         ...DEFAULT_GRID_LAYOUT.controls,
         ...parsed.controls,
@@ -161,7 +157,6 @@ function loadSavedGridLayout(): Record<WidgetId, GridWidgetItem> {
         id: "players",
       }),
     };
-    return result;
   } catch {
     return DEFAULT_GRID_LAYOUT;
   }
@@ -188,12 +183,38 @@ function isJusteChiffreGame(game?: CatalogGame | null): boolean {
     slug.includes("juste-chiffre") ||
     slug.includes("juste_chiffre") ||
     slug.includes("estimation") ||
+    slug.includes("juste-prix") ||
+    slug.includes("proche") ||
     title.includes("juste chiffre") ||
-    title.includes("estimation")
+    title.includes("estimation") ||
+    title.includes("juste prix") ||
+    title.includes("proche")
   );
 }
 
-// Génère un code de salle aléatoire de 4 caractères
+function ensureJusteChiffreCatalog(list: CatalogGame[]): CatalogGame[] {
+  const hasJc = list.some((g) => isJusteChiffreGame(g));
+  if (hasJc) return list;
+
+  const jcFromInitial = INITIAL_GAMES.find((g) => isJusteChiffreGame(g));
+  if (jcFromInitial) {
+    return [...list, jcFromInitial];
+  }
+
+  return [
+    ...list,
+    {
+      id: "juste-chiffre",
+      slug: "juste-chiffre",
+      title: "Le Juste Chiffre",
+      tagline: "Trouvez ou approchez le nombre entre 1 et 1000",
+      min_players: 1,
+      max_players: 12,
+      is_active: true,
+    } as CatalogGame,
+  ];
+}
+
 function generateSessionCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
@@ -203,7 +224,6 @@ function generateSessionCode(): string {
   return code;
 }
 
-// Génère une graine unique pour forcer un nouveau tirage aléatoire à chaque relance
 function generateSeriesSeed(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
@@ -357,49 +377,26 @@ function getAnswerBadgeStyle(letter: string): {
 } {
   switch (letter) {
     case "A":
-      return {
-        bg: "#EF4444",
-        border: "#FCA5A5",
-        text: "#FFFFFF",
-      };
+      return { bg: "#EF4444", border: "#FCA5A5", text: "#FFFFFF" };
     case "B":
-      return {
-        bg: "#3B82F6",
-        border: "#93C5FD",
-        text: "#FFFFFF",
-      };
+      return { bg: "#3B82F6", border: "#93C5FD", text: "#FFFFFF" };
     case "C":
-      return {
-        bg: "#EAB308",
-        border: "#FDE047",
-        text: "#111827",
-      };
+      return { bg: "#EAB308", border: "#FDE047", text: "#111827" };
     case "D":
-      return {
-        bg: "#10B981",
-        border: "#6EE7B7",
-        text: "#FFFFFF",
-      };
+      return { bg: "#10B981", border: "#6EE7B7", text: "#FFFFFF" };
     default:
-      return {
-        bg: "#1F2937",
-        border: "#9CA3AF",
-        text: "#FFFFFF",
-      };
+      return { bg: "#1F2937", border: "#9CA3AF", text: "#FFFFFF" };
   }
 }
-
-// ============================================================================
-// 2. COMPOSANT PRINCIPAL : CONSOLE ANIMATEUR (ADMIN)
-// ============================================================================
 
 export default function AdminConsolePage() {
   const supabase = getSupabaseBrowserClient();
 
-  // --- États de la session et du quiz ---
-  const [games, setGames] = useState<CatalogGame[]>(INITIAL_GAMES);
+  const [games, setGames] = useState<CatalogGame[]>(() =>
+    ensureJusteChiffreCatalog(INITIAL_GAMES)
+  );
   const [selectedGameId, setSelectedGameId] = useState<string>(
-    INITIAL_GAMES[0]?.id ?? ""
+    () => ensureJusteChiffreCatalog(INITIAL_GAMES)[0]?.id ?? ""
   );
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionCode, setSessionCode] = useState<string>(() =>
@@ -441,11 +438,9 @@ export default function AdminConsolePage() {
   const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
   const [dbError, setDbError] = useState<string | null>(null);
 
-  // --- États des joueurs et des scores ---
   const [players, setPlayers] = useState<PlayerSession[]>([]);
   const [scores, setScores] = useState<PlayerScore[]>([]);
 
-  // --- États de la grille personnalisable ---
   const [isEditLayoutMode, setIsEditLayoutMode] = useState<boolean>(false);
   const [layout, setLayout] = useState<Record<WidgetId, GridWidgetItem>>(() =>
     loadSavedGridLayout()
@@ -492,14 +487,13 @@ export default function AdminConsolePage() {
 
       setLayout((prev) => {
         const current = prev[widgetId];
-        const nextItem = clampLayoutItem({
-          ...current,
-          col: initialItem.col + deltaCols,
-          row: initialItem.row + deltaRows,
-        });
         return {
           ...prev,
-          [widgetId]: nextItem,
+          [widgetId]: clampLayoutItem({
+            ...current,
+            col: initialItem.col + deltaCols,
+            row: initialItem.row + deltaRows,
+          }),
         };
       });
     };
@@ -542,14 +536,13 @@ export default function AdminConsolePage() {
 
       setLayout((prev) => {
         const current = prev[widgetId];
-        const nextItem = clampLayoutItem({
-          ...current,
-          colSpan: initialItem.colSpan + deltaCols,
-          rowSpan: initialItem.rowSpan + deltaRows,
-        });
         return {
           ...prev,
-          [widgetId]: nextItem,
+          [widgetId]: clampLayoutItem({
+            ...current,
+            colSpan: initialItem.colSpan + deltaCols,
+            rowSpan: initialItem.rowSpan + deltaRows,
+          }),
         };
       });
     };
@@ -623,7 +616,6 @@ export default function AdminConsolePage() {
     return firstDbUuidGame?.id ?? null;
   };
 
-  // --- Extraction des réponses des joueurs depuis game_state ---
   const extractAnswersFromGameState = (
     rawGameState: unknown,
     isNumericMode: boolean
@@ -688,7 +680,6 @@ export default function AdminConsolePage() {
     }
   };
 
-  // --- Chargement des joueurs, scores et réponses depuis Supabase ---
   const loadPlayersAndScoresForSession = async (targetSessionId: string) => {
     if (!supabase || !isUuid(targetSessionId)) return;
 
@@ -727,14 +718,11 @@ export default function AdminConsolePage() {
 
     if (sessionRow) {
       const gs = (sessionRow as { game_state?: unknown }).game_state;
-      setPlayerAnswersById(
-        extractAnswersFromGameState(gs, isJusteChiffre)
-      );
+      setPlayerAnswersById(extractAnswersFromGameState(gs, isJusteChiffre));
       syncQuestionStateFromGameState(gs);
     }
   };
 
-  // --- Écoute temps réel des changements sur les joueurs, scores et réponses ---
   useEffect(() => {
     if (!supabase || !sessionId || !isUuid(sessionId)) return;
 
@@ -801,7 +789,6 @@ export default function AdminConsolePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [supabase, sessionId, isJusteChiffre]);
 
-  // --- Enregistrement / mise à jour de la session dans Supabase ---
   const syncSessionToDb = async (params: {
     id?: string | null;
     code: string;
@@ -868,9 +855,10 @@ export default function AdminConsolePage() {
 
     const numericGameMode = isJusteChiffreGame(activeTargetGame);
     const isQuizGame =
-      validGameUuid === GRAND_QUIZ_UUID ||
-      activeTargetGame?.slug === "quiz" ||
-      activeTargetGame?.title?.toLowerCase().includes("quiz");
+      !numericGameMode &&
+      (validGameUuid === GRAND_QUIZ_UUID ||
+        activeTargetGame?.slug === "quiz" ||
+        activeTargetGame?.title?.toLowerCase().includes("quiz"));
 
     const hasQuestionStarted = effectiveQuestionIndex >= 0;
     const isPaused = params.nextStatus === "paused";
@@ -1007,7 +995,6 @@ export default function AdminConsolePage() {
     }
   };
 
-  // --- Initialisation au chargement de la page admin ---
   useEffect(() => {
     let cancelled = false;
 
@@ -1030,10 +1017,13 @@ export default function AdminConsolePage() {
 
       const rows = Array.isArray(dbGames) ? (dbGames as CatalogGame[]) : [];
       const validRows = rows.filter((g) => isUuid(g.id));
+      const mergedGames = ensureJusteChiffreCatalog(
+        validRows.length > 0 ? validRows : INITIAL_GAMES
+      );
 
-      if (!cancelled && validRows.length > 0) {
-        setGames(validRows);
-        const firstUuidGame = validRows[0];
+      if (!cancelled) {
+        setGames(mergedGames);
+        const initialGame = mergedGames[0];
         const initialSeed = generateSeriesSeed();
         const initialPicked = pickSeriesQuestions(
           QUESTIONS,
@@ -1045,15 +1035,15 @@ export default function AdminConsolePage() {
           QUESTIONS_PER_GAME,
           `${sessionCode}-jc-1-${initialSeed}`
         );
-        if (firstUuidGame) {
-          setSelectedGameId(firstUuidGame.id);
+        if (initialGame) {
+          setSelectedGameId(initialGame.id);
           setSeriesSeed(initialSeed);
           setSeriesQuestions(initialPicked);
           setJusteChiffreQuestions(initialJcPicked);
           await syncSessionToDb({
             id: null,
             code: sessionCode,
-            game: firstUuidGame,
+            game: initialGame,
             nextStatus: status,
             qrVisible: showQrOnTv,
             nextQuestionIndex: -1,
@@ -1065,10 +1055,6 @@ export default function AdminConsolePage() {
             nextJusteChiffreQuestions: initialJcPicked,
           });
         }
-      } else if (!cancelled) {
-        setDbError(
-          "Impossible de récupérer les UUID des jeux depuis Supabase ('public.games')."
-        );
       }
     };
 
@@ -1079,11 +1065,6 @@ export default function AdminConsolePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ==========================================================================
-  // 3. ACTIONS DE L'ANIMATEUR (Nouvelle salle, Lancer/Relancer, Pause, Question suivante)
-  // ==========================================================================
-
-  // Crée une nouvelle salle et met à jour l'ancienne session avec nextSessionCode sans passer en "finished"
   const handleCreateNewSession = async () => {
     const newCode = generateSessionCode();
     const newSeed = generateSeriesSeed();
@@ -1143,7 +1124,6 @@ export default function AdminConsolePage() {
     });
   };
 
-  // Gère Lancer, Pause (fige le chrono), Reprendre et Terminer
   const handleStatusChange = async (nextStatus: SessionStatus) => {
     const nowMs = Date.now();
     const shouldResetQuestions =
@@ -1171,7 +1151,6 @@ export default function AdminConsolePage() {
       return;
     }
 
-    // Mise en pause : on calcule et sauvegarde le temps restant exact pour stopper le chrono TV
     if (nextStatus === "paused") {
       let remaining = activeDurationSeconds;
       if (questionStartedAt) {
@@ -1196,7 +1175,6 @@ export default function AdminConsolePage() {
       return;
     }
 
-    // Reprise après pause ou lancement initial
     if (nextStatus === "playing") {
       let resumedStartedAt = questionStartedAt;
       if (
@@ -1228,7 +1206,6 @@ export default function AdminConsolePage() {
     }
   };
 
-  // Relance une nouvelle série de questions différente à la fin de la partie
   const handleRestartNewSeries = async () => {
     const nextSeries = seriesNumber + 1;
     const nextSeed = generateSeriesSeed();
@@ -1271,7 +1248,6 @@ export default function AdminConsolePage() {
     });
   };
 
-  // Passe à la question suivante (index 0 au 1er clic, puis 1, 2, ... jusqu'à la fin de la série)
   const handleNextQuestion = async () => {
     const nextIdx =
       questionIndex < 0
@@ -1448,7 +1424,6 @@ export default function AdminConsolePage() {
     }
   };
 
-  // Calcul hauteur totale de la grille en pixels
   const maxGridRowEnd = Math.max(
     10,
     ...Object.values(layout).map((item) => item.row + item.rowSpan)
@@ -1466,7 +1441,8 @@ export default function AdminConsolePage() {
     const leftPercent = (item.col / GRID_COLUMNS) * 100;
     const widthPercent = (item.colSpan / GRID_COLUMNS) * 100;
     const topPx = item.row * (ROW_UNIT_PX + ROW_GAP_PX);
-    const heightPx = item.rowSpan * ROW_UNIT_PX + (item.rowSpan - 1) * ROW_GAP_PX;
+    const heightPx =
+      item.rowSpan * ROW_UNIT_PX + (item.rowSpan - 1) * ROW_GAP_PX;
     const isMoving = activeDragId === widgetId;
     const isResizing = activeResizeId === widgetId;
 
@@ -1485,7 +1461,6 @@ export default function AdminConsolePage() {
             : "border-white/10"
         } ${isMoving || isResizing ? "z-30 ring-2 ring-amber-400" : "z-10"}`}
       >
-        {/* Barre de titre + poignée de déplacement */}
         <div
           onPointerDown={(e) => startMoveWidget(e, widgetId)}
           style={{ touchAction: isEditLayoutMode ? "none" : "auto" }}
@@ -1514,12 +1489,10 @@ export default function AdminConsolePage() {
           </div>
         </div>
 
-        {/* Contenu adaptatif avec défilement interne si la case est réduite */}
         <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-5 pt-2 flex flex-col justify-between">
           {children}
         </div>
 
-        {/* Poignée de redimensionnement en bas à droite */}
         {isEditLayoutMode && (
           <button
             type="button"
@@ -1536,13 +1509,9 @@ export default function AdminConsolePage() {
     );
   };
 
-  // ==========================================================================
-  // 4. RENDU VISUEL DE LA CONSOLE ADMIN (JSX)
-  // ==========================================================================
   return (
     <div className="min-h-screen bg-neutral-950 text-white p-4 md:p-8">
       <div className="max-w-7xl mx-auto space-y-6">
-        {/* ================= EN-TÊTE (Titre, Code Salle, Grille, Ouvrir TV, Nouvelle Salle) ================= */}
         <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-white/10 pb-5">
           <div>
             <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-neutral-400">
@@ -1555,7 +1524,6 @@ export default function AdminConsolePage() {
           </div>
 
           <div className="flex flex-wrap items-center gap-3">
-            {/* Boutons Éditer la grille / Réinitialiser */}
             <button
               type="button"
               onClick={() => setIsEditLayoutMode((prev) => !prev)}
@@ -1590,7 +1558,6 @@ export default function AdminConsolePage() {
               </button>
             )}
 
-            {/* Code Salle + bouton copier */}
             <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-2xl px-4 py-2.5">
               <span className="text-xs text-neutral-400 uppercase tracking-wider">
                 Code Salle
@@ -1612,7 +1579,6 @@ export default function AdminConsolePage() {
               </button>
             </div>
 
-            {/* Lien ouverture écran TV */}
             <Link
               href={`/tv/${sessionCode}`}
               target="_blank"
@@ -1623,7 +1589,6 @@ export default function AdminConsolePage() {
               <ExternalLink className="w-4 h-4" />
             </Link>
 
-            {/* Bouton création nouvelle salle */}
             <button
               type="button"
               onClick={handleCreateNewSession}
@@ -1635,7 +1600,6 @@ export default function AdminConsolePage() {
           </div>
         </header>
 
-        {/* Message d'erreur Supabase éventuel */}
         {dbError ? (
           <div className="flex items-center gap-3 rounded-2xl border border-rose-500/40 bg-rose-500/15 px-4 py-3 text-sm text-rose-200">
             <AlertTriangle className="w-5 h-5 shrink-0 text-rose-400" />
@@ -1643,7 +1607,6 @@ export default function AdminConsolePage() {
           </div>
         ) : null}
 
-        {/* ================= GRILLE 12 COLONNES PERSONNALISABLE ================= */}
         <div
           ref={gridContainerRef}
           style={{ height: `${gridHeightPx}px` }}
@@ -1653,7 +1616,6 @@ export default function AdminConsolePage() {
               : ""
           }`}
         >
-          {/* Case 1 : État de la partie & Boutons de contrôle */}
           {renderWidgetFrame(
             "controls",
             "État de la partie",
@@ -1671,7 +1633,6 @@ export default function AdminConsolePage() {
                 </p>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  {/* Cible numérique pour Le Juste Chiffre */}
                   {showPlayerAnswersInAdmin &&
                     isJusteChiffre &&
                     currentJusteChiffreQuestion && (
@@ -1689,7 +1650,6 @@ export default function AdminConsolePage() {
                       </span>
                     )}
 
-                  {/* Pastille de la bonne réponse à la question en cours (Quiz) */}
                   {showPlayerAnswersInAdmin &&
                     !isJusteChiffre &&
                     currentCorrectLetter &&
@@ -1723,7 +1683,6 @@ export default function AdminConsolePage() {
                 </div>
               </div>
 
-              {/* Grille des 4 boutons de contrôle de partie */}
               <div className="grid grid-cols-2 gap-3">
                 {isEndOfSeries ? (
                   <button
@@ -1782,7 +1741,6 @@ export default function AdminConsolePage() {
             </div>
           )}
 
-          {/* Case 2 : Affichage / Masquage du QR Code sur TV */}
           {renderWidgetFrame(
             "qr",
             "Écran TV",
@@ -1812,7 +1770,6 @@ export default function AdminConsolePage() {
             </div>
           )}
 
-          {/* Case 3 : Catalogue des jeux */}
           {renderWidgetFrame(
             "catalog",
             "Catalogue des jeux",
@@ -1890,7 +1847,6 @@ export default function AdminConsolePage() {
             </div>
           )}
 
-          {/* Case 4 : Joueurs connectés & scores */}
           {renderWidgetFrame(
             "players",
             `Joueurs (${players.length})`,
@@ -1976,7 +1932,6 @@ export default function AdminConsolePage() {
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0">
-                            {/* Estimation numérique (Le Juste Chiffre) */}
                             {showPlayerAnswersInAdmin &&
                               isJusteChiffre &&
                               answerValue && (
@@ -1988,7 +1943,6 @@ export default function AdminConsolePage() {
                                 </span>
                               )}
 
-                            {/* Pastille ronde avec la lettre et la couleur de la réponse (Quiz) */}
                             {showPlayerAnswersInAdmin &&
                               !isJusteChiffre &&
                               answerValue &&
@@ -2018,7 +1972,6 @@ export default function AdminConsolePage() {
                           </div>
                         </div>
 
-                        {/* Contrôles score -1 / +1 */}
                         <div
                           style={{ backgroundColor: color.badgeBgHex }}
                           className="flex items-center justify-between rounded-xl px-3 py-1.5"
