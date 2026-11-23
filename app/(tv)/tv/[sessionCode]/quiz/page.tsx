@@ -175,7 +175,6 @@ function getQuestionUniqueKey(q: QuizQuestionItem, fallbackIdx: number): string 
   return label ? `txt:${label.trim().toLowerCase()}` : `idx:${fallbackIdx}`;
 }
 
-// Sélectionne une série aléatoire de 15 questions différente à chaque relance
 function pickRandomQuestionsSeries(
   source: QuizQuestionItem[],
   count: number,
@@ -260,7 +259,6 @@ function extractOptionsList(
   return LETTERS.map((letter) => String(rawOptions[letter] ?? ""));
 }
 
-// Adapte la taille du texte d'une réponse pour éviter de couper les mots longs et garder de la marge
 function getOptionFontSize(text: string): string {
   const trimmed = text.trim();
   const longestWordLen = trimmed
@@ -276,7 +274,6 @@ function getOptionFontSize(text: string): string {
   return "text-lg xl:text-xl leading-relaxed";
 }
 
-// Adapte la taille du texte de la question selon sa longueur
 function getQuestionFontSize(text: string): string {
   const len = text.trim().length;
   if (len <= 65) return "text-3xl xl:text-5xl leading-tight";
@@ -306,7 +303,6 @@ export default function TvQuizPage() {
     number | null
   >(null);
 
-  // Garde en mémoire les questions déjà jouées lors des séries précédentes
   const usedQuestionKeysRef = useRef<Set<string>>(new Set());
   const lastRecordedSeriesKeyRef = useRef<string>("");
   const cachedSeriesRef = useRef<{
@@ -314,6 +310,8 @@ export default function TvQuizPage() {
     items: QuizQuestionItem[];
   } | null>(null);
   const lastTimerResetKeyRef = useRef<string>("");
+  const scoredQuestionsRef = useRef<Set<string>>(new Set());
+  const isScoringRef = useRef<boolean>(false);
 
   // --- Synchronisation temps réel avec Supabase (session + joueurs + scores) ---
   useEffect(() => {
@@ -492,7 +490,6 @@ export default function TvQuizPage() {
     };
   }, [supabase, sessionCode]);
 
-  // --- Extraction de l'état du quiz et redirection si nouvelle salle créée ---
   const quizState = useMemo<QuizStatePayload>(() => {
     return (
       session?.game_state ||
@@ -560,7 +557,6 @@ export default function TvQuizPage() {
     return QUESTIONS as QuizQuestion[];
   }, [quizState, session]);
 
-  // Mémorise la série de 15 questions pour la signature courante afin qu'elle reste stable
   const questions = useMemo<QuizQuestionItem[]>(() => {
     const signature = `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`;
     if (
@@ -597,7 +593,6 @@ export default function TvQuizPage() {
     return picked;
   }, [sourceQuestions, session?.id, sessionCode, seriesNumber, seriesSeed]);
 
-  // --- Index de la question active ---
   const activeQuestionIndex = useMemo<number | null>(() => {
     const explicitIndex =
       quizState.questionIndex ??
@@ -641,7 +636,6 @@ export default function TvQuizPage() {
     return quizState.currentQuestion ?? quizState.activeQuestion ?? null;
   }, [activeQuestionIndex, questions, quizState]);
 
-  // --- Gestion du chronomètre (12 secondes) et de la Pause ---
   const isPaused = useMemo<boolean>(() => {
     const status = String(session?.status ?? "").toLowerCase();
     return status === "paused" || Boolean(quizState.isPaused);
@@ -666,7 +660,6 @@ export default function TvQuizPage() {
     return Math.max(1, Math.round(rawDuration));
   }, [quizState]);
 
-  // Réinitialise le chrono uniquement quand la question ou la série change réellement
   useEffect(() => {
     if (activeQuestionIndex === null || !currentQuestion) {
       lastTimerResetKeyRef.current = "";
@@ -693,7 +686,6 @@ export default function TvQuizPage() {
     seriesSeed,
   ]);
 
-  // Fige immédiatement la valeur du chrono côté TV dès que la pause est activée
   useEffect(() => {
     if (!isPaused || activeQuestionIndex === null || !currentQuestion) {
       if (!isPaused) {
@@ -725,7 +717,6 @@ export default function TvQuizPage() {
     durationSeconds,
   ]);
 
-  // L'intervalle s'arrête net lorsque la partie est en pause
   useEffect(() => {
     if (activeQuestionIndex === null || !currentQuestion || isPaused) return;
     const interval = window.setInterval(() => {
@@ -771,7 +762,6 @@ export default function TvQuizPage() {
     remainingSeconds !== null &&
     remainingSeconds <= 0;
 
-  // --- Préparation de la question, des 4 choix et de la révélation ---
   const questionLabel = useMemo<string>(() => {
     if (!currentQuestion) return "";
     return (
@@ -825,7 +815,6 @@ export default function TvQuizPage() {
     return normalized;
   }, [session, quizState, playerScoresRows]);
 
-  // Révélation uniquement quand le chrono est à 0 (ou explicitement demandée)
   const isRevealed = Boolean(
     quizState.revealed ||
       quizState.showAnswers ||
@@ -851,7 +840,128 @@ export default function TvQuizPage() {
     );
   }, [currentQuestion]);
 
-  // --- Tri des joueurs pour le classement ---
+  // --- Calcul des points (+3 / -1) à la fin du chrono / révélation, une seule fois par question ---
+  useEffect(() => {
+    if (
+      !supabase ||
+      !session?.id ||
+      activeQuestionIndex === null ||
+      !currentQuestion ||
+      !correctLetter ||
+      !isRevealed
+    ) {
+      return;
+    }
+
+    const roundKey = `${session.id}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}`;
+    if (scoredQuestionsRef.current.has(roundKey) || isScoringRef.current) {
+      return;
+    }
+
+    isScoringRef.current = true;
+    scoredQuestionsRef.current.add(roundKey);
+
+    void (async () => {
+      try {
+        const currentScoreByPlayerId = new Map<string, number>();
+        for (const row of playerScoresRows) {
+          const rec = row as unknown as {
+            player_id?: string | null;
+            total_score?: number | null;
+            score?: number | null;
+          };
+          if (rec.player_id) {
+            const val = rec.total_score ?? rec.score ?? 0;
+            currentScoreByPlayerId.set(
+              String(rec.player_id),
+              typeof val === "number" && Number.isFinite(val) ? val : 0
+            );
+          }
+        }
+
+        const updates: Array<{
+          playerId: string;
+          nickname: string;
+          avatarId: string;
+          nextScore: number;
+        }> = [];
+
+        for (const player of players) {
+          const playerIdStr = String(player.id);
+          const chosen = normalizeAnswerLetter(answersMap[playerIdStr]);
+          if (!chosen) continue;
+
+          const delta = chosen === correctLetter ? 3 : -1;
+          const prevScore = currentScoreByPlayerId.get(playerIdStr) ?? 0;
+          const nextScore = Math.max(0, prevScore + delta);
+
+          updates.push({
+            playerId: playerIdStr,
+            nickname: player.nickname,
+            avatarId: player.avatar_id ?? "gamepad",
+            nextScore,
+          });
+        }
+
+        if (updates.length === 0) return;
+
+        for (const u of updates) {
+          const { data: existing } = await supabase
+            .from("player_scores")
+            .select("id")
+            .eq("session_id", session.id)
+            .eq("player_id", u.playerId)
+            .maybeSingle<{ id?: string }>();
+
+          if (existing?.id) {
+            await supabase
+              .from("player_scores")
+              .update({
+                nickname: u.nickname,
+                avatar_id: u.avatarId,
+                total_score: u.nextScore,
+              })
+              .eq("id", existing.id);
+          } else {
+            await supabase.from("player_scores").upsert(
+              {
+                session_id: session.id,
+                player_id: u.playerId,
+                nickname: u.nickname,
+                avatar_id: u.avatarId,
+                total_score: u.nextScore,
+              },
+              { onConflict: "session_id,player_id" }
+            );
+          }
+        }
+
+        const { data: refreshedScores } = await supabase
+          .from("player_scores")
+          .select("*")
+          .eq("session_id", session.id);
+
+        if (refreshedScores) {
+          setPlayerScoresRows(refreshedScores as PlayerScore[]);
+        }
+      } finally {
+        isScoringRef.current = false;
+      }
+    })();
+  }, [
+    supabase,
+    session?.id,
+    activeQuestionIndex,
+    currentQuestion,
+    correctLetter,
+    isRevealed,
+    seriesNumber,
+    seriesSeed,
+    players,
+    playerScoresRows,
+    answersMap,
+  ]);
+
   const rankedPlayers = useMemo(() => {
     return [...players]
       .map((player) => {
@@ -899,14 +1009,10 @@ export default function TvQuizPage() {
 
   const totalQuestions = questions.length;
 
-  // ==========================================================================
-  // 4. RENDU VISUEL DE LA PAGE TV (JSX)
-  // ==========================================================================
   return (
     <div className="h-[100dvh] w-screen overflow-hidden bg-tvos-bg text-white px-8 py-6 flex flex-col justify-between select-none">
-      {/* ================= EN-TÊTE (Titre du jeu, n° Question, Chrono, Code Salle) ================= */}
+      {/* ================= EN-TÊTE ================= */}
       <header className="flex items-center justify-between border-b border-white/15 pb-4 shrink-0 gap-6">
-        {/* Partie gauche : Icône TV + Numéro de question + Titre du jeu */}
         <div className="flex items-center gap-4 min-w-0">
           <div className="w-14 h-14 rounded-2xl bg-amber-400/15 border border-amber-400/35 flex items-center justify-center shrink-0">
             <Tv className="w-8 h-8 text-amber-400" />
@@ -925,9 +1031,7 @@ export default function TvQuizPage() {
           </div>
         </div>
 
-        {/* Partie droite : Chronomètre + Code de la salle */}
         <div className="flex items-center gap-4 shrink-0">
-          {/* Chronomètre 12s (figé si Pause) */}
           {remainingSeconds !== null && (
             <div
               className={`flex items-center gap-2.5 px-5 py-2.5 rounded-2xl border-2 font-mono text-3xl xl:text-4xl font-black transition ${
@@ -943,7 +1047,6 @@ export default function TvQuizPage() {
             </div>
           )}
 
-          {/* Code Salle */}
           <span className="text-lg xl:text-xl font-bold uppercase tracking-wider text-neutral-300">
             Salle
           </span>
@@ -953,11 +1056,10 @@ export default function TvQuizPage() {
         </div>
       </header>
 
-      {/* ================= CORPS PRINCIPAL (Colonne Question/Réponses + Colonne Classement) ================= */}
+      {/* ================= CORPS PRINCIPAL ================= */}
       <main className="flex-1 min-h-0 grid grid-cols-12 gap-7 pt-5">
-        {/* ----------------- COLONNE GAUCHE : QUESTION + 4 CASES DE RÉPONSES ----------------- */}
+        {/* COLONNE GAUCHE : QUESTION + 4 CASES */}
         <section className="col-span-7 bg-white/[0.06] border border-white/15 rounded-[2rem] p-7 flex flex-col justify-between gap-5 min-h-0">
-          {/* Zone d'affichage de la question */}
           <div className="shrink-0 min-h-[22%] flex items-center justify-center text-center px-4">
             {questionLabel ? (
               <h2
@@ -974,7 +1076,6 @@ export default function TvQuizPage() {
             )}
           </div>
 
-          {/* Grille 2x2 des 4 cases de réponses (A, B, C, D) */}
           <div className="w-full flex-1 max-h-[420px] grid grid-cols-2 grid-rows-2 gap-4 self-center">
             {LETTERS.map((letter, index) => {
               const style = ANSWER_STYLES[letter];
@@ -1001,14 +1102,12 @@ export default function TvQuizPage() {
                       : "shadow-lg"
                   }`}
                 >
-                  {/* Badge lettre (A, B, C, D) dans le coin supérieur gauche */}
                   <div
                     className={`absolute top-3 left-3 w-10 h-10 xl:w-11 xl:h-11 rounded-xl border-2 flex items-center justify-center font-black text-xl xl:text-2xl z-10 ${style.badgeBg}`}
                   >
                     {letter}
                   </div>
 
-                  {/* Texte de la réponse centré horizontalement et verticalement sans couper les lettres */}
                   <div className="w-full h-full flex items-center justify-center text-center px-10 py-2">
                     <span
                       className={`font-black text-white text-center whitespace-normal break-normal [word-break:normal] hyphens-none ${getOptionFontSize(
@@ -1024,9 +1123,8 @@ export default function TvQuizPage() {
           </div>
         </section>
 
-        {/* ----------------- COLONNE DROITE : CLASSEMENT DES JOUEURS ----------------- */}
+        {/* COLONNE DROITE : CLASSEMENT */}
         <aside className="col-span-5 bg-white/[0.06] border border-white/15 rounded-[2rem] p-6 flex flex-col gap-4 min-h-0">
-          {/* Titre du classement et compteur de joueurs */}
           <div className="flex items-center justify-between shrink-0 pb-1">
             <div className="flex items-center gap-3 text-2xl xl:text-3xl font-black">
               <Trophy className="w-8 h-8 text-amber-400" />
@@ -1037,7 +1135,6 @@ export default function TvQuizPage() {
             </span>
           </div>
 
-          {/* Liste des joueurs triés par points */}
           {rankedPlayers.length === 0 ? (
             <div className="flex-1 flex items-center justify-center text-2xl text-neutral-400 font-semibold text-center px-4">
               Aucun joueur dans la partie
@@ -1062,7 +1159,6 @@ export default function TvQuizPage() {
                     }}
                     className="rounded-3xl border-2 px-5 py-3.5 flex items-center gap-4 shadow-lg shrink-0"
                   >
-                    {/* 1. Numéro de rang à gauche */}
                     <div
                       style={{ backgroundColor: pColor.badgeBgHex }}
                       className="w-12 h-12 xl:w-14 xl:h-14 rounded-2xl flex items-center justify-center font-black text-2xl xl:text-3xl shrink-0"
@@ -1070,17 +1166,14 @@ export default function TvQuizPage() {
                       {rank}
                     </div>
 
-                    {/* 2. Pseudo du joueur */}
                     <div className="flex-1 min-w-0 font-black text-2xl xl:text-3xl truncate">
                       {player.nickname}
                     </div>
 
-                    {/* 3. Score en points */}
                     <div className="w-24 text-right font-mono font-black text-2xl xl:text-3xl shrink-0">
                       {score} <span className="text-lg font-bold">pts</span>
                     </div>
 
-                    {/* 4. Pastille d'état de réponse (coche verte ou lettre choisie) */}
                     <div className="w-14 h-14 flex items-center justify-center shrink-0">
                       {hasAnswered && !isRevealed && (
                         <div
