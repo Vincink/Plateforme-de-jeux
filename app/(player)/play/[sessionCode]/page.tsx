@@ -267,8 +267,7 @@ export default function PlayerControllerPage() {
   const highlightTimeoutRef = useRef<number | null>(null);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const settledQuestionsRef = useRef<Set<string>>(new Set());
-  const localScoreRef = useRef<number>(localScore);
-  localScoreRef.current = localScore;
+  const currentScoreRef = useRef<number>(0);
 
   const persistPlayerScore = async (
     targetSessionId: string,
@@ -516,7 +515,7 @@ export default function PlayerControllerPage() {
             if (match) {
               const dbScore = extractScoreValue(match);
               setLocalScore(dbScore);
-              localScoreRef.current = dbScore;
+              currentScoreRef.current = Math.max(currentScoreRef.current, dbScore);
             }
           }
         } catch {
@@ -535,7 +534,7 @@ export default function PlayerControllerPage() {
             localStorage.removeItem(`player_identity_${sessionCode}`);
             setIdentity(null);
             setLocalScore(0);
-            localScoreRef.current = 0;
+            currentScoreRef.current = 0;
             setStatusMessage("Tu as été exclu de la partie.");
           }
         }
@@ -687,7 +686,9 @@ export default function PlayerControllerPage() {
     if (!identity) return 0;
     const match = scores.find((s) => s.player_id === identity.playerId);
     const dbScore = extractScoreValue(match);
-    return Math.max(localScore, dbScore);
+    const effective = Math.max(localScore, dbScore, currentScoreRef.current);
+    currentScoreRef.current = effective;
+    return effective;
   }, [identity, scores, localScore]);
 
   const currentPlayerRecord = useMemo(() => {
@@ -738,8 +739,12 @@ export default function PlayerControllerPage() {
       Boolean(correctLetter) && chosenLetter === correctLetter;
     const delta = isCorrect ? 3 : -1;
 
-    const nextScore = Math.max(0, localScoreRef.current + delta);
-    localScoreRef.current = nextScore;
+    const baseScore = Math.max(
+      currentScoreRef.current,
+      extractScoreValue(scores.find((s) => s.player_id === identity.playerId))
+    );
+    const nextScore = Math.max(0, baseScore + delta);
+    currentScoreRef.current = nextScore;
     setLocalScore(nextScore);
 
     setScores((prev) => {
@@ -785,6 +790,7 @@ export default function PlayerControllerPage() {
     quizState.answers,
     submittedQuestionKey,
     submittedChoiceLetter,
+    scores,
     supabase,
     session?.id,
     sessionCode,
