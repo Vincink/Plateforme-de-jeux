@@ -58,6 +58,11 @@ function generateSessionCode(): string {
   return code;
 }
 
+// Génère une graine unique pour forcer un nouveau tirage aléatoire à chaque relance
+function generateSeriesSeed(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
 // ============================================================================
 // 2. COMPOSANT PRINCIPAL : CONSOLE ANIMATEUR (ADMIN)
 // ============================================================================
@@ -83,6 +88,9 @@ export default function AdminConsolePage() {
     number | null
   >(null);
   const [seriesNumber, setSeriesNumber] = useState<number>(1);
+  const [seriesSeed, setSeriesSeed] = useState<string>(() =>
+    generateSeriesSeed()
+  );
   const [showQrOnTv, setShowQrOnTv] = useState<boolean>(true);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
@@ -204,6 +212,7 @@ export default function AdminConsolePage() {
     nextQuestionStartedAt?: string | null;
     nextPausedRemaining?: number | null;
     nextSeriesNumber?: number;
+    nextSeriesSeed?: string;
     resetAnswers?: boolean;
   }) => {
     if (!supabase) {
@@ -241,6 +250,9 @@ export default function AdminConsolePage() {
         ? params.nextSeriesNumber
         : seriesNumber;
 
+    const effectiveSeed =
+      params.nextSeriesSeed !== undefined ? params.nextSeriesSeed : seriesSeed;
+
     const isQuizGame =
       validGameUuid === GRAND_QUIZ_UUID ||
       (params.game ?? selectedGame)?.slug === "quiz" ||
@@ -270,6 +282,7 @@ export default function AdminConsolePage() {
           isPaused,
           pausedRemainingSeconds: isPaused ? effectivePausedRemaining : null,
           seriesNumber: effectiveSeries,
+          seriesSeed: effectiveSeed,
           questions: QUESTIONS,
           revealed: false,
           ...(params.resetAnswers !== false ? { answers: {} } : {}),
@@ -362,8 +375,10 @@ export default function AdminConsolePage() {
       if (!cancelled && validRows.length > 0) {
         setGames(validRows);
         const firstUuidGame = validRows[0];
+        const initialSeed = generateSeriesSeed();
         if (firstUuidGame) {
           setSelectedGameId(firstUuidGame.id);
+          setSeriesSeed(initialSeed);
           await syncSessionToDb({
             id: null,
             code: sessionCode,
@@ -374,6 +389,7 @@ export default function AdminConsolePage() {
             nextQuestionStartedAt: null,
             nextPausedRemaining: null,
             nextSeriesNumber: 1,
+            nextSeriesSeed: initialSeed,
           });
         }
       } else if (!cancelled) {
@@ -396,6 +412,7 @@ export default function AdminConsolePage() {
 
   const handleCreateNewSession = async () => {
     const newCode = generateSessionCode();
+    const newSeed = generateSeriesSeed();
     setSessionId(null);
     setSessionCode(newCode);
     setStatus("lobby");
@@ -403,6 +420,7 @@ export default function AdminConsolePage() {
     setQuestionStartedAt(null);
     setPausedRemainingSeconds(null);
     setSeriesNumber(1);
+    setSeriesSeed(newSeed);
     setPlayers([]);
     setScores([]);
 
@@ -416,6 +434,7 @@ export default function AdminConsolePage() {
       nextQuestionStartedAt: null,
       nextPausedRemaining: null,
       nextSeriesNumber: 1,
+      nextSeriesSeed: newSeed,
     });
   };
 
@@ -501,13 +520,15 @@ export default function AdminConsolePage() {
     }
   };
 
-  // Relance une nouvelle série de 15 questions différentes à la fin de la partie
+  // Relance une nouvelle série de 15 questions différente à la fin de la partie
   const handleRestartNewSeries = async () => {
     const nextSeries = seriesNumber + 1;
+    const nextSeed = generateSeriesSeed();
     const startedIso = new Date().toISOString();
 
     setStatus("playing");
     setSeriesNumber(nextSeries);
+    setSeriesSeed(nextSeed);
     setQuestionIndex(0);
     setQuestionStartedAt(startedIso);
     setPausedRemainingSeconds(null);
@@ -522,6 +543,7 @@ export default function AdminConsolePage() {
       nextQuestionStartedAt: startedIso,
       nextPausedRemaining: null,
       nextSeriesNumber: nextSeries,
+      nextSeriesSeed: nextSeed,
       resetAnswers: true,
     });
   };
