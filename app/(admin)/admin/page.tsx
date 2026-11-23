@@ -968,7 +968,7 @@ export default function AdminConsolePage() {
 
   // Calcul hauteur totale de la grille en pixels
   const maxGridRowEnd = Math.max(
-    12,
+    10,
     ...Object.values(layout).map((item) => item.row + item.rowSpan)
   );
   const gridHeightPx = maxGridRowEnd * (ROW_UNIT_PX + ROW_GAP_PX);
@@ -1148,14 +1148,6 @@ export default function AdminConsolePage() {
             </button>
           </div>
         </header>
-
-        {isEditLayoutMode && (
-          <div className="rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-2.5 text-xs text-amber-200 flex items-center justify-between gap-2">
-            <span>
-              Mode grille actif : glisse l&apos;en-tête d&apos;une case pour la déplacer, et glisse l&apos;icône en bas à droite pour la redimensionner.
-            </span>
-          </div>
-        )}
 
         {/* Message d'erreur Supabase éventuel */}
         {dbError ? (
