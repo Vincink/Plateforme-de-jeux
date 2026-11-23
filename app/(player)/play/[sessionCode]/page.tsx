@@ -234,6 +234,9 @@ function computeRemainingSeconds(
   }
 
   const elapsedSeconds = Math.max(0, (nowMs - startMs) / 1000);
+  if (elapsedSeconds > duration + 30) {
+    return duration;
+  }
   return Math.max(0, duration - elapsedSeconds);
 }
 
@@ -487,23 +490,27 @@ export default function PlayerControllerPage() {
     return extractOptions(raw);
   }, [activeQuestion]);
 
-  const settleSnapshot = (snapshot: QuestionSnapshot | null) => {
+  const settleSnapshot = (
+    snapshot: QuestionSnapshot | null,
+    updateMessage: boolean
+  ) => {
     if (!identity || !snapshot) return;
 
     const settlementKey = `${identity.playerId}::${snapshot.key}`;
     if (settledQuestionsRef.current.has(settlementKey)) return;
 
-    const chosenLetter =
-      snapshot.chosenLetter ??
-      normalizeAnswerLetter(
-        quizState.answers?.[String(identity.playerId)],
-        snapshot.options
-      );
+    const stateAnswer = normalizeAnswerLetter(
+      quizState.answers?.[String(identity.playerId)],
+      snapshot.options
+    );
+    const chosenLetter = snapshot.chosenLetter ?? stateAnswer;
 
     settledQuestionsRef.current.add(settlementKey);
 
     if (!chosenLetter) {
-      setStatusMessage("Temps écoulé • 0 pt");
+      if (updateMessage) {
+        setStatusMessage("Temps écoulé • 0 pt");
+      }
       return;
     }
 
@@ -551,11 +558,13 @@ export default function PlayerControllerPage() {
       void persistPlayerScore(session.id, identity, nextScore);
     }
 
-    setStatusMessage(
-      isCorrect
-        ? "Temps écoulé • Bonne réponse (+3 pts)"
-        : "Temps écoulé • Mauvaise réponse (-1 pt)"
-    );
+    if (updateMessage) {
+      setStatusMessage(
+        isCorrect
+          ? "Temps écoulé • Bonne réponse (+3 pts)"
+          : "Temps écoulé • Mauvaise réponse (-1 pt)"
+      );
+    }
   };
 
   useEffect(() => {
@@ -602,7 +611,7 @@ export default function PlayerControllerPage() {
       snapshotRef.current &&
       snapshotRef.current.key === previousKey
     ) {
-      settleSnapshot(snapshotRef.current);
+      settleSnapshot(snapshotRef.current, false);
     }
 
     prevQuestionKeyRef.current = currentQuestionKey;
@@ -610,12 +619,12 @@ export default function PlayerControllerPage() {
     setSubmittedQuestionKey(null);
     setSubmittedChoiceLetter(null);
     setHighlightedChoiceLetter(null);
-    setRemainingSeconds(
+    const freshDuration =
       typeof quizState.durationSeconds === "number" &&
-        quizState.durationSeconds > 0
+      quizState.durationSeconds > 0
         ? quizState.durationSeconds
-        : DEFAULT_QUESTION_DURATION_SECONDS
-    );
+        : DEFAULT_QUESTION_DURATION_SECONDS;
+    setRemainingSeconds(freshDuration);
     setStatusMessage("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeGameId, currentQuestionKey]);
@@ -657,10 +666,16 @@ export default function PlayerControllerPage() {
   const isPlaying = roundStatus === "playing" && !isTimerExpired;
 
   useEffect(() => {
-    if (!isTimerExpired || !snapshotRef.current) return;
-    settleSnapshot(snapshotRef.current);
+    if (!isTimerExpired || !activeSnapshotRefCheck()) return;
+    settleSnapshot(snapshotRef.current, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTimerExpired, identity?.playerId, currentQuestionKey]);
+
+  function activeSnapshotRefCheck(): boolean {
+    return Boolean(
+      snapshotRef.current && snapshotRef.current.key === currentQuestionKey
+    );
+  }
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
