@@ -247,6 +247,7 @@ export default function PlayerControllerPage() {
   const identityRef = useRef<PlayerIdentity | null>(null);
   const sessionRef = useRef<ExtendedGameSession | null>(null);
   const scoresRef = useRef<PlayerScore[]>([]);
+  const lastResetKeyRef = useRef<string>("");
 
   identityRef.current = identity;
   sessionRef.current = session;
@@ -398,6 +399,59 @@ export default function PlayerControllerPage() {
   const quizState = session?.game_state ?? {};
   const activeGameId = session?.game_id ?? null;
   const roundStatus = session?.status ?? "lobby";
+  const statusLower = String(roundStatus).toLowerCase();
+  const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
+  const seriesSeed =
+    typeof quizState.seriesSeed === "string" ? quizState.seriesSeed : "";
+
+  useEffect(() => {
+    if (!session?.id) return;
+
+    const isResetStatus =
+      statusLower === "lobby" ||
+      statusLower === "finished" ||
+      statusLower === "ended" ||
+      statusLower === "completed";
+
+    const resetTrigger = isResetStatus
+      ? `${session.id}-status:${statusLower}`
+      : `${session.id}-series:${seriesNumber}:${seriesSeed}`;
+
+    const isNewSeries =
+      lastResetKeyRef.current !== "" &&
+      !lastResetKeyRef.current.includes(`series:${seriesNumber}:${seriesSeed}`) &&
+      resetTrigger.includes("series:");
+
+    if (lastResetKeyRef.current === "") {
+      lastResetKeyRef.current = resetTrigger;
+      if (!isResetStatus) return;
+    }
+
+    if (!isResetStatus && !isNewSeries) {
+      return;
+    }
+
+    if (lastResetKeyRef.current === resetTrigger) {
+      return;
+    }
+
+    lastResetKeyRef.current = resetTrigger;
+    currentScoreRef.current = 0;
+    setLocalScore(0);
+    settledQuestionsRef.current = new Set();
+    snapshotByKeyRef.current = {};
+    setSubmittedQuestionKey(null);
+    setSubmittedChoiceLetter(null);
+    setHighlightedChoiceLetter(null);
+    setScores((prev) => {
+      const updated = prev.map((row) => ({
+        ...row,
+        total_score: 0,
+      }));
+      scoresRef.current = updated;
+      return updated;
+    });
+  }, [session?.id, statusLower, seriesNumber, seriesSeed]);
 
   const activeQuestionIndex = useMemo<number | null>(() => {
     const rawIdx =
@@ -410,14 +464,11 @@ export default function PlayerControllerPage() {
 
   const currentQuestionKey = useMemo<string | null>(() => {
     if (activeQuestionIndex === null) return null;
-    const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
-    const seriesSeed =
-      typeof quizState.seriesSeed === "string" ? quizState.seriesSeed : "";
     return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}`;
   }, [
     activeQuestionIndex,
-    quizState.seriesNumber,
-    quizState.seriesSeed,
+    seriesNumber,
+    seriesSeed,
     session?.id,
     sessionCode,
   ]);
@@ -430,11 +481,6 @@ export default function PlayerControllerPage() {
         : (QUESTIONS as QuizQuestion[]);
 
     if (rawList.length > 0) {
-      const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
-      const seriesSeed =
-        typeof quizState.seriesSeed === "string" && quizState.seriesSeed.trim()
-          ? quizState.seriesSeed.trim()
-          : `${session?.id ?? ""}-${sessionCode}-s${seriesNumber}`;
       const ordered = shuffleWithSeed<QuizQuestionPayload>(
         rawList,
         `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`
@@ -448,8 +494,8 @@ export default function PlayerControllerPage() {
     activeQuestionIndex,
     quizState.questions,
     quizState.currentQuestion,
-    quizState.seriesNumber,
-    quizState.seriesSeed,
+    seriesNumber,
+    seriesSeed,
     session?.id,
     sessionCode,
   ]);
@@ -545,7 +591,6 @@ export default function PlayerControllerPage() {
     }
   };
 
-  // Enregistre le snapshot de la question courante par clé unique
   useEffect(() => {
     if (!currentQuestionKey || !activeQuestion) return;
 
@@ -569,7 +614,6 @@ export default function PlayerControllerPage() {
     submittedChoiceLetter,
   ]);
 
-  // Au changement de question : règle la question précédente si besoin, puis réinitialise proprement le chrono
   useEffect(() => {
     const previousKey = prevQuestionKeyRef.current;
     if (previousKey && previousKey !== currentQuestionKey) {
@@ -588,7 +632,6 @@ export default function PlayerControllerPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeGameId, currentQuestionKey, questionDuration]);
 
-  // Décompte du chronomètre uniquement quand une question est active
   useEffect(() => {
     if (
       currentQuestionKey === null ||
@@ -625,7 +668,6 @@ export default function PlayerControllerPage() {
     (remainingSeconds <= 0 || Boolean(quizState.revealed));
   const isPlaying = roundStatus === "playing" && !isTimerExpired;
 
-  // Évalue la question courante dès que le chrono est écoulé
   useEffect(() => {
     if (!isTimerExpired || !currentQuestionKey) return;
     const snap = snapshotByKeyRef.current[currentQuestionKey] ?? null;
@@ -669,9 +711,8 @@ export default function PlayerControllerPage() {
             const match = rows.find((r) => r.player_id === parsed.playerId);
             if (match) {
               const dbScore = extractScoreValue(match);
-              const syncedScore = Math.max(currentScoreRef.current, dbScore);
-              currentScoreRef.current = syncedScore;
-              setLocalScore(syncedScore);
+              currentScoreRef.current = dbScore;
+              setLocalScore(dbScore);
             }
           }
         } catch {
