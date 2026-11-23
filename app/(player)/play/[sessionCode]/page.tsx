@@ -2,13 +2,28 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import { Gamepad2, Trophy, Wifi, WifiOff, Sparkles } from "lucide-react";
+import {
+  CheckCircle2,
+  Delete,
+  Gamepad2,
+  Lock,
+  Sparkles,
+  Target,
+  Trash2,
+  Trophy,
+  Wifi,
+  WifiOff,
+} from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import {
   getNextAvailableColorIndex,
   getUniquePlayerColor,
 } from "@/lib/colorsplayer";
 import { QUESTIONS, type QuizQuestion } from "@/lib/questions";
+import {
+  JUSTE_CHIFFRE_QUESTIONS,
+  type JusteChiffreQuestion,
+} from "@/lib/juste-chiffre-questions";
 import type {
   GameSession,
   PlayerScore,
@@ -38,10 +53,14 @@ interface QuizQuestionPayload {
   correctAnswer?: string | number;
   correct_answer?: string | number;
   answer?: string | number;
+  unit?: string;
   points?: number;
 }
 
 interface QuizGameState {
+  mode?: string;
+  minValue?: number;
+  maxValue?: number;
   questionStarted?: boolean;
   roundTriggered?: boolean;
   questionIndex?: number | null;
@@ -54,7 +73,10 @@ interface QuizGameState {
   seriesSeed?: string;
   questions?: QuizQuestionPayload[];
   currentQuestion?: QuizQuestionPayload | null;
-  answers?: Record<string, string>;
+  targetNumber?: number | null;
+  estimates?: Record<string, unknown>;
+  guesses?: Record<string, unknown>;
+  answers?: Record<string, unknown>;
   revealed?: boolean;
   [key: string]: unknown;
 }
@@ -101,8 +123,59 @@ const CHOICE_STYLES = [
   },
 ] as const;
 
+const KEYPAD_DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
 const LETTERS = ["A", "B", "C", "D"] as const;
 const DEFAULT_QUESTION_DURATION_SECONDS = 12;
+const DEFAULT_JUSTE_CHIFFRE_DURATION_SECONDS = 20;
+const JUSTE_CHIFFRE_MIN = 1;
+const JUSTE_CHIFFRE_MAX = 1000;
+
+function isJusteChiffreGameState(
+  state: QuizGameState | null | undefined,
+  gameTitle?: string | null,
+  gameSlug?: string | null
+): boolean {
+  const mode = String(state?.mode ?? "").toLowerCase();
+  const title = String(gameTitle ?? "").toLowerCase();
+  const slug = String(gameSlug ?? "").toLowerCase();
+  return (
+    mode.includes("juste-chiffre") ||
+    mode.includes("juste_chiffre") ||
+    mode.includes("estimation") ||
+    slug.includes("juste-chiffre") ||
+    slug.includes("juste_chiffre") ||
+    slug.includes("estimation") ||
+    title.includes("juste chiffre") ||
+    title.includes("estimation")
+  );
+}
+
+function parseNumericEstimate(
+  raw: unknown,
+  minVal: number,
+  maxVal: number
+): number | null {
+  if (raw === null || raw === undefined) return null;
+  const candidate =
+    typeof raw === "object"
+      ? (raw as { guess?: unknown; value?: unknown; answer?: unknown })
+          .guess ??
+        (raw as { guess?: unknown; value?: unknown; answer?: unknown })
+          .value ??
+        (raw as { guess?: unknown; value?: unknown; answer?: unknown })
+          .answer
+      : raw;
+  const num =
+    typeof candidate === "number"
+      ? candidate
+      : typeof candidate === "string" && candidate.trim() !== ""
+      ? Number(candidate.trim())
+      : NaN;
+  if (!Number.isFinite(num)) return null;
+  const rounded = Math.round(num);
+  if (rounded < minVal || rounded > maxVal) return null;
+  return rounded;
+}
 
 function hashStringToSeed(input: string): number {
   let hash = 2166136261;
@@ -218,6 +291,10 @@ export default function PlayerControllerPage() {
   const [identity, setIdentity] = useState<PlayerIdentity | null>(null);
   const [nicknameInput, setNicknameInput] = useState<string>("");
   const [session, setSession] = useState<ExtendedGameSession | null>(null);
+  const [gameMeta, setGameMeta] = useState<{
+    title?: string | null;
+    slug?: string | null;
+  } | null>(null);
   const [players, setPlayers] = useState<SessionPlayer[]>([]);
   const [scores, setScores] = useState<PlayerScore[]>([]);
   const [localScore, setLocalScore] = useState<number>(0);
@@ -230,6 +307,16 @@ export default function PlayerControllerPage() {
   const [highlightedChoiceLetter, setHighlightedChoiceLetter] = useState<
     string | null
   >(null);
+
+  // États dédiés au pavé numérique Le Juste Chiffre
+  const [digitsInput, setDigitsInput] = useState<string>("");
+  const [submittedEstimate, setSubmittedEstimate] = useState<number | null>(
+    null
+  );
+  const [estimateFeedback, setEstimateFeedback] = useState<string | null>(null);
+  const [isSubmittingEstimate, setIsSubmittingEstimate] =
+    useState<boolean>(false);
+
   const [remainingSeconds, setRemainingSeconds] = useState<number>(
     DEFAULT_QUESTION_DURATION_SECONDS
   );
@@ -404,6 +491,26 @@ export default function PlayerControllerPage() {
   const seriesSeed =
     typeof quizState.seriesSeed === "string" ? quizState.seriesSeed : "";
 
+  const isJusteChiffreMode = useMemo(
+    () =>
+      isJusteChiffreGameState(quizState, gameMeta?.title, gameMeta?.slug),
+    [quizState, gameMeta?.title, gameMeta?.slug]
+  );
+
+  const minEstimate = useMemo(() => {
+    const raw = Number(quizState.minValue);
+    return Number.isFinite(raw) && raw >= 1
+      ? Math.round(raw)
+      : JUSTE_CHIFFRE_MIN;
+  }, [quizState.minValue]);
+
+  const maxEstimate = useMemo(() => {
+    const raw = Number(quizState.maxValue);
+    return Number.isFinite(raw) && raw > minEstimate
+      ? Math.round(raw)
+      : JUSTE_CHIFFRE_MAX;
+  }, [quizState.maxValue, minEstimate]);
+
   useEffect(() => {
     if (!session?.id) return;
 
@@ -443,6 +550,9 @@ export default function PlayerControllerPage() {
     setSubmittedQuestionKey(null);
     setSubmittedChoiceLetter(null);
     setHighlightedChoiceLetter(null);
+    setDigitsInput("");
+    setSubmittedEstimate(null);
+    setEstimateFeedback(null);
     setScores((prev) => {
       const updated = prev.map((row) => ({
         ...row,
@@ -474,11 +584,18 @@ export default function PlayerControllerPage() {
   ]);
 
   const activeQuestion = useMemo<QuizQuestionPayload | null>(() => {
+    if (quizState.currentQuestion) {
+      return quizState.currentQuestion;
+    }
     const idx = activeQuestionIndex ?? 0;
+    const fallbackPool: QuizQuestionPayload[] = isJusteChiffreMode
+      ? (JUSTE_CHIFFRE_QUESTIONS as JusteChiffreQuestion[])
+      : (QUESTIONS as QuizQuestion[]);
+
     const rawList: QuizQuestionPayload[] =
       Array.isArray(quizState.questions) && quizState.questions.length > 0
         ? quizState.questions
-        : (QUESTIONS as QuizQuestion[]);
+        : fallbackPool;
 
     if (rawList.length > 0) {
       const ordered = shuffleWithSeed<QuizQuestionPayload>(
@@ -489,11 +606,12 @@ export default function PlayerControllerPage() {
       return ordered[safeIdx] ?? null;
     }
 
-    return quizState.currentQuestion ?? null;
+    return null;
   }, [
-    activeQuestionIndex,
-    quizState.questions,
     quizState.currentQuestion,
+    quizState.questions,
+    activeQuestionIndex,
+    isJusteChiffreMode,
     seriesNumber,
     seriesSeed,
     session?.id,
@@ -509,12 +627,17 @@ export default function PlayerControllerPage() {
   }, [activeQuestion]);
 
   const questionDuration = useMemo<number>(() => {
-    return typeof quizState.durationSeconds === "number" &&
+    if (
+      typeof quizState.durationSeconds === "number" &&
       Number.isFinite(quizState.durationSeconds) &&
       quizState.durationSeconds > 0
-      ? quizState.durationSeconds
+    ) {
+      return quizState.durationSeconds;
+    }
+    return isJusteChiffreMode
+      ? DEFAULT_JUSTE_CHIFFRE_DURATION_SECONDS
       : DEFAULT_QUESTION_DURATION_SECONDS;
-  }, [quizState.durationSeconds]);
+  }, [quizState.durationSeconds, isJusteChiffreMode]);
 
   const settleSnapshot = (
     snapshot: QuestionSnapshot | null,
@@ -592,7 +715,7 @@ export default function PlayerControllerPage() {
   };
 
   useEffect(() => {
-    if (!currentQuestionKey || !activeQuestion) return;
+    if (isJusteChiffreMode || !currentQuestionKey || !activeQuestion) return;
 
     const existing = snapshotByKeyRef.current[currentQuestionKey];
     const chosen =
@@ -607,6 +730,7 @@ export default function PlayerControllerPage() {
       chosenLetter: chosen,
     };
   }, [
+    isJusteChiffreMode,
     currentQuestionKey,
     activeQuestion,
     parsedOptions,
@@ -616,7 +740,7 @@ export default function PlayerControllerPage() {
 
   useEffect(() => {
     const previousKey = prevQuestionKeyRef.current;
-    if (previousKey && previousKey !== currentQuestionKey) {
+    if (!isJusteChiffreMode && previousKey && previousKey !== currentQuestionKey) {
       const prevSnap = snapshotByKeyRef.current[previousKey] ?? null;
       settleSnapshot(prevSnap, false);
     }
@@ -627,10 +751,43 @@ export default function PlayerControllerPage() {
     setSubmittedQuestionKey(null);
     setSubmittedChoiceLetter(null);
     setHighlightedChoiceLetter(null);
+    setDigitsInput("");
+    setSubmittedEstimate(null);
+    setEstimateFeedback(null);
     setRemainingSeconds(questionDuration);
     setStatusMessage("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeGameId, currentQuestionKey, questionDuration]);
+  }, [
+    isJusteChiffreMode,
+    activeGameId,
+    currentQuestionKey,
+    questionDuration,
+  ]);
+
+  // Restauration de l'estimation existante si le joueur recharge ou se synchronise
+  useEffect(() => {
+    if (!isJusteChiffreMode || !identity?.playerId) return;
+    const rawMap =
+      quizState.estimates ?? quizState.guesses ?? quizState.answers ?? {};
+    const existingEst = parseNumericEstimate(
+      rawMap[String(identity.playerId)],
+      minEstimate,
+      maxEstimate
+    );
+    if (existingEst !== null && submittedEstimate === null) {
+      setSubmittedEstimate(existingEst);
+      setDigitsInput(String(existingEst));
+    }
+  }, [
+    isJusteChiffreMode,
+    identity?.playerId,
+    quizState.estimates,
+    quizState.guesses,
+    quizState.answers,
+    minEstimate,
+    maxEstimate,
+    submittedEstimate,
+  ]);
 
   useEffect(() => {
     if (
@@ -643,7 +800,10 @@ export default function PlayerControllerPage() {
     }
 
     const tick = () => {
-      const elapsed = Math.max(0, (Date.now() - questionStartMsRef.current) / 1000);
+      const elapsed = Math.max(
+        0,
+        (Date.now() - questionStartMsRef.current) / 1000
+      );
       setRemainingSeconds(Math.max(0, questionDuration - elapsed));
     };
 
@@ -669,17 +829,29 @@ export default function PlayerControllerPage() {
   const isPlaying = roundStatus === "playing" && !isTimerExpired;
 
   useEffect(() => {
-    if (!isTimerExpired || !currentQuestionKey) return;
+    if (isJusteChiffreMode || !isTimerExpired || !currentQuestionKey) return;
     const snap = snapshotByKeyRef.current[currentQuestionKey] ?? null;
     settleSnapshot(snap, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTimerExpired, currentQuestionKey, identity?.playerId]);
+  }, [isJusteChiffreMode, isTimerExpired, currentQuestionKey, identity?.playerId]);
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
 
     let isMounted = true;
     let childrenChannel: ReturnType<typeof supabase.channel> | null = null;
+
+    const loadGameMeta = async (gameId: string | null | undefined) => {
+      if (!gameId) return;
+      const { data } = await supabase
+        .from("games")
+        .select("title, slug")
+        .eq("id", gameId)
+        .maybeSingle<{ title?: string | null; slug?: string | null }>();
+      if (isMounted && data) {
+        setGameMeta(data);
+      }
+    };
 
     const loadPlayersAndScores = async (targetSessionId: string) => {
       const [{ data: playersData }, { data: scoresData }] = await Promise.all([
@@ -747,6 +919,7 @@ export default function PlayerControllerPage() {
       }
 
       void loadPlayersAndScores(targetSession.id);
+      void loadGameMeta(targetSession.game_id);
 
       childrenChannel = supabase
         .channel(`play-children-${targetSession.id}`)
@@ -995,7 +1168,12 @@ export default function PlayerControllerPage() {
     letter: string;
     optionValue: string;
   }) => {
-    if (!identity || alreadySubmittedThisQuestion || !isPlaying || !currentQuestionKey) {
+    if (
+      !identity ||
+      alreadySubmittedThisQuestion ||
+      !isPlaying ||
+      !currentQuestionKey
+    ) {
       return;
     }
 
@@ -1012,7 +1190,7 @@ export default function PlayerControllerPage() {
     if (supabase && session?.id) {
       const currentAnswers =
         quizState.answers && typeof quizState.answers === "object"
-          ? { ...quizState.answers }
+          ? ({ ...quizState.answers } as Record<string, string>)
           : {};
       currentAnswers[String(identity.playerId)] = chosenLetter;
 
@@ -1065,7 +1243,134 @@ export default function PlayerControllerPage() {
       highlightTimeoutRef.current = null;
     }, 1000);
 
-    setStatusMessage(`Choix ${chosenLetter} enregistré (points à la fin du chrono)`);
+    setStatusMessage(
+      `Choix ${chosenLetter} enregistré (points à la fin du chrono)`
+    );
+  };
+
+  // --- Handlers pavé numérique Le Juste Chiffre ---
+  const isKeypadLocked =
+    submittedEstimate !== null || !isPlaying || isSubmittingEstimate;
+
+  const handleDigitPress = (digit: string) => {
+    if (isKeypadLocked) return;
+    setEstimateFeedback(null);
+    setDigitsInput((prev) => {
+      if (prev === "0") {
+        return digit === "0" ? "0" : digit;
+      }
+      const next = `${prev}${digit}`;
+      if (next.length > 4) return prev;
+      const parsed = Number(next);
+      if (parsed > maxEstimate) {
+        setEstimateFeedback(
+          `Maximum ${maxEstimate} (entre ${minEstimate} et ${maxEstimate})`
+        );
+        return prev;
+      }
+      return next;
+    });
+  };
+
+  const handleBackspaceDigit = () => {
+    if (isKeypadLocked) return;
+    setEstimateFeedback(null);
+    setDigitsInput((prev) => prev.slice(0, -1));
+  };
+
+  const handleClearDigits = () => {
+    if (isKeypadLocked) return;
+    setEstimateFeedback(null);
+    setDigitsInput("");
+  };
+
+  const handleSubmitEstimate = async () => {
+    if (isKeypadLocked || !identity) return;
+
+    const trimmed = digitsInput.trim();
+    if (!trimmed) {
+      setEstimateFeedback(
+        `Entre un nombre entre ${minEstimate} et ${maxEstimate}.`
+      );
+      return;
+    }
+
+    const numericValue = Number(trimmed);
+    if (
+      !Number.isInteger(numericValue) ||
+      numericValue < minEstimate ||
+      numericValue > maxEstimate
+    ) {
+      setEstimateFeedback(
+        `La réponse doit être entre ${minEstimate} et ${maxEstimate}.`
+      );
+      return;
+    }
+
+    setIsSubmittingEstimate(true);
+    setEstimateFeedback(null);
+
+    try {
+      const round = (activeQuestionIndex ?? 0) + 1;
+      const playerIdStr = String(identity.playerId);
+
+      const currentEstimates =
+        quizState.estimates && typeof quizState.estimates === "object"
+          ? { ...quizState.estimates }
+          : {};
+      const currentAnswers =
+        quizState.answers && typeof quizState.answers === "object"
+          ? { ...quizState.answers }
+          : {};
+
+      currentEstimates[playerIdStr] = numericValue;
+      currentAnswers[playerIdStr] = String(numericValue);
+
+      const nextGameState: QuizGameState = {
+        ...quizState,
+        estimates: currentEstimates,
+        answers: currentAnswers,
+      };
+
+      if (supabase && session?.id) {
+        const [{ error: actionError }, { error: updateError }] =
+          await Promise.all([
+            supabase.from("player_actions").insert({
+              session_id: session.id,
+              player_id: identity.playerId,
+              round_number: round,
+              action_type: "estimate",
+              payload: {
+                guess: numericValue,
+                question_index: activeQuestionIndex ?? 0,
+              },
+            }),
+            supabase
+              .from("game_sessions")
+              .update({ game_state: nextGameState })
+              .eq("id", session.id),
+          ]);
+
+        if (actionError || updateError) {
+          setEstimateFeedback(
+            `Envoi impossible : ${
+              actionError?.message ?? updateError?.message ?? ""
+            }`
+          );
+          return;
+        }
+      }
+
+      setSubmittedEstimate(numericValue);
+      setSession((prev) => {
+        const updated = prev ? { ...prev, game_state: nextGameState } : prev;
+        sessionRef.current = updated;
+        return updated;
+      });
+      setStatusMessage(`Estimation ${numericValue} validée !`);
+    } finally {
+      setIsSubmittingEstimate(false);
+    }
   };
 
   return (
@@ -1158,6 +1463,8 @@ export default function PlayerControllerPage() {
                   <div className="text-xs opacity-90 font-semibold">
                     {activeQuestionIndex !== null
                       ? `Question ${activeQuestionIndex + 1}`
+                      : isJusteChiffreMode
+                      ? "Le Juste Chiffre"
                       : "Quiz"}{" "}
                     • État : <span className="uppercase">{roundStatus}</span>
                   </div>
@@ -1183,7 +1490,107 @@ export default function PlayerControllerPage() {
                       : "En attente"}
                   </p>
                 </div>
+              ) : isJusteChiffreMode ? (
+                /* ================= PAVÉ NUMÉRIQUE LE JUSTE CHIFFRE (1 - 1000) ================= */
+                <div className="flex-1 flex flex-col justify-between gap-3">
+                  <div className="rounded-2xl bg-black/40 border border-white/10 p-3 flex flex-col items-center gap-1.5">
+                    <div className="w-full flex items-center justify-between text-[11px] font-bold text-neutral-400">
+                      <span className="inline-flex items-center gap-1 text-amber-300">
+                        <Target className="w-3.5 h-3.5" />
+                        {minEstimate} à {maxEstimate}
+                      </span>
+                      {submittedEstimate !== null ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-300">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          Validé
+                        </span>
+                      ) : isKeypadLocked ? (
+                        <span className="inline-flex items-center gap-1 text-amber-300">
+                          <Lock className="w-3.5 h-3.5" />
+                          Verrouillé
+                        </span>
+                      ) : (
+                        <span>Tape ton chiffre</span>
+                      )}
+                    </div>
+
+                    <div className="w-full py-2.5 px-3 rounded-xl bg-neutral-900 border border-white/10 text-center font-mono text-4xl font-black tracking-wider text-amber-300">
+                      {submittedEstimate !== null
+                        ? submittedEstimate
+                        : digitsInput || "—"}
+                      {activeQuestion?.unit &&
+                      (submittedEstimate !== null || digitsInput) ? (
+                        <span className="text-sm font-sans font-bold text-neutral-300 ml-1.5">
+                          {activeQuestion.unit}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {estimateFeedback && (
+                      <p className="text-xs font-bold text-rose-300 text-center">
+                        {estimateFeedback}
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-2">
+                    {KEYPAD_DIGITS.map((digit) => (
+                      <button
+                        key={digit}
+                        type="button"
+                        disabled={isKeypadLocked}
+                        onClick={() => handleDigitPress(digit)}
+                        className="h-12 rounded-2xl bg-white/10 hover:bg-white/20 active:scale-95 disabled:opacity-35 disabled:pointer-events-none border border-white/15 font-mono text-xl font-black text-white transition"
+                      >
+                        {digit}
+                      </button>
+                    ))}
+
+                    <button
+                      type="button"
+                      disabled={isKeypadLocked || !digitsInput}
+                      onClick={handleClearDigits}
+                      aria-label="Effacer"
+                      className="h-12 rounded-2xl bg-rose-500/15 hover:bg-rose-500/25 active:scale-95 disabled:opacity-35 disabled:pointer-events-none border border-rose-400/35 flex items-center justify-center text-rose-200 transition"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isKeypadLocked}
+                      onClick={() => handleDigitPress("0")}
+                      className="h-12 rounded-2xl bg-white/10 hover:bg-white/20 active:scale-95 disabled:opacity-35 disabled:pointer-events-none border border-white/15 font-mono text-xl font-black text-white transition"
+                    >
+                      0
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isKeypadLocked || !digitsInput}
+                      onClick={handleBackspaceDigit}
+                      aria-label="Corriger"
+                      className="h-12 rounded-2xl bg-amber-500/15 hover:bg-amber-500/25 active:scale-95 disabled:opacity-35 disabled:pointer-events-none border border-amber-400/35 flex items-center justify-center text-amber-200 transition"
+                    >
+                      <Delete className="w-4 h-4" />
+                    </button>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={isKeypadLocked || !digitsInput}
+                    onClick={() => void handleSubmitEstimate()}
+                    className="w-full h-12 rounded-2xl bg-emerald-400 hover:bg-emerald-300 active:scale-[0.99] disabled:bg-white/10 disabled:text-neutral-500 disabled:pointer-events-none text-black font-black text-sm uppercase tracking-wider transition"
+                  >
+                    {submittedEstimate !== null
+                      ? `Estimation validée (${submittedEstimate})`
+                      : isSubmittingEstimate
+                      ? "Validation..."
+                      : "Valider"}
+                  </button>
+                </div>
               ) : (
+                /* ================= 4 BOUTONS QUIZ (A / B / C / D) ================= */
                 <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-4 min-h-[300px]">
                   {qcmChoices.map((choice) => {
                     const isHighlighted =
@@ -1192,7 +1599,9 @@ export default function PlayerControllerPage() {
                       <button
                         key={choice.letter}
                         type="button"
-                        disabled={alreadySubmittedThisQuestion || isTimerExpired}
+                        disabled={
+                          alreadySubmittedThisQuestion || isTimerExpired
+                        }
                         onClick={() =>
                           void handleSubmitChoice({
                             letter: choice.letter,
