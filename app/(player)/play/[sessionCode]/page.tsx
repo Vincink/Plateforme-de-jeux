@@ -59,6 +59,10 @@ type ExtendedGameSession = GameSession & {
   game_state?: QuizGameState | null;
 };
 
+interface WakeLockSentinelLike {
+  release: () => Promise<void>;
+}
+
 const CHOICE_STYLES = [
   {
     letter: "A",
@@ -193,6 +197,7 @@ export default function PlayerControllerPage() {
   const [statusMessage, setStatusMessage] = useState<string>("");
 
   const highlightTimeoutRef = useRef<number | null>(null);
+  const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
 
   const clearHighlightTimer = () => {
     if (highlightTimeoutRef.current !== null) {
@@ -204,6 +209,54 @@ export default function PlayerControllerPage() {
   useEffect(() => {
     return () => {
       clearHighlightTimer();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof navigator === "undefined" || !("wakeLock" in navigator)) {
+      return;
+    }
+
+    let isDisposed = false;
+
+    const requestWakeLock = async () => {
+      if (isDisposed || document.visibilityState !== "visible") return;
+      try {
+        const navWithLock = navigator as Navigator & {
+          wakeLock?: {
+            request: (type: "screen") => Promise<WakeLockSentinelLike>;
+          };
+        };
+        if (wakeLockRef.current) return;
+        const sentinel = await navWithLock.wakeLock?.request("screen");
+        if (isDisposed) {
+          await sentinel?.release?.();
+          return;
+        }
+        wakeLockRef.current = sentinel ?? null;
+      } catch {
+        // Ignore if unsupported or blocked by device
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void requestWakeLock();
+      } else {
+        wakeLockRef.current = null;
+      }
+    };
+
+    void requestWakeLock();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      isDisposed = true;
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      if (wakeLockRef.current) {
+        void wakeLockRef.current.release().catch(() => {});
+        wakeLockRef.current = null;
+      }
     };
   }, []);
 
