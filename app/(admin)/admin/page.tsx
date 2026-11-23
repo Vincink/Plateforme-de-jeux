@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   Play,
   Pause,
+  RotateCcw,
   SkipForward,
   Square,
   Users,
@@ -41,7 +42,7 @@ const UUID_REGEX =
 
 const GRAND_QUIZ_UUID = "6e6d7179-3a56-4d94-9c1d-19ac06a34aaa";
 const QUESTION_DURATION_SECONDS = 12; // Durée du chrono par question (en secondes)
-const QUESTIONS_PER_GAME = 15; // Nombre de questions par partie
+const QUESTIONS_PER_GAME = 15; // Nombre de questions par série
 
 function isUuid(value: string | undefined | null): value is string {
   return typeof value === "string" && UUID_REGEX.test(value);
@@ -78,6 +79,10 @@ export default function AdminConsolePage() {
   const [questionStartedAt, setQuestionStartedAt] = useState<string | null>(
     null
   );
+  const [pausedRemainingSeconds, setPausedRemainingSeconds] = useState<
+    number | null
+  >(null);
+  const [seriesNumber, setSeriesNumber] = useState<number>(1);
   const [showQrOnTv, setShowQrOnTv] = useState<boolean>(true);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
@@ -89,6 +94,10 @@ export default function AdminConsolePage() {
 
   const selectedGame =
     games.find((g) => g.id === selectedGameId) ?? games[0];
+
+  const totalQuestions = Math.min(QUESTIONS_PER_GAME, QUESTIONS.length);
+  const isEndOfSeries =
+    totalQuestions > 0 && questionIndex >= totalQuestions - 1;
 
   const resolveValidGameUuid = (
     candidateGame?: CatalogGame | null
@@ -193,6 +202,9 @@ export default function AdminConsolePage() {
     qrVisible: boolean;
     nextQuestionIndex?: number;
     nextQuestionStartedAt?: string | null;
+    nextPausedRemaining?: number | null;
+    nextSeriesNumber?: number;
+    resetAnswers?: boolean;
   }) => {
     if (!supabase) {
       setDbError(
@@ -219,12 +231,23 @@ export default function AdminConsolePage() {
         ? params.nextQuestionStartedAt
         : questionStartedAt;
 
+    const effectivePausedRemaining =
+      params.nextPausedRemaining !== undefined
+        ? params.nextPausedRemaining
+        : pausedRemainingSeconds;
+
+    const effectiveSeries =
+      params.nextSeriesNumber !== undefined
+        ? params.nextSeriesNumber
+        : seriesNumber;
+
     const isQuizGame =
       validGameUuid === GRAND_QUIZ_UUID ||
       (params.game ?? selectedGame)?.slug === "quiz" ||
       (params.game ?? selectedGame)?.title?.toLowerCase().includes("quiz");
 
     const hasQuestionStarted = effectiveQuestionIndex >= 0;
+    const isPaused = params.nextStatus === "paused";
 
     setIsSavingSession(true);
     setDbError(null);
@@ -244,9 +267,12 @@ export default function AdminConsolePage() {
           currentQuestionIndex: effectiveQuestionIndex,
           questionStartedAt: hasQuestionStarted ? effectiveStartedAt : null,
           durationSeconds: QUESTION_DURATION_SECONDS,
+          isPaused,
+          pausedRemainingSeconds: isPaused ? effectivePausedRemaining : null,
+          seriesNumber: effectiveSeries,
           questions: QUESTIONS,
           revealed: false,
-          answers: {},
+          ...(params.resetAnswers !== false ? { answers: {} } : {}),
         };
       }
 
@@ -257,7 +283,6 @@ export default function AdminConsolePage() {
           .eq("id", params.id);
 
         if (error) {
-          // Repli si la colonne game_state n'existe pas encore dans game_sessions
           const { error: fallbackError } = await supabase
             .from("game_sessions")
             .update({
@@ -347,6 +372,8 @@ export default function AdminConsolePage() {
             qrVisible: showQrOnTv,
             nextQuestionIndex: -1,
             nextQuestionStartedAt: null,
+            nextPausedRemaining: null,
+            nextSeriesNumber: 1,
           });
         }
       } else if (!cancelled) {
@@ -364,7 +391,7 @@ export default function AdminConsolePage() {
   }, []);
 
   // ==========================================================================
-  // 3. ACTIONS DE L'ANIMATEUR (Nouvelle salle, Lancer, Pause, Question suivante, etc.)
+  // 3. ACTIONS DE L'ANIMATEUR (Nouvelle salle, Lancer/Relancer, Pause, Question suivante)
   // ==========================================================================
 
   const handleCreateNewSession = async () => {
@@ -374,6 +401,8 @@ export default function AdminConsolePage() {
     setStatus("lobby");
     setQuestionIndex(-1);
     setQuestionStartedAt(null);
+    setPausedRemainingSeconds(null);
+    setSeriesNumber(1);
     setPlayers([]);
     setScores([]);
 
@@ -385,52 +414,141 @@ export default function AdminConsolePage() {
       qrVisible: showQrOnTv,
       nextQuestionIndex: -1,
       nextQuestionStartedAt: null,
+      nextPausedRemaining: null,
+      nextSeriesNumber: 1,
     });
   };
 
+  // Gère Lancer, Pause (fige le chrono), Reprendre et Terminer
   const handleStatusChange = async (nextStatus: SessionStatus) => {
-    setStatus(nextStatus);
+    const nowMs = Date.now();
     const shouldResetQuestions =
       nextStatus === "lobby" || nextStatus === "finished";
-    const nextIdx = shouldResetQuestions ? -1 : questionIndex;
-    const nextStarted = shouldResetQuestions ? null : questionStartedAt;
 
     if (shouldResetQuestions) {
+      setStatus(nextStatus);
       setQuestionIndex(-1);
       setQuestionStartedAt(null);
+      setPausedRemainingSeconds(null);
+
+      await syncSessionToDb({
+        id: sessionId,
+        code: sessionCode,
+        game: selectedGame,
+        nextStatus,
+        qrVisible: showQrOnTv,
+        nextQuestionIndex: -1,
+        nextQuestionStartedAt: null,
+        nextPausedRemaining: null,
+      });
+      return;
     }
+
+    // Mise en pause : on calcule et sauvegarde le temps restant exact pour stopper le chrono TV
+    if (nextStatus === "paused") {
+      let remaining = QUESTION_DURATION_SECONDS;
+      if (questionStartedAt) {
+        const startMs = Date.parse(questionStartedAt);
+        if (!Number.isNaN(startMs)) {
+          const elapsed = Math.max(0, (nowMs - startMs) / 1000);
+          remaining = Math.max(0, QUESTION_DURATION_SECONDS - elapsed);
+        }
+      }
+      setStatus("paused");
+      setPausedRemainingSeconds(remaining);
+
+      await syncSessionToDb({
+        id: sessionId,
+        code: sessionCode,
+        game: selectedGame,
+        nextStatus: "paused",
+        qrVisible: showQrOnTv,
+        nextPausedRemaining: remaining,
+        resetAnswers: false,
+      });
+      return;
+    }
+
+    // Reprise après pause ou lancement initial
+    if (nextStatus === "playing") {
+      let resumedStartedAt = questionStartedAt;
+      if (
+        status === "paused" &&
+        pausedRemainingSeconds !== null &&
+        questionIndex >= 0
+      ) {
+        const elapsedBeforePause =
+          QUESTION_DURATION_SECONDS - pausedRemainingSeconds;
+        resumedStartedAt = new Date(
+          nowMs - elapsedBeforePause * 1000
+        ).toISOString();
+      }
+
+      setStatus("playing");
+      setPausedRemainingSeconds(null);
+      setQuestionStartedAt(resumedStartedAt);
+
+      await syncSessionToDb({
+        id: sessionId,
+        code: sessionCode,
+        game: selectedGame,
+        nextStatus: "playing",
+        qrVisible: showQrOnTv,
+        nextQuestionStartedAt: resumedStartedAt,
+        nextPausedRemaining: null,
+        resetAnswers: false,
+      });
+    }
+  };
+
+  // Relance une nouvelle série de 15 questions différentes à la fin de la partie
+  const handleRestartNewSeries = async () => {
+    const nextSeries = seriesNumber + 1;
+    const startedIso = new Date().toISOString();
+
+    setStatus("playing");
+    setSeriesNumber(nextSeries);
+    setQuestionIndex(0);
+    setQuestionStartedAt(startedIso);
+    setPausedRemainingSeconds(null);
 
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
       game: selectedGame,
-      nextStatus,
+      nextStatus: "playing",
       qrVisible: showQrOnTv,
-      nextQuestionIndex: nextIdx,
-      nextQuestionStartedAt: nextStarted,
+      nextQuestionIndex: 0,
+      nextQuestionStartedAt: startedIso,
+      nextPausedRemaining: null,
+      nextSeriesNumber: nextSeries,
+      resetAnswers: true,
     });
   };
 
-  // Passe à la question suivante (index 0 au 1er clic, puis 1, 2, 3...)
+  // Passe à la question suivante (index 0 au 1er clic, puis 1, 2, ... jusqu'à 14)
   const handleNextQuestion = async () => {
-    const maxQuestionsCount = Math.min(QUESTIONS_PER_GAME, QUESTIONS.length);
     const nextIdx =
       questionIndex < 0
         ? 0
-        : Math.min(questionIndex + 1, Math.max(0, maxQuestionsCount - 1));
+        : Math.min(questionIndex + 1, Math.max(0, totalQuestions - 1));
     const startedIso = new Date().toISOString();
 
+    setStatus("playing");
     setQuestionIndex(nextIdx);
     setQuestionStartedAt(startedIso);
+    setPausedRemainingSeconds(null);
 
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
       game: selectedGame,
-      nextStatus: status,
+      nextStatus: "playing",
       qrVisible: showQrOnTv,
       nextQuestionIndex: nextIdx,
       nextQuestionStartedAt: startedIso,
+      nextPausedRemaining: null,
+      resetAnswers: true,
     });
   };
 
@@ -443,6 +561,7 @@ export default function AdminConsolePage() {
       game: selectedGame,
       nextStatus: status,
       qrVisible: nextQr,
+      resetAnswers: false,
     });
   };
 
@@ -451,6 +570,7 @@ export default function AdminConsolePage() {
     setSelectedGameId(gameId);
     setQuestionIndex(-1);
     setQuestionStartedAt(null);
+    setPausedRemainingSeconds(null);
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
@@ -459,6 +579,7 @@ export default function AdminConsolePage() {
       qrVisible: showQrOnTv,
       nextQuestionIndex: -1,
       nextQuestionStartedAt: null,
+      nextPausedRemaining: null,
     });
   };
 
@@ -468,7 +589,7 @@ export default function AdminConsolePage() {
       setCopiedCode(true);
       setTimeout(() => setCopiedCode(false), 2000);
     } catch {
-      // Ignore clipboard errors on restricted contexts
+      // Ignore clipboard errors
     }
   };
 
@@ -561,8 +682,6 @@ export default function AdminConsolePage() {
       setDbError(`Mise à jour score impossible : ${error.message}`);
     }
   };
-
-  const totalQuestions = Math.min(QUESTIONS_PER_GAME, QUESTIONS.length);
 
   // ==========================================================================
   // 4. RENDU VISUEL DE LA CONSOLE ADMIN (JSX)
@@ -673,28 +792,45 @@ export default function AdminConsolePage() {
 
                 {/* Grille des 4 boutons de contrôle de partie */}
                 <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => void handleStatusChange("playing")}
-                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-black font-semibold transition"
-                  >
-                    <Play className="w-4 h-4" />
-                    <span>Lancer</span>
-                  </button>
+                  {/* Bouton Lancer (ou Relancer au bout des 15 questions) */}
+                  {isEndOfSeries ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleRestartNewSeries()}
+                      className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-sky-500 hover:bg-sky-400 text-black font-semibold transition"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      <span>Relancer</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={status === "playing"}
+                      onClick={() => void handleStatusChange("playing")}
+                      className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/25 disabled:text-emerald-200/50 disabled:cursor-not-allowed text-black font-semibold transition"
+                    >
+                      <Play className="w-4 h-4" />
+                      <span>Lancer</span>
+                    </button>
+                  )}
 
+                  {/* Bouton Pause (arrête le chronomètre) */}
                   <button
                     type="button"
+                    disabled={status !== "playing"}
                     onClick={() => void handleStatusChange("paused")}
-                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 font-semibold transition"
+                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed text-amber-300 border border-amber-500/30 font-semibold transition"
                   >
                     <Pause className="w-4 h-4" />
                     <span>Pause</span>
                   </button>
 
+                  {/* Bouton Question suivante */}
                   <button
                     type="button"
+                    disabled={isEndOfSeries}
                     onClick={() => void handleNextQuestion()}
-                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-semibold transition"
+                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold transition"
                   >
                     <SkipForward className="w-4 h-4" />
                     <span>
@@ -704,6 +840,7 @@ export default function AdminConsolePage() {
                     </span>
                   </button>
 
+                  {/* Bouton Terminer */}
                   <button
                     type="button"
                     onClick={() => void handleStatusChange("finished")}
