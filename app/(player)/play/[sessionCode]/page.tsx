@@ -1339,8 +1339,9 @@ export default function PlayerControllerPage() {
               session_id: session.id,
               player_id: identity.playerId,
               round_number: round,
-              action_type: "estimate",
+              action_type: "answer",
               payload: {
+                answer: String(numericValue),
                 guess: numericValue,
                 question_index: activeQuestionIndex ?? 0,
               },
