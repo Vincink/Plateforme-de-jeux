@@ -203,43 +203,6 @@ function resolveCorrectLetter(
   );
 }
 
-function computeRemainingSeconds(
-  state: QuizGameState,
-  nowMs: number
-): number {
-  const duration =
-    typeof state.durationSeconds === "number" &&
-    Number.isFinite(state.durationSeconds) &&
-    state.durationSeconds > 0
-      ? state.durationSeconds
-      : DEFAULT_QUESTION_DURATION_SECONDS;
-
-  if (
-    state.isPaused &&
-    typeof state.pausedRemainingSeconds === "number" &&
-    Number.isFinite(state.pausedRemainingSeconds)
-  ) {
-    return Math.max(0, state.pausedRemainingSeconds);
-  }
-
-  const rawStart = state.questionStartedAt;
-  if (rawStart === null || rawStart === undefined || rawStart === "") {
-    return duration;
-  }
-
-  const startMs =
-    typeof rawStart === "number" ? rawStart : Date.parse(String(rawStart));
-  if (Number.isNaN(startMs)) {
-    return duration;
-  }
-
-  const elapsedSeconds = Math.max(0, (nowMs - startMs) / 1000);
-  if (elapsedSeconds > duration + 30) {
-    return duration;
-  }
-  return Math.max(0, duration - elapsedSeconds);
-}
-
 function extractScoreValue(row: PlayerScore | undefined): number {
   if (!row) return 0;
   const rec = row as unknown as { total_score?: number; score?: number };
@@ -278,8 +241,9 @@ export default function PlayerControllerPage() {
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const settledQuestionsRef = useRef<Set<string>>(new Set());
   const currentScoreRef = useRef<number>(0);
-  const snapshotRef = useRef<QuestionSnapshot | null>(null);
+  const snapshotByKeyRef = useRef<Record<string, QuestionSnapshot>>({});
   const prevQuestionKeyRef = useRef<string | null>(null);
+  const questionStartMsRef = useRef<number>(Date.now());
   const identityRef = useRef<PlayerIdentity | null>(null);
   const sessionRef = useRef<ExtendedGameSession | null>(null);
   const scoresRef = useRef<PlayerScore[]>([]);
@@ -498,6 +462,14 @@ export default function PlayerControllerPage() {
     return extractOptions(raw);
   }, [activeQuestion]);
 
+  const questionDuration = useMemo<number>(() => {
+    return typeof quizState.durationSeconds === "number" &&
+      Number.isFinite(quizState.durationSeconds) &&
+      quizState.durationSeconds > 0
+      ? quizState.durationSeconds
+      : DEFAULT_QUESTION_DURATION_SECONDS;
+  }, [quizState.durationSeconds]);
+
   const settleSnapshot = (
     snapshot: QuestionSnapshot | null,
     updateMessage: boolean
@@ -509,13 +481,7 @@ export default function PlayerControllerPage() {
     const settlementKey = `${activeIdentity.playerId}::${snapshot.key}`;
     if (settledQuestionsRef.current.has(settlementKey)) return;
 
-    const latestAnswers = activeSession?.game_state?.answers;
-    const stateAnswer = normalizeAnswerLetter(
-      latestAnswers?.[String(activeIdentity.playerId)],
-      snapshot.options
-    );
-    const chosenLetter = snapshot.chosenLetter ?? stateAnswer;
-
+    const chosenLetter = snapshot.chosenLetter;
     settledQuestionsRef.current.add(settlementKey);
 
     if (!chosenLetter) {
@@ -579,115 +545,93 @@ export default function PlayerControllerPage() {
     }
   };
 
+  // Enregistre le snapshot de la question courante par clé unique
   useEffect(() => {
     if (!currentQuestionKey || !activeQuestion) return;
 
-    const chosenLetter =
-      submittedQuestionKey === currentQuestionKey
+    const existing = snapshotByKeyRef.current[currentQuestionKey];
+    const chosen =
+      submittedQuestionKey === currentQuestionKey && submittedChoiceLetter
         ? submittedChoiceLetter
-        : normalizeAnswerLetter(
-            quizState.answers?.[String(identity?.playerId ?? "")],
-            parsedOptions
-          );
+        : existing?.chosenLetter ?? null;
 
-    if (snapshotRef.current && snapshotRef.current.key === currentQuestionKey) {
-      snapshotRef.current = {
-        ...snapshotRef.current,
-        question: activeQuestion,
-        options: parsedOptions,
-        chosenLetter: chosenLetter ?? snapshotRef.current.chosenLetter,
-      };
-    } else {
-      snapshotRef.current = {
-        key: currentQuestionKey,
-        question: activeQuestion,
-        options: parsedOptions,
-        chosenLetter,
-      };
-    }
+    snapshotByKeyRef.current[currentQuestionKey] = {
+      key: currentQuestionKey,
+      question: activeQuestion,
+      options: parsedOptions,
+      chosenLetter: chosen,
+    };
   }, [
     currentQuestionKey,
     activeQuestion,
     parsedOptions,
     submittedQuestionKey,
     submittedChoiceLetter,
-    quizState.answers,
-    identity?.playerId,
   ]);
 
+  // Au changement de question : règle la question précédente si besoin, puis réinitialise proprement le chrono
   useEffect(() => {
     const previousKey = prevQuestionKeyRef.current;
-    if (
-      previousKey &&
-      previousKey !== currentQuestionKey &&
-      snapshotRef.current &&
-      snapshotRef.current.key === previousKey
-    ) {
-      settleSnapshot(snapshotRef.current, false);
+    if (previousKey && previousKey !== currentQuestionKey) {
+      const prevSnap = snapshotByKeyRef.current[previousKey] ?? null;
+      settleSnapshot(prevSnap, false);
     }
 
     prevQuestionKeyRef.current = currentQuestionKey;
+    questionStartMsRef.current = Date.now();
     clearHighlightTimer();
     setSubmittedQuestionKey(null);
     setSubmittedChoiceLetter(null);
     setHighlightedChoiceLetter(null);
-    const freshDuration =
-      typeof quizState.durationSeconds === "number" &&
-      quizState.durationSeconds > 0
-        ? quizState.durationSeconds
-        : DEFAULT_QUESTION_DURATION_SECONDS;
-    setRemainingSeconds(freshDuration);
+    setRemainingSeconds(questionDuration);
     setStatusMessage("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeGameId, currentQuestionKey]);
+  }, [activeGameId, currentQuestionKey, questionDuration]);
 
+  // Décompte du chronomètre uniquement quand une question est active
   useEffect(() => {
     if (
-      activeQuestionIndex === null ||
+      currentQuestionKey === null ||
       roundStatus !== "playing" ||
-      quizState.revealed
+      quizState.revealed ||
+      quizState.isPaused
     ) {
       return;
     }
 
-    const updateTimer = () => {
-      setRemainingSeconds(computeRemainingSeconds(quizState, Date.now()));
+    const tick = () => {
+      const elapsed = Math.max(0, (Date.now() - questionStartMsRef.current) / 1000);
+      setRemainingSeconds(Math.max(0, questionDuration - elapsed));
     };
 
-    updateTimer();
-    const intervalId = window.setInterval(updateTimer, 200);
+    tick();
+    const intervalId = window.setInterval(tick, 200);
     return () => window.clearInterval(intervalId);
   }, [
-    activeQuestionIndex,
+    currentQuestionKey,
     roundStatus,
     quizState.revealed,
-    quizState.questionStartedAt,
-    quizState.durationSeconds,
     quizState.isPaused,
-    quizState.pausedRemainingSeconds,
-    quizState,
+    questionDuration,
   ]);
 
   const alreadySubmittedThisQuestion =
     currentQuestionKey !== null &&
     submittedQuestionKey === currentQuestionKey;
   const isTimerExpired =
-    activeQuestionIndex !== null &&
+    currentQuestionKey !== null &&
     roundStatus === "playing" &&
+    !quizState.isPaused &&
     (remainingSeconds <= 0 || Boolean(quizState.revealed));
   const isPlaying = roundStatus === "playing" && !isTimerExpired;
 
+  // Évalue la question courante dès que le chrono est écoulé
   useEffect(() => {
-    if (!isTimerExpired || !activeSnapshotRefCheck()) return;
-    settleSnapshot(snapshotRef.current, true);
+    if (!isTimerExpired || !currentQuestionKey) return;
+    const snap = snapshotByKeyRef.current[currentQuestionKey] ?? null;
+    settleSnapshot(snap, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isTimerExpired, identity?.playerId, currentQuestionKey]);
-
-  function activeSnapshotRefCheck(): boolean {
-    return Boolean(
-      snapshotRef.current && snapshotRef.current.key === currentQuestionKey
-    );
-  }
+  }, [isTimerExpired, currentQuestionKey, identity?.playerId]);
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
@@ -1010,19 +954,19 @@ export default function PlayerControllerPage() {
     letter: string;
     optionValue: string;
   }) => {
-    if (!identity || alreadySubmittedThisQuestion || !isPlaying) return;
+    if (!identity || alreadySubmittedThisQuestion || !isPlaying || !currentQuestionKey) {
+      return;
+    }
 
     const round = (activeQuestionIndex ?? 0) + 1;
     const chosenLetter = choice.letter;
 
-    if (currentQuestionKey && activeQuestion) {
-      snapshotRef.current = {
-        key: currentQuestionKey,
-        question: activeQuestion,
-        options: parsedOptions,
-        chosenLetter,
-      };
-    }
+    snapshotByKeyRef.current[currentQuestionKey] = {
+      key: currentQuestionKey,
+      question: activeQuestion ?? {},
+      options: parsedOptions,
+      chosenLetter,
+    };
 
     if (supabase && session?.id) {
       const currentAnswers =
