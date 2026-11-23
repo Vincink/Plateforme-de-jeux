@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Check, Clock, Trophy, Tv } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
@@ -50,6 +50,10 @@ interface QuizStatePayload {
   round_started_at?: string | number | null;
   durationSeconds?: number;
   duration_seconds?: number;
+  isPaused?: boolean;
+  pausedRemainingSeconds?: number | null;
+  seriesNumber?: number;
+  seriesSeed?: string;
   answers?: Record<string, AnswerLetter | string>;
   revealed?: boolean;
   showAnswers?: boolean;
@@ -144,14 +148,8 @@ function hashStringToSeed(input: string): number {
   return hash >>> 0;
 }
 
-// Sélectionne une série aléatoire de 15 questions (stable pour toute la session)
-function pickRandomQuestionsSeries(
-  source: QuizQuestionItem[],
-  count: number,
-  seedKey: string
-): QuizQuestionItem[] {
-  if (!Array.isArray(source) || source.length === 0) return [];
-  const copy = [...source];
+function shuffleWithSeed<T>(items: T[], seedKey: string): T[] {
+  const copy = [...items];
   let seed = hashStringToSeed(seedKey) || 1;
   const nextRand = () => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
@@ -166,7 +164,42 @@ function pickRandomQuestionsSeries(
       copy[j] = itemI;
     }
   }
-  return copy.slice(0, Math.min(count, copy.length));
+  return copy;
+}
+
+function getQuestionUniqueKey(q: QuizQuestionItem, fallbackIdx: number): string {
+  if (q.id !== undefined && q.id !== null) return `id:${String(q.id)}`;
+  const label = q.question || q.prompt || q.title || q.text || "";
+  return label ? `txt:${label.trim().toLowerCase()}` : `idx:${fallbackIdx}`;
+}
+
+// Sélectionne une série aléatoire de 15 questions différente à chaque relance
+function pickRandomQuestionsSeries(
+  source: QuizQuestionItem[],
+  count: number,
+  seedSignature: string,
+  excludedKeys: ReadonlySet<string> = new Set()
+): QuizQuestionItem[] {
+  if (!Array.isArray(source) || source.length === 0) return [];
+  const targetCount = Math.min(count, source.length);
+  const shuffled = shuffleWithSeed(source, seedSignature);
+
+  const freshQuestions = shuffled.filter((item, idx) => {
+    const k = getQuestionUniqueKey(item, idx);
+    return !excludedKeys.has(k);
+  });
+
+  if (freshQuestions.length >= targetCount) {
+    return freshQuestions.slice(0, targetCount);
+  }
+
+  // Complète avec les questions restantes si le pool non encore joué est plus petit que 15
+  const alreadySeen = shuffled.filter((item, idx) => {
+    const k = getQuestionUniqueKey(item, idx);
+    return excludedKeys.has(k);
+  });
+
+  return [...freshQuestions, ...alreadySeen].slice(0, targetCount);
 }
 
 function toFiniteNumber(raw: unknown): number | null {
@@ -267,6 +300,13 @@ export default function TvQuizPage() {
   const [localQuestionStartMs, setLocalQuestionStartMs] = useState<
     number | null
   >(null);
+  const [frozenRemainingSeconds, setFrozenRemainingSeconds] = useState<
+    number | null
+  >(null);
+
+  // Garde en mémoire les questions déjà jouées lors des séries précédentes
+  const usedQuestionKeysRef = useRef<Set<string>>(new Set());
+  const lastRecordedSeriesKeyRef = useRef<string>("");
 
   // --- Synchronisation temps réel avec Supabase (session + joueurs) ---
   useEffect(() => {
@@ -435,47 +475,69 @@ export default function TvQuizPage() {
     );
   }, [session]);
 
-  const questions = useMemo<QuizQuestionItem[]>(() => {
-    const seedKey = `${session?.id ?? ""}-${sessionCode}`;
+  const seriesNumber = useMemo<number>(() => {
+    return Math.max(1, toFiniteNumber(quizState.seriesNumber) ?? 1);
+  }, [quizState]);
+
+  const seriesSeed = useMemo<string>(() => {
+    const rawSeed =
+      typeof quizState.seriesSeed === "string" && quizState.seriesSeed.trim()
+        ? quizState.seriesSeed.trim()
+        : "";
+    return rawSeed || `${session?.id ?? ""}-${sessionCode}-s${seriesNumber}`;
+  }, [quizState.seriesSeed, session?.id, sessionCode, seriesNumber]);
+
+  const sourceQuestions = useMemo<QuizQuestionItem[]>(() => {
     if (Array.isArray(quizState.questions) && quizState.questions.length > 0) {
-      return pickRandomQuestionsSeries(
-        quizState.questions,
-        QUESTIONS_PER_GAME,
-        seedKey
-      );
+      return quizState.questions;
     }
     if (
       Array.isArray(quizState.quizQuestions) &&
       quizState.quizQuestions.length > 0
     ) {
-      return pickRandomQuestionsSeries(
-        quizState.quizQuestions,
-        QUESTIONS_PER_GAME,
-        seedKey
-      );
+      return quizState.quizQuestions;
     }
     if (Array.isArray(quizState.items) && quizState.items.length > 0) {
-      return pickRandomQuestionsSeries(
-        quizState.items,
-        QUESTIONS_PER_GAME,
-        seedKey
-      );
+      return quizState.items;
     }
     if (Array.isArray(session?.questions) && session.questions.length > 0) {
-      return pickRandomQuestionsSeries(
-        session.questions,
-        QUESTIONS_PER_GAME,
-        seedKey
-      );
+      return session.questions;
     }
-    return pickRandomQuestionsSeries(
-      QUESTIONS as QuizQuestion[],
-      QUESTIONS_PER_GAME,
-      seedKey
-    );
-  }, [quizState, session, sessionCode]);
+    return QUESTIONS as QuizQuestion[];
+  }, [quizState, session]);
 
-  // --- Index de la question active (démarre à 0 au premier clic sur "Manche +1") ---
+  const questions = useMemo<QuizQuestionItem[]>(() => {
+    const signature = `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`;
+    if (lastRecordedSeriesKeyRef.current !== signature) {
+      // Si une nouvelle série démarre, on marque les questions de la précédente comme utilisées
+      lastRecordedSeriesKeyRef.current = signature;
+    }
+
+    const picked = pickRandomQuestionsSeries(
+      sourceQuestions,
+      QUESTIONS_PER_GAME,
+      signature,
+      usedQuestionKeysRef.current
+    );
+
+    // Si on a assez de questions dans le catalogue pour ne pas répéter la série précédente,
+    // on enregistre les clés de cette série pour la prochaine relance
+    if (sourceQuestions.length > QUESTIONS_PER_GAME) {
+      if (
+        usedQuestionKeysRef.current.size + picked.length >=
+        sourceQuestions.length
+      ) {
+        usedQuestionKeysRef.current = new Set();
+      }
+      picked.forEach((item, idx) => {
+        usedQuestionKeysRef.current.add(getQuestionUniqueKey(item, idx));
+      });
+    }
+
+    return picked;
+  }, [sourceQuestions, session?.id, sessionCode, seriesNumber, seriesSeed]);
+
+  // --- Index de la question active ---
   const activeQuestionIndex = useMemo<number | null>(() => {
     const explicitIndex =
       quizState.questionIndex ??
@@ -519,7 +581,12 @@ export default function TvQuizPage() {
     return quizState.currentQuestion ?? quizState.activeQuestion ?? null;
   }, [activeQuestionIndex, questions, quizState]);
 
-  // --- Gestion du chronomètre (12 secondes) ---
+  // --- Gestion du chronomètre (12 secondes) et de la Pause ---
+  const isPaused = useMemo<boolean>(() => {
+    const status = String(session?.status ?? "").toLowerCase();
+    return status === "paused" || Boolean(quizState.isPaused);
+  }, [session, quizState]);
+
   const remoteStartMs = useMemo<number | null>(() => {
     return (
       parseTimestampMs(quizState.questionStartedAt) ??
@@ -531,26 +598,6 @@ export default function TvQuizPage() {
     );
   }, [quizState, session]);
 
-  useEffect(() => {
-    if (activeQuestionIndex === null || !currentQuestion) {
-      setLocalQuestionStartMs(null);
-      return;
-    }
-    const startStamp = remoteStartMs ?? Date.now();
-    setLocalQuestionStartMs(startStamp);
-    setNowMs(Date.now());
-  }, [activeQuestionIndex, currentQuestion, remoteStartMs]);
-
-  useEffect(() => {
-    if (activeQuestionIndex === null || !currentQuestion) return;
-    const interval = window.setInterval(() => {
-      setNowMs(Date.now());
-    }, 200);
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [activeQuestionIndex, currentQuestion]);
-
   const durationSeconds = useMemo<number>(() => {
     const rawDuration =
       toFiniteNumber(quizState.durationSeconds) ??
@@ -559,14 +606,90 @@ export default function TvQuizPage() {
     return Math.max(1, Math.round(rawDuration));
   }, [quizState]);
 
+  // Réinitialise l'heure de départ quand la question ou la série change
+  useEffect(() => {
+    if (activeQuestionIndex === null || !currentQuestion) {
+      setLocalQuestionStartMs(null);
+      setFrozenRemainingSeconds(null);
+      return;
+    }
+    const startStamp = remoteStartMs ?? Date.now();
+    setLocalQuestionStartMs(startStamp);
+    setFrozenRemainingSeconds(null);
+    setNowMs(Date.now());
+  }, [
+    activeQuestionIndex,
+    currentQuestion,
+    remoteStartMs,
+    seriesNumber,
+    seriesSeed,
+  ]);
+
+  // Fige immédiatement la valeur du chrono côté TV dès que la pause est activée
+  useEffect(() => {
+    if (!isPaused || activeQuestionIndex === null || !currentQuestion) {
+      if (!isPaused) {
+        setFrozenRemainingSeconds(null);
+      }
+      return;
+    }
+
+    const fromPayload = toFiniteNumber(quizState.pausedRemainingSeconds);
+    if (fromPayload !== null) {
+      setFrozenRemainingSeconds(Math.max(0, Math.ceil(fromPayload)));
+      return;
+    }
+
+    setFrozenRemainingSeconds((prev) => {
+      if (prev !== null) return prev;
+      const effectiveStart = remoteStartMs ?? localQuestionStartMs ?? nowMs;
+      const elapsedSeconds = Math.max(0, (nowMs - effectiveStart) / 1000);
+      return Math.max(0, Math.ceil(durationSeconds - elapsedSeconds));
+    });
+  }, [
+    isPaused,
+    activeQuestionIndex,
+    currentQuestion,
+    quizState.pausedRemainingSeconds,
+    remoteStartMs,
+    localQuestionStartMs,
+    nowMs,
+    durationSeconds,
+  ]);
+
+  // L'intervalle s'arrête net lorsque la partie est en pause
+  useEffect(() => {
+    if (activeQuestionIndex === null || !currentQuestion || isPaused) return;
+    const interval = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 200);
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [activeQuestionIndex, currentQuestion, isPaused]);
+
   const remainingSeconds = useMemo<number | null>(() => {
     if (activeQuestionIndex === null || !currentQuestion) return null;
+
+    if (isPaused) {
+      if (frozenRemainingSeconds !== null) {
+        return frozenRemainingSeconds;
+      }
+      const fromPayload = toFiniteNumber(quizState.pausedRemainingSeconds);
+      if (fromPayload !== null) {
+        return Math.max(0, Math.ceil(fromPayload));
+      }
+    }
+
     const effectiveStart = remoteStartMs ?? localQuestionStartMs ?? nowMs;
     const elapsedSeconds = Math.max(0, (nowMs - effectiveStart) / 1000);
     return Math.max(0, Math.ceil(durationSeconds - elapsedSeconds));
   }, [
     activeQuestionIndex,
     currentQuestion,
+    isPaused,
+    frozenRemainingSeconds,
+    quizState.pausedRemainingSeconds,
     remoteStartMs,
     localQuestionStartMs,
     nowMs,
@@ -574,6 +697,7 @@ export default function TvQuizPage() {
   ]);
 
   const isTimerExpired =
+    !isPaused &&
     activeQuestionIndex !== null &&
     currentQuestion !== null &&
     remainingSeconds !== null &&
@@ -731,11 +855,13 @@ export default function TvQuizPage() {
 
         {/* Partie droite : Chronomètre + Code de la salle */}
         <div className="flex items-center gap-4 shrink-0">
-          {/* Chronomètre 12s */}
+          {/* Chronomètre 12s (figé si Pause) */}
           {remainingSeconds !== null && (
             <div
               className={`flex items-center gap-2.5 px-5 py-2.5 rounded-2xl border-2 font-mono text-3xl xl:text-4xl font-black transition ${
-                remainingSeconds <= 3
+                isPaused
+                  ? "bg-amber-500/20 border-amber-400/60 text-amber-200"
+                  : remainingSeconds <= 3
                   ? "bg-rose-500/25 border-rose-400 text-rose-200 animate-pulse"
                   : "bg-sky-500/15 border-sky-400/45 text-sky-200"
               }`}
