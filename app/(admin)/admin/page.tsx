@@ -214,43 +214,10 @@ function shuffleWithSeed<T>(items: T[], seedKey: string): T[] {
   return copy;
 }
 
-function getQuestionUniqueKey(q: unknown, fallbackIdx: number): string {
-  if (q && typeof q === "object") {
-    const obj = q as Record<string, unknown>;
-    if (obj.id !== undefined && obj.id !== null) return `id:${String(obj.id)}`;
-    const label = String(
-      obj.question ?? obj.prompt ?? obj.title ?? obj.text ?? ""
-    );
-    if (label.trim()) return `txt:${label.trim().toLowerCase()}`;
-  }
-  return `idx:${fallbackIdx}`;
-}
-
-function pickRandomQuestionsSeries<T>(
-  source: T[],
-  count: number,
-  seedSignature: string,
-  excludedKeys: ReadonlySet<string> = new Set()
-): T[] {
+function pickSeriesQuestions<T>(source: T[], count: number, seedKey: string): T[] {
   if (!Array.isArray(source) || source.length === 0) return [];
   const targetCount = Math.min(count, source.length);
-  const shuffled = shuffleWithSeed(source, seedSignature);
-
-  const freshQuestions = shuffled.filter((item, idx) => {
-    const k = getQuestionUniqueKey(item, idx);
-    return !excludedKeys.has(k);
-  });
-
-  if (freshQuestions.length >= targetCount) {
-    return freshQuestions.slice(0, targetCount);
-  }
-
-  const alreadySeen = shuffled.filter((item, idx) => {
-    const k = getQuestionUniqueKey(item, idx);
-    return excludedKeys.has(k);
-  });
-
-  return [...freshQuestions, ...alreadySeen].slice(0, targetCount);
+  return shuffleWithSeed(source, seedKey).slice(0, targetCount);
 }
 
 function formatPlayerAnswer(rawAnswer: unknown): string | null {
@@ -405,6 +372,11 @@ export default function AdminConsolePage() {
   const [seriesSeed, setSeriesSeed] = useState<string>(() =>
     generateSeriesSeed()
   );
+  const [seriesQuestions, setSeriesQuestions] = useState<unknown[]>(() =>
+    pickSeriesQuestions(QUESTIONS, QUESTIONS_PER_GAME, "init")
+  );
+  const [remoteCurrentQuestion, setRemoteCurrentQuestion] =
+    useState<unknown>(null);
   const [showQrOnTv, setShowQrOnTv] = useState<boolean>(true);
   const [showPlayerAnswersInAdmin, setShowPlayerAnswersInAdmin] =
     useState<boolean>(true);
@@ -430,12 +402,6 @@ export default function AdminConsolePage() {
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
-
-  const usedQuestionKeysRef = useRef<Set<string>>(new Set());
-  const cachedSeriesRef = useRef<{
-    signature: string;
-    items: unknown[];
-  } | null>(null);
 
   useEffect(() => {
     saveGridLayout(layout);
@@ -553,42 +519,16 @@ export default function AdminConsolePage() {
   const isEndOfSeries =
     totalQuestions > 0 && questionIndex >= totalQuestions - 1;
 
-  const seriesSignature = `${sessionId ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`;
-  const activeSeriesQuestions = (() => {
-    if (
-      cachedSeriesRef.current &&
-      cachedSeriesRef.current.signature === seriesSignature
-    ) {
-      return cachedSeriesRef.current.items;
-    }
-
-    const picked = pickRandomQuestionsSeries(
-      QUESTIONS,
-      QUESTIONS_PER_GAME,
-      seriesSignature,
-      usedQuestionKeysRef.current
-    );
-
-    if (QUESTIONS.length > QUESTIONS_PER_GAME) {
-      if (
-        usedQuestionKeysRef.current.size + picked.length >=
-        QUESTIONS.length
-      ) {
-        usedQuestionKeysRef.current = new Set();
-      }
-      picked.forEach((item, idx) => {
-        usedQuestionKeysRef.current.add(getQuestionUniqueKey(item, idx));
-      });
-    }
-
-    cachedSeriesRef.current = { signature: seriesSignature, items: picked };
-    return picked;
-  })();
-
+  // Priorité à la question courante synchronisée dans game_state, sinon la série tirée pour la graine active
   const currentQuestionObj =
-    questionIndex >= 0 && questionIndex < activeSeriesQuestions.length
-      ? activeSeriesQuestions.at(questionIndex) ?? null
+    questionIndex >= 0
+      ? remoteCurrentQuestion ??
+        seriesQuestions.at(
+          Math.min(questionIndex, Math.max(0, seriesQuestions.length - 1))
+        ) ??
+        null
       : null;
+
   const currentCorrectLetter =
     resolveQuestionCorrectLetter(currentQuestionObj);
   const currentCorrectBadgeStyle = currentCorrectLetter
@@ -631,6 +571,35 @@ export default function AdminConsolePage() {
     return nextAnswers;
   };
 
+  const syncQuestionStateFromGameState = (rawGameState: unknown) => {
+    if (!rawGameState || typeof rawGameState !== "object") return;
+    const stateObj = rawGameState as {
+      currentQuestion?: unknown;
+      activeQuestion?: unknown;
+      seriesQuestions?: unknown;
+      shuffledQuestions?: unknown;
+      questions?: unknown;
+    };
+
+    if (stateObj.currentQuestion) {
+      setRemoteCurrentQuestion(stateObj.currentQuestion);
+    } else if (stateObj.activeQuestion) {
+      setRemoteCurrentQuestion(stateObj.activeQuestion);
+    }
+
+    const listCandidate = Array.isArray(stateObj.seriesQuestions)
+      ? stateObj.seriesQuestions
+      : Array.isArray(stateObj.shuffledQuestions)
+      ? stateObj.shuffledQuestions
+      : Array.isArray(stateObj.questions)
+      ? stateObj.questions
+      : null;
+
+    if (listCandidate && listCandidate.length > 0) {
+      setSeriesQuestions(listCandidate);
+    }
+  };
+
   // --- Chargement des joueurs, scores et réponses depuis Supabase ---
   const loadPlayersAndScoresForSession = async (targetSessionId: string) => {
     if (!supabase || !isUuid(targetSessionId)) return;
@@ -669,11 +638,9 @@ export default function AdminConsolePage() {
     }
 
     if (sessionRow) {
-      setPlayerAnswersById(
-        extractAnswersFromGameState(
-          (sessionRow as { game_state?: unknown }).game_state
-        )
-      );
+      const gs = (sessionRow as { game_state?: unknown }).game_state;
+      setPlayerAnswersById(extractAnswersFromGameState(gs));
+      syncQuestionStateFromGameState(gs);
     }
   };
 
@@ -731,6 +698,7 @@ export default function AdminConsolePage() {
             setPlayerAnswersById(
               extractAnswersFromGameState(nextRow.game_state)
             );
+            syncQuestionStateFromGameState(nextRow.game_state);
           }
         }
       )
@@ -755,6 +723,7 @@ export default function AdminConsolePage() {
     nextPausedRemaining?: number | null;
     nextSeriesNumber?: number;
     nextSeriesSeed?: string;
+    nextSeriesQuestions?: unknown[];
     resetAnswers?: boolean;
   }) => {
     if (!supabase) {
@@ -795,6 +764,11 @@ export default function AdminConsolePage() {
     const effectiveSeed =
       params.nextSeriesSeed !== undefined ? params.nextSeriesSeed : seriesSeed;
 
+    const effectiveSeriesQuestions =
+      params.nextSeriesQuestions !== undefined
+        ? params.nextSeriesQuestions
+        : seriesQuestions;
+
     const isQuizGame =
       validGameUuid === GRAND_QUIZ_UUID ||
       (params.game ?? selectedGame)?.slug === "quiz" ||
@@ -802,6 +776,18 @@ export default function AdminConsolePage() {
 
     const hasQuestionStarted = effectiveQuestionIndex >= 0;
     const isPaused = params.nextStatus === "paused";
+
+    const activeQuestionForState =
+      hasQuestionStarted
+        ? effectiveSeriesQuestions.at(
+            Math.min(
+              effectiveQuestionIndex,
+              Math.max(0, effectiveSeriesQuestions.length - 1)
+            )
+          ) ?? null
+        : null;
+
+    setRemoteCurrentQuestion(activeQuestionForState);
 
     setIsSavingSession(true);
     setDbError(null);
@@ -819,13 +805,15 @@ export default function AdminConsolePage() {
           roundTriggered: hasQuestionStarted,
           questionIndex: effectiveQuestionIndex,
           currentQuestionIndex: effectiveQuestionIndex,
+          currentQuestion: activeQuestionForState,
           questionStartedAt: hasQuestionStarted ? effectiveStartedAt : null,
           durationSeconds: QUESTION_DURATION_SECONDS,
           isPaused,
           pausedRemainingSeconds: isPaused ? effectivePausedRemaining : null,
           seriesNumber: effectiveSeries,
           seriesSeed: effectiveSeed,
-          questions: QUESTIONS,
+          seriesQuestions: effectiveSeriesQuestions,
+          questions: effectiveSeriesQuestions,
           revealed: false,
           ...(params.resetAnswers !== false ? { answers: {} } : {}),
         };
@@ -883,8 +871,6 @@ export default function AdminConsolePage() {
           setPlayers([]);
           setScores([]);
           setPlayerAnswersById({});
-          usedQuestionKeysRef.current = new Set();
-          cachedSeriesRef.current = null;
           await loadPlayersAndScoresForSession(insertResult.data.id);
         }
       }
@@ -921,9 +907,15 @@ export default function AdminConsolePage() {
         setGames(validRows);
         const firstUuidGame = validRows[0];
         const initialSeed = generateSeriesSeed();
+        const initialPicked = pickSeriesQuestions(
+          QUESTIONS,
+          QUESTIONS_PER_GAME,
+          `${sessionCode}-1-${initialSeed}`
+        );
         if (firstUuidGame) {
           setSelectedGameId(firstUuidGame.id);
           setSeriesSeed(initialSeed);
+          setSeriesQuestions(initialPicked);
           await syncSessionToDb({
             id: null,
             code: sessionCode,
@@ -935,6 +927,7 @@ export default function AdminConsolePage() {
             nextPausedRemaining: null,
             nextSeriesNumber: 1,
             nextSeriesSeed: initialSeed,
+            nextSeriesQuestions: initialPicked,
           });
         }
       } else if (!cancelled) {
@@ -959,6 +952,11 @@ export default function AdminConsolePage() {
   const handleCreateNewSession = async () => {
     const newCode = generateSessionCode();
     const newSeed = generateSeriesSeed();
+    const newPicked = pickSeriesQuestions(
+      QUESTIONS,
+      QUESTIONS_PER_GAME,
+      `${newCode}-1-${newSeed}`
+    );
     const previousSessionId = sessionId;
 
     if (supabase && previousSessionId && isUuid(previousSessionId)) {
@@ -982,11 +980,11 @@ export default function AdminConsolePage() {
     setPausedRemainingSeconds(null);
     setSeriesNumber(1);
     setSeriesSeed(newSeed);
+    setSeriesQuestions(newPicked);
+    setRemoteCurrentQuestion(null);
     setPlayers([]);
     setScores([]);
     setPlayerAnswersById({});
-    usedQuestionKeysRef.current = new Set();
-    cachedSeriesRef.current = null;
 
     await syncSessionToDb({
       id: null,
@@ -999,6 +997,7 @@ export default function AdminConsolePage() {
       nextPausedRemaining: null,
       nextSeriesNumber: 1,
       nextSeriesSeed: newSeed,
+      nextSeriesQuestions: newPicked,
     });
   };
 
@@ -1013,6 +1012,7 @@ export default function AdminConsolePage() {
       setQuestionIndex(-1);
       setQuestionStartedAt(null);
       setPausedRemainingSeconds(null);
+      setRemoteCurrentQuestion(null);
       setPlayerAnswersById({});
 
       await syncSessionToDb({
@@ -1090,11 +1090,17 @@ export default function AdminConsolePage() {
   const handleRestartNewSeries = async () => {
     const nextSeries = seriesNumber + 1;
     const nextSeed = generateSeriesSeed();
+    const nextPicked = pickSeriesQuestions(
+      QUESTIONS,
+      QUESTIONS_PER_GAME,
+      `${sessionCode}-${nextSeries}-${nextSeed}`
+    );
     const startedIso = new Date().toISOString();
 
     setStatus("playing");
     setSeriesNumber(nextSeries);
     setSeriesSeed(nextSeed);
+    setSeriesQuestions(nextPicked);
     setQuestionIndex(0);
     setQuestionStartedAt(startedIso);
     setPausedRemainingSeconds(null);
@@ -1111,6 +1117,7 @@ export default function AdminConsolePage() {
       nextPausedRemaining: null,
       nextSeriesNumber: nextSeries,
       nextSeriesSeed: nextSeed,
+      nextSeriesQuestions: nextPicked,
       resetAnswers: true,
     });
   };
@@ -1161,6 +1168,7 @@ export default function AdminConsolePage() {
     setQuestionIndex(-1);
     setQuestionStartedAt(null);
     setPausedRemainingSeconds(null);
+    setRemoteCurrentQuestion(null);
     setPlayerAnswersById({});
     await syncSessionToDb({
       id: sessionId,
