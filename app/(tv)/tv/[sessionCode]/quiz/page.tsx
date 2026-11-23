@@ -6,7 +6,7 @@ import { Check, Clock, Trophy, Tv } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import { QUESTIONS, type QuizQuestion } from "@/lib/questions";
-import type { GameSession, SessionPlayer } from "@/types/game.types";
+import type { GameSession, PlayerScore, SessionPlayer } from "@/types/game.types";
 
 // ============================================================================
 // 1. TYPES ET CONSTANTES DU QUIZ
@@ -296,6 +296,7 @@ export default function TvQuizPage() {
 
   const [session, setSession] = useState<ExtendedSession | null>(null);
   const [players, setPlayers] = useState<ExtendedPlayer[]>([]);
+  const [playerScoresRows, setPlayerScoresRows] = useState<PlayerScore[]>([]);
   const [gameTitle, setGameTitle] = useState<string>("Le Grand Quiz");
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [localQuestionStartMs, setLocalQuestionStartMs] = useState<
@@ -314,13 +315,13 @@ export default function TvQuizPage() {
   } | null>(null);
   const lastTimerResetKeyRef = useRef<string>("");
 
-  // --- Synchronisation temps réel avec Supabase (session + joueurs) ---
+  // --- Synchronisation temps réel avec Supabase (session + joueurs + scores) ---
   useEffect(() => {
     if (!supabase || !sessionCode) return;
 
     let isMounted = true;
     let activeSessionId: string | null = null;
-    let playersChannel: ReturnType<typeof supabase.channel> | null = null;
+    let childrenChannel: ReturnType<typeof supabase.channel> | null = null;
 
     const loadGameTitle = async (gameId: string | null | undefined) => {
       if (!gameId) return;
@@ -334,16 +335,23 @@ export default function TvQuizPage() {
       if (data?.title) setGameTitle(data.title);
     };
 
-    const loadPlayers = async (targetSessionId: string | null) => {
+    const loadPlayersAndScores = async (targetSessionId: string | null) => {
       if (!targetSessionId) return;
-      const { data } = await supabase
-        .from("session_players")
-        .select("*")
-        .eq("session_id", targetSessionId)
-        .order("id", { ascending: true });
+      const [{ data: playersData }, { data: scoresData }] = await Promise.all([
+        supabase
+          .from("session_players")
+          .select("*")
+          .eq("session_id", targetSessionId)
+          .order("id", { ascending: true }),
+        supabase
+          .from("player_scores")
+          .select("*")
+          .eq("session_id", targetSessionId),
+      ]);
 
       if (!isMounted) return;
-      setPlayers((data as ExtendedPlayer[] | null) ?? []);
+      setPlayers((playersData as ExtendedPlayer[] | null) ?? []);
+      setPlayerScoresRows((scoresData as PlayerScore[] | null) ?? []);
     };
 
     const refreshSessionRow = async () => {
@@ -372,7 +380,7 @@ export default function TvQuizPage() {
 
       if (data.id) {
         activeSessionId = data.id;
-        void loadPlayers(data.id);
+        void loadPlayersAndScores(data.id);
       }
       if (data.game_id) {
         void loadGameTitle(data.game_id);
@@ -380,32 +388,46 @@ export default function TvQuizPage() {
     };
 
     const bindSession = (targetSession: ExtendedSession) => {
-      void loadPlayers(targetSession.id);
+      void loadPlayersAndScores(targetSession.id);
       void loadGameTitle(targetSession.game_id);
 
-      if (activeSessionId === targetSession.id && playersChannel) {
+      if (activeSessionId === targetSession.id && childrenChannel) {
         return;
       }
 
       activeSessionId = targetSession.id;
 
-      if (playersChannel) {
-        void supabase.removeChannel(playersChannel);
+      if (childrenChannel) {
+        void supabase.removeChannel(childrenChannel);
       }
 
-      playersChannel = supabase
-        .channel(`tv-quiz-players-${targetSession.id}-${Date.now()}`)
+      childrenChannel = supabase
+        .channel(`tv-quiz-children-${targetSession.id}-${Date.now()}`)
         .on(
           "postgres_changes",
           {
             event: "*",
             schema: "public",
             table: "session_players",
+            filter: `session_id=eq.${targetSession.id}`,
           },
           () => {
             if (!isMounted) return;
-            void loadPlayers(targetSession.id);
+            void loadPlayersAndScores(targetSession.id);
             void refreshSessionRow();
+          }
+        )
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "player_scores",
+            filter: `session_id=eq.${targetSession.id}`,
+          },
+          () => {
+            if (!isMounted) return;
+            void loadPlayersAndScores(targetSession.id);
           }
         )
         .subscribe();
@@ -456,7 +478,7 @@ export default function TvQuizPage() {
       if (!isMounted) return;
       void refreshSessionRow();
       if (activeSessionId) {
-        void loadPlayers(activeSessionId);
+        void loadPlayersAndScores(activeSessionId);
       }
     }, 1500);
 
@@ -464,8 +486,8 @@ export default function TvQuizPage() {
       isMounted = false;
       window.clearInterval(syncInterval);
       void supabase.removeChannel(sessionChannel);
-      if (playersChannel) {
-        void supabase.removeChannel(playersChannel);
+      if (childrenChannel) {
+        void supabase.removeChannel(childrenChannel);
       }
     };
   }, [supabase, sessionCode]);
@@ -783,13 +805,25 @@ export default function TvQuizPage() {
       ...(quizState.scores ?? {}),
     };
 
+    for (const row of playerScoresRows) {
+      const scoreRecord = row as unknown as {
+        player_id?: string | null;
+        total_score?: number | null;
+        score?: number | null;
+      };
+      const val = scoreRecord.total_score ?? scoreRecord.score;
+      if (scoreRecord.player_id && typeof val === "number") {
+        merged[String(scoreRecord.player_id)] = val;
+      }
+    }
+
     const normalized: Record<string, number | string> = {};
     for (const [k, v] of Object.entries(merged)) {
       normalized[k] = v;
       normalized[k.trim().toLowerCase()] = v;
     }
     return normalized;
-  }, [session, quizState]);
+  }, [session, quizState, playerScoresRows]);
 
   // Révélation uniquement quand le chrono est à 0 (ou explicitement demandée)
   const isRevealed = Boolean(
