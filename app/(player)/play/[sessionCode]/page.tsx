@@ -46,6 +46,9 @@ interface QuizGameState {
   questionIndex?: number | null;
   currentQuestionIndex?: number | null;
   questionStartedAt?: string | number | null;
+  durationSeconds?: number | null;
+  isPaused?: boolean;
+  pausedRemainingSeconds?: number | null;
   seriesNumber?: number;
   seriesSeed?: string;
   questions?: QuizQuestionPayload[];
@@ -91,6 +94,7 @@ const CHOICE_STYLES = [
 ] as const;
 
 const LETTERS = ["A", "B", "C", "D"] as const;
+const DEFAULT_QUESTION_DURATION_SECONDS = 12;
 
 function hashStringToSeed(input: string): number {
   let hash = 2166136261;
@@ -176,6 +180,40 @@ function resolveCorrectLetter(
   );
 }
 
+function computeRemainingSeconds(
+  state: QuizGameState,
+  nowMs: number
+): number {
+  const duration =
+    typeof state.durationSeconds === "number" &&
+    Number.isFinite(state.durationSeconds) &&
+    state.durationSeconds > 0
+      ? state.durationSeconds
+      : DEFAULT_QUESTION_DURATION_SECONDS;
+
+  if (
+    state.isPaused &&
+    typeof state.pausedRemainingSeconds === "number" &&
+    Number.isFinite(state.pausedRemainingSeconds)
+  ) {
+    return Math.max(0, state.pausedRemainingSeconds);
+  }
+
+  const rawStart = state.questionStartedAt;
+  if (rawStart === null || rawStart === undefined || rawStart === "") {
+    return duration;
+  }
+
+  const startMs =
+    typeof rawStart === "number" ? rawStart : Date.parse(String(rawStart));
+  if (Number.isNaN(startMs)) {
+    return duration;
+  }
+
+  const elapsedSeconds = Math.max(0, (nowMs - startMs) / 1000);
+  return Math.max(0, duration - elapsedSeconds);
+}
+
 export default function PlayerControllerPage() {
   const params = useParams<{ sessionCode: string }>();
   const sessionCode = (params?.sessionCode ?? "").toUpperCase();
@@ -189,15 +227,22 @@ export default function PlayerControllerPage() {
   const [submittedQuestionKey, setSubmittedQuestionKey] = useState<
     string | null
   >(null);
+  const [submittedChoiceLetter, setSubmittedChoiceLetter] = useState<
+    string | null
+  >(null);
   const [highlightedChoiceLetter, setHighlightedChoiceLetter] = useState<
     string | null
   >(null);
+  const [remainingSeconds, setRemainingSeconds] = useState<number>(
+    DEFAULT_QUESTION_DURATION_SECONDS
+  );
   const [isConnected, setIsConnected] = useState<boolean>(true);
   const [isJoining, setIsJoining] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string>("");
 
   const highlightTimeoutRef = useRef<number | null>(null);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
+  const settledQuestionsRef = useRef<Set<string>>(new Set());
 
   const clearHighlightTimer = () => {
     if (highlightTimeoutRef.current !== null) {
@@ -315,7 +360,7 @@ export default function PlayerControllerPage() {
   }, [quizState.questionIndex, quizState.currentQuestionIndex]);
 
   const currentQuestionKey = useMemo<string | null>(() => {
-    const idx = activeQuestionIndex ?? 0;
+    if (activeQuestionIndex === null) return null;
     const seriesNumber = Math.max(1, Number(quizState.seriesNumber ?? 1) || 1);
     const seriesSeed =
       typeof quizState.seriesSeed === "string" ? quizState.seriesSeed : "";
@@ -324,7 +369,7 @@ export default function PlayerControllerPage() {
       quizState.questionStartedAt !== null
         ? String(quizState.questionStartedAt)
         : "";
-    return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${idx}-${startedAt}`;
+    return `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${startedAt}`;
   }, [
     activeQuestionIndex,
     quizState.seriesNumber,
@@ -337,9 +382,33 @@ export default function PlayerControllerPage() {
   useEffect(() => {
     clearHighlightTimer();
     setSubmittedQuestionKey(null);
+    setSubmittedChoiceLetter(null);
     setHighlightedChoiceLetter(null);
     setStatusMessage("");
   }, [activeGameId, currentQuestionKey]);
+
+  useEffect(() => {
+    const updateTimer = () => {
+      setRemainingSeconds(computeRemainingSeconds(quizState, Date.now()));
+    };
+
+    updateTimer();
+
+    if (roundStatus !== "playing" || activeQuestionIndex === null) {
+      return;
+    }
+
+    const intervalId = window.setInterval(updateTimer, 200);
+    return () => window.clearInterval(intervalId);
+  }, [
+    roundStatus,
+    activeQuestionIndex,
+    quizState.questionStartedAt,
+    quizState.durationSeconds,
+    quizState.isPaused,
+    quizState.pausedRemainingSeconds,
+    quizState,
+  ]);
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
@@ -504,7 +573,8 @@ export default function PlayerControllerPage() {
   const alreadySubmittedThisQuestion =
     currentQuestionKey !== null &&
     submittedQuestionKey === currentQuestionKey;
-  const isPlaying = roundStatus === "playing";
+  const isTimerExpired = remainingSeconds <= 0;
+  const isPlaying = roundStatus === "playing" && !isTimerExpired;
 
   const parsedOptions = useMemo<string[]>(() => {
     const raw =
@@ -529,7 +599,7 @@ export default function PlayerControllerPage() {
       total_score?: number;
       score?: number;
     };
-    return scoreRecord.total_score ?? scoreRecord.score ?? 0;
+    return Math.max(0, scoreRecord.total_score ?? scoreRecord.score ?? 0);
   }, [identity, scores]);
 
   const currentPlayerRecord = useMemo(() => {
@@ -551,6 +621,97 @@ export default function PlayerControllerPage() {
       ),
     [currentPlayerRecord?.id, identity?.playerId, players]
   );
+
+  // Attribution des points uniquement lorsque le chrono est arrivé à 0 (ou réponse révélée)
+  useEffect(() => {
+    if (!identity || !currentQuestionKey || !activeQuestion) return;
+
+    const shouldAwardPoints =
+      roundStatus === "playing" &&
+      (isTimerExpired || Boolean(quizState.revealed));
+
+    if (!shouldAwardPoints) return;
+
+    const settlementKey = `${identity.playerId}::${currentQuestionKey}`;
+    if (settledQuestionsRef.current.has(settlementKey)) return;
+    settledQuestionsRef.current.add(settlementKey);
+
+    const chosenLetter =
+      submittedQuestionKey === currentQuestionKey
+        ? submittedChoiceLetter
+        : normalizeAnswerLetter(quizState.answers?.[String(identity.playerId)]);
+
+    if (!chosenLetter) {
+      setStatusMessage("Temps écoulé • 0 pt");
+      return;
+    }
+
+    const correctLetter = resolveCorrectLetter(activeQuestion);
+    const isCorrect =
+      Boolean(correctLetter) && chosenLetter === correctLetter;
+    const delta = isCorrect ? 3 : -1;
+    const nextScore = Math.max(0, myScore + delta);
+
+    setScores((prev) => {
+      const exists = prev.some((s) => s.player_id === identity.playerId);
+      if (exists) {
+        return prev.map((s) =>
+          s.player_id === identity.playerId
+            ? ({
+                ...s,
+                total_score: nextScore,
+                score: nextScore,
+              } as PlayerScore)
+            : s
+        );
+      }
+      return [
+        ...prev,
+        {
+          id: `score-${identity.playerId}`,
+          session_id: session?.id ?? sessionCode,
+          player_id: identity.playerId,
+          total_score: nextScore,
+          score: nextScore,
+        } as unknown as PlayerScore,
+      ];
+    });
+
+    if (supabase && session?.id) {
+      void supabase
+        .from("player_scores")
+        .upsert(
+          {
+            session_id: session.id,
+            player_id: identity.playerId,
+            nickname: identity.nickname,
+            avatar_id: identity.avatarId,
+            total_score: nextScore,
+          },
+          { onConflict: "session_id,player_id" }
+        );
+    }
+
+    setStatusMessage(
+      isCorrect
+        ? "Temps écoulé • Bonne réponse (+3 pts)"
+        : "Temps écoulé • Mauvaise réponse (-1 pt)"
+    );
+  }, [
+    identity,
+    currentQuestionKey,
+    activeQuestion,
+    roundStatus,
+    isTimerExpired,
+    quizState.revealed,
+    quizState.answers,
+    submittedQuestionKey,
+    submittedChoiceLetter,
+    myScore,
+    supabase,
+    session?.id,
+    sessionCode,
+  ]);
 
   const handleJoinGame = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -690,17 +851,10 @@ export default function PlayerControllerPage() {
     letter: string;
     optionValue: string;
   }) => {
-    if (!identity || alreadySubmittedThisQuestion) return;
+    if (!identity || alreadySubmittedThisQuestion || !isPlaying) return;
 
     const round = (activeQuestionIndex ?? 0) + 1;
     const chosenLetter = choice.letter;
-    const correctLetter = resolveCorrectLetter(activeQuestion);
-    const isCorrect =
-      Boolean(correctLetter) &&
-      Boolean(chosenLetter) &&
-      chosenLetter === correctLetter;
-    const pointsDelta = isCorrect ? 3 : -1;
-    const nextScore = myScore + pointsDelta;
 
     if (supabase && session?.id) {
       const currentAnswers =
@@ -742,55 +896,21 @@ export default function PlayerControllerPage() {
         return;
       }
 
-      await supabase.from("player_scores").upsert(
-        {
-          session_id: session.id,
-          player_id: identity.playerId,
-          nickname: identity.nickname,
-          avatar_id: identity.avatarId,
-          total_score: nextScore,
-        },
-        { onConflict: "session_id,player_id" }
-      );
-
       setSession((prev) =>
         prev ? { ...prev, game_state: nextGameState } : prev
       );
-      setScores((prev) => {
-        const exists = prev.some((s) => s.player_id === identity.playerId);
-        if (exists) {
-          return prev.map((s) =>
-            s.player_id === identity.playerId
-              ? ({
-                  ...s,
-                  total_score: nextScore,
-                  score: nextScore,
-                } as PlayerScore)
-              : s
-          );
-        }
-        return [
-          ...prev,
-          {
-            id: `score-${identity.playerId}`,
-            session_id: session.id,
-            player_id: identity.playerId,
-            total_score: nextScore,
-            score: nextScore,
-          } as unknown as PlayerScore,
-        ];
-      });
     }
 
     clearHighlightTimer();
     setSubmittedQuestionKey(currentQuestionKey);
+    setSubmittedChoiceLetter(chosenLetter);
     setHighlightedChoiceLetter(chosenLetter);
     highlightTimeoutRef.current = window.setTimeout(() => {
       setHighlightedChoiceLetter(null);
       highlightTimeoutRef.current = null;
     }, 1000);
 
-    setStatusMessage(`Choix ${chosenLetter} envoyé !`);
+    setStatusMessage(`Choix ${chosenLetter} enregistré (points à la fin du chrono)`);
   };
 
   return (
@@ -893,7 +1013,7 @@ export default function PlayerControllerPage() {
 
             {/* Active Question / Action Zone */}
             <div className="flex-1 flex flex-col justify-between bg-white/5 border border-white/10 rounded-3xl p-4 sm:p-5 space-y-4">
-              {!isPlaying ? (
+              {roundStatus !== "playing" ? (
                 <div className="my-auto py-8 text-center space-y-1">
                   <p className="text-base font-bold text-amber-300">
                     {roundStatus === "paused"
@@ -917,7 +1037,7 @@ export default function PlayerControllerPage() {
                       <button
                         key={choice.letter}
                         type="button"
-                        disabled={alreadySubmittedThisQuestion}
+                        disabled={alreadySubmittedThisQuestion || isTimerExpired}
                         onClick={() =>
                           void handleSubmitChoice({
                             letter: choice.letter,
