@@ -8,10 +8,6 @@ import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import { QUESTIONS, type QuizQuestion } from "@/lib/questions";
 import type { GameSession, PlayerScore, SessionPlayer } from "@/types/game.types";
 
-// ============================================================================
-// 1. TYPES ET CONSTANTES DU QUIZ
-// ============================================================================
-
 type AnswerLetter = "A" | "B" | "C" | "D";
 
 interface QuizQuestionItem {
@@ -33,6 +29,8 @@ interface QuizQuestionItem {
 interface QuizStatePayload {
   questions?: QuizQuestionItem[];
   quizQuestions?: QuizQuestionItem[];
+  seriesQuestions?: QuizQuestionItem[];
+  shuffledQuestions?: QuizQuestionItem[];
   items?: QuizQuestionItem[];
   currentQuestion?: QuizQuestionItem | null;
   activeQuestion?: QuizQuestionItem | null;
@@ -139,10 +137,6 @@ const QUESTION_DURATION_SECONDS = 12;
 const QUESTIONS_PER_GAME = 15;
 const PODIUM_DELAY_MS = 3000;
 
-// ============================================================================
-// 2. FONCTIONS UTILITAIRES & SON D'APPLAUDISSEMENTS
-// ============================================================================
-
 function playApplauseSound(): () => void {
   if (typeof window === "undefined") return () => {};
   const AudioCtx =
@@ -168,9 +162,13 @@ function playApplauseSound(): () => void {
 
     for (let i = 0; i < bufferSize; i++) {
       const t = i / sampleRate;
-      const env = Math.sin(Math.min(1, t / 0.25) * (Math.PI / 2)) *
+      const env =
+        Math.sin(Math.min(1, t / 0.25) * (Math.PI / 2)) *
         Math.pow(Math.max(0, 1 - t / totalDuration), 1.35);
-      const clapBurst = Math.pow(0.5 + 0.5 * Math.sin(t * 2 * Math.PI * 11), 3);
+      const clapBurst = Math.pow(
+        0.5 + 0.5 * Math.sin(t * 2 * Math.PI * 11),
+        3
+      );
       const white = Math.random() * 2 - 1;
       data[i] = white * env * (0.35 + 0.65 * clapBurst);
     }
@@ -186,7 +184,10 @@ function playApplauseSound(): () => void {
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0.01, ctx.currentTime);
     gain.gain.linearRampToValueAtTime(0.45, ctx.currentTime + 0.2);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + totalDuration);
+    gain.gain.exponentialRampToValueAtTime(
+      0.001,
+      ctx.currentTime + totalDuration
+    );
 
     source.connect(bandpass);
     bandpass.connect(gain);
@@ -351,10 +352,6 @@ function getQuestionFontSize(text: string): string {
   return "text-xl xl:text-3xl leading-snug";
 }
 
-// ============================================================================
-// 3. COMPOSANT PRINCIPAL DE L'ÉCRAN TV QUIZ
-// ============================================================================
-
 export default function TvQuizPage() {
   const params = useParams<{ sessionCode: string }>();
   const router = useRouter();
@@ -387,7 +384,6 @@ export default function TvQuizPage() {
   const isResettingScoresRef = useRef<boolean>(false);
   const hasPlayedApplauseForSeriesRef = useRef<string>("");
 
-  // --- Synchronisation temps réel avec Supabase (session + joueurs + scores) ---
   useEffect(() => {
     if (!supabase || !sessionCode) return;
 
@@ -595,7 +591,6 @@ export default function TvQuizPage() {
     sessionStatusLower === "ended" ||
     sessionStatusLower === "completed";
 
-  // Réinitialise tous les scores à 0 quand on clique sur "Relancer" (nouvelle série) ou "Terminer"
   useEffect(() => {
     if (!supabase || !session?.id) return;
 
@@ -680,7 +675,19 @@ export default function TvQuizPage() {
     }
   }, [session, sessionCode, quizState, isFinishedOrLobbyStatus, router]);
 
-  const sourceQuestions = useMemo<QuizQuestionItem[]>(() => {
+  const syncedSeriesQuestions = useMemo<QuizQuestionItem[] | null>(() => {
+    if (
+      Array.isArray(quizState.seriesQuestions) &&
+      quizState.seriesQuestions.length > 0
+    ) {
+      return quizState.seriesQuestions;
+    }
+    if (
+      Array.isArray(quizState.shuffledQuestions) &&
+      quizState.shuffledQuestions.length > 0
+    ) {
+      return quizState.shuffledQuestions;
+    }
     if (Array.isArray(quizState.questions) && quizState.questions.length > 0) {
       return quizState.questions;
     }
@@ -696,10 +703,14 @@ export default function TvQuizPage() {
     if (Array.isArray(session?.questions) && session.questions.length > 0) {
       return session.questions;
     }
-    return QUESTIONS as QuizQuestion[];
+    return null;
   }, [quizState, session]);
 
   const questions = useMemo<QuizQuestionItem[]>(() => {
+    if (syncedSeriesQuestions) {
+      return syncedSeriesQuestions;
+    }
+
     const signature = `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`;
     if (
       cachedSeriesRef.current &&
@@ -713,16 +724,16 @@ export default function TvQuizPage() {
     }
 
     const picked = pickRandomQuestionsSeries(
-      sourceQuestions,
+      QUESTIONS as QuizQuestion[],
       QUESTIONS_PER_GAME,
       signature,
       usedQuestionKeysRef.current
     );
 
-    if (sourceQuestions.length > QUESTIONS_PER_GAME) {
+    if ((QUESTIONS as QuizQuestion[]).length > QUESTIONS_PER_GAME) {
       if (
         usedQuestionKeysRef.current.size + picked.length >=
-        sourceQuestions.length
+        (QUESTIONS as QuizQuestion[]).length
       ) {
         usedQuestionKeysRef.current = new Set();
       }
@@ -733,7 +744,7 @@ export default function TvQuizPage() {
 
     cachedSeriesRef.current = { signature, items: picked };
     return picked;
-  }, [sourceQuestions, session?.id, sessionCode, seriesNumber, seriesSeed]);
+  }, [syncedSeriesQuestions, session?.id, sessionCode, seriesNumber, seriesSeed]);
 
   const activeQuestionIndex = useMemo<number | null>(() => {
     const explicitIndex =
@@ -771,12 +782,14 @@ export default function TvQuizPage() {
 
   const currentQuestion = useMemo<QuizQuestionItem | null>(() => {
     if (activeQuestionIndex === null) return null;
+    if (quizState.currentQuestion) return quizState.currentQuestion;
+    if (quizState.activeQuestion) return quizState.activeQuestion;
     if (questions.length > 0) {
       const safeIndex = Math.min(activeQuestionIndex, questions.length - 1);
       return questions[safeIndex] ?? null;
     }
-    return quizState.currentQuestion ?? quizState.activeQuestion ?? null;
-  }, [activeQuestionIndex, questions, quizState]);
+    return null;
+  }, [activeQuestionIndex, quizState, questions]);
 
   const isPaused = useMemo<boolean>(() => {
     const status = String(session?.status ?? "").toLowerCase();
@@ -1156,7 +1169,6 @@ export default function TvQuizPage() {
     activeQuestionIndex >= totalQuestions - 1 &&
     isRevealed;
 
-  // Petit délai avant d'afficher le podium pour laisser voir la révélation de la dernière question
   useEffect(() => {
     if (!isLastQuestionCompleted) {
       setIsPodiumVisible(false);
@@ -1172,7 +1184,6 @@ export default function TvQuizPage() {
     };
   }, [isLastQuestionCompleted]);
 
-  // Son d'applaudissements lorsque le podium s'affiche
   useEffect(() => {
     if (!isPodiumVisible || !session?.id) return;
     const playKey = `${session.id}-s${seriesNumber}-${seriesSeed}`;
@@ -1224,7 +1235,6 @@ export default function TvQuizPage() {
         }
       `}</style>
 
-      {/* ================= EN-TÊTE ================= */}
       <header className="flex items-center justify-between border-b border-white/15 pb-4 shrink-0 gap-6">
         <div className="flex items-center gap-4 min-w-0">
           <div className="w-14 h-14 rounded-2xl bg-amber-400/15 border border-amber-400/35 flex items-center justify-center shrink-0">
@@ -1269,9 +1279,7 @@ export default function TvQuizPage() {
         </div>
       </header>
 
-      {/* ================= CORPS PRINCIPAL ================= */}
       <main className="flex-1 min-h-0 grid grid-cols-12 gap-7 pt-5">
-        {/* COLONNE GAUCHE : QUESTION + 4 CASES */}
         <section className="col-span-7 bg-white/[0.06] border border-white/15 rounded-[2rem] p-7 flex flex-col justify-between gap-5 min-h-0">
           <div className="shrink-0 min-h-[22%] flex items-center justify-center text-center px-4">
             {questionLabel ? (
@@ -1336,7 +1344,6 @@ export default function TvQuizPage() {
           </div>
         </section>
 
-        {/* COLONNE DROITE : CLASSEMENT */}
         <aside className="col-span-5 bg-white/[0.06] border border-white/15 rounded-[2rem] p-6 flex flex-col gap-4 min-h-0">
           <div className="flex items-center justify-between shrink-0 pb-1">
             <div className="flex items-center gap-3 text-2xl xl:text-3xl font-black">
@@ -1420,11 +1427,9 @@ export default function TvQuizPage() {
         </aside>
       </main>
 
-      {/* ================= GRANDE CASE PODIUM FIN DE SÉRIE ================= */}
       {isLastQuestionCompleted && isPodiumVisible && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-8">
           <div className="w-full max-w-5xl h-[82vh] bg-neutral-900/95 border-2 border-amber-400/50 rounded-[2.5rem] p-8 flex flex-col justify-between shadow-2xl">
-            {/* Partie supérieure : PODIUM */}
             <div className="text-center shrink-0 border-b border-white/15 pb-5">
               <div className="inline-flex items-center gap-3 px-6 py-2 rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-300 text-lg font-extrabold uppercase tracking-[0.22em] mb-2">
                 <Crown className="w-6 h-6 text-amber-400" />
@@ -1435,9 +1440,7 @@ export default function TvQuizPage() {
               </h2>
             </div>
 
-            {/* Centre : Podium des 3 premiers */}
             <div className="flex-1 min-h-0 grid grid-cols-3 items-end gap-6 pt-8">
-              {/* 2e place (gauche) */}
               <div className="flex flex-col items-center gap-4 h-[78%]">
                 {podiumSlots.second ? (
                   <>
@@ -1484,7 +1487,6 @@ export default function TvQuizPage() {
                 )}
               </div>
 
-              {/* 1re place (centre) */}
               <div className="flex flex-col items-center gap-4 h-full">
                 {podiumSlots.first ? (
                   <>
@@ -1531,7 +1533,6 @@ export default function TvQuizPage() {
                 )}
               </div>
 
-              {/* 3e place (droite) */}
               <div className="flex flex-col items-center gap-4 h-[64%]">
                 {podiumSlots.third ? (
                   <>
