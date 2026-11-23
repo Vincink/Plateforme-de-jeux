@@ -25,11 +25,16 @@ import {
   Lock,
   Unlock,
   Maximize2,
+  Target,
 } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import { INITIAL_GAMES, type CatalogGame } from "@/features/games/catalog";
 import { QUESTIONS } from "@/lib/questions";
+import {
+  JUSTE_CHIFFRE_QUESTIONS,
+  type JusteChiffreQuestion,
+} from "@/lib/juste-chiffre-questions";
 import type {
   GameSession,
   PlayerScore,
@@ -47,6 +52,10 @@ const UUID_REGEX =
 const GRAND_QUIZ_UUID = "6e6d7179-3a56-4d94-9c1d-19ac06a34aaa";
 const QUESTION_DURATION_SECONDS = 12; // Durée du chrono par question (en secondes)
 const QUESTIONS_PER_GAME = 15; // Nombre de questions par série
+
+const JUSTE_CHIFFRE_MIN = 1;
+const JUSTE_CHIFFRE_MAX = 1000;
+const JUSTE_CHIFFRE_DURATION_SECONDS = 20;
 
 const GRID_COLUMNS = 12;
 const ROW_UNIT_PX = 44;
@@ -171,6 +180,19 @@ function isUuid(value: string | undefined | null): value is string {
   return typeof value === "string" && UUID_REGEX.test(value);
 }
 
+function isJusteChiffreGame(game?: CatalogGame | null): boolean {
+  if (!game) return false;
+  const slug = (game.slug ?? "").toLowerCase();
+  const title = (game.title ?? "").toLowerCase();
+  return (
+    slug.includes("juste-chiffre") ||
+    slug.includes("juste_chiffre") ||
+    slug.includes("estimation") ||
+    title.includes("juste chiffre") ||
+    title.includes("estimation")
+  );
+}
+
 // Génère un code de salle aléatoire de 4 caractères
 function generateSessionCode(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -248,6 +270,29 @@ function formatPlayerAnswer(rawAnswer: unknown): string | null {
     }
   }
   return null;
+}
+
+function formatNumericGuess(rawGuess: unknown): number | null {
+  if (rawGuess === null || rawGuess === undefined) return null;
+  const candidate =
+    typeof rawGuess === "object"
+      ? (rawGuess as { guess?: unknown; value?: unknown; answer?: unknown })
+          .guess ??
+        (rawGuess as { guess?: unknown; value?: unknown; answer?: unknown })
+          .value ??
+        (rawGuess as { guess?: unknown; value?: unknown; answer?: unknown })
+          .answer
+      : rawGuess;
+  const num =
+    typeof candidate === "number"
+      ? candidate
+      : typeof candidate === "string" && candidate.trim() !== ""
+      ? Number(candidate.trim())
+      : NaN;
+  if (!Number.isFinite(num)) return null;
+  const rounded = Math.round(num);
+  if (rounded < JUSTE_CHIFFRE_MIN || rounded > JUSTE_CHIFFRE_MAX) return null;
+  return rounded;
 }
 
 function resolveQuestionCorrectLetter(question: unknown): string | null {
@@ -374,6 +419,15 @@ export default function AdminConsolePage() {
   );
   const [seriesQuestions, setSeriesQuestions] = useState<unknown[]>(() =>
     pickSeriesQuestions(QUESTIONS, QUESTIONS_PER_GAME, "init")
+  );
+  const [justeChiffreQuestions, setJusteChiffreQuestions] = useState<
+    JusteChiffreQuestion[]
+  >(() =>
+    pickSeriesQuestions(
+      JUSTE_CHIFFRE_QUESTIONS,
+      QUESTIONS_PER_GAME,
+      "jc-init"
+    )
   );
   const [remoteCurrentQuestion, setRemoteCurrentQuestion] =
     useState<unknown>(null);
@@ -515,13 +569,30 @@ export default function AdminConsolePage() {
   const selectedGame =
     games.find((g) => g.id === selectedGameId) ?? games[0];
 
-  const totalQuestions = Math.min(QUESTIONS_PER_GAME, QUESTIONS.length);
+  const isJusteChiffre = isJusteChiffreGame(selectedGame);
+  const activeDurationSeconds = isJusteChiffre
+    ? JUSTE_CHIFFRE_DURATION_SECONDS
+    : QUESTION_DURATION_SECONDS;
+
+  const sourcePoolLength = isJusteChiffre
+    ? JUSTE_CHIFFRE_QUESTIONS.length
+    : QUESTIONS.length;
+  const totalQuestions = Math.min(QUESTIONS_PER_GAME, sourcePoolLength);
   const isEndOfSeries =
     totalQuestions > 0 && questionIndex >= totalQuestions - 1;
 
-  // Priorité à la question courante synchronisée dans game_state, sinon la série tirée pour la graine active
+  const currentJusteChiffreQuestion: JusteChiffreQuestion | null =
+    isJusteChiffre && questionIndex >= 0
+      ? justeChiffreQuestions.at(
+          Math.min(
+            questionIndex,
+            Math.max(0, justeChiffreQuestions.length - 1)
+          )
+        ) ?? null
+      : null;
+
   const currentQuestionObj =
-    questionIndex >= 0
+    !isJusteChiffre && questionIndex >= 0
       ? remoteCurrentQuestion ??
         seriesQuestions.at(
           Math.min(questionIndex, Math.max(0, seriesQuestions.length - 1))
@@ -529,8 +600,9 @@ export default function AdminConsolePage() {
         null
       : null;
 
-  const currentCorrectLetter =
-    resolveQuestionCorrectLetter(currentQuestionObj);
+  const currentCorrectLetter = isJusteChiffre
+    ? null
+    : resolveQuestionCorrectLetter(currentQuestionObj);
   const currentCorrectBadgeStyle = currentCorrectLetter
     ? getAnswerBadgeStyle(currentCorrectLetter)
     : null;
@@ -553,19 +625,35 @@ export default function AdminConsolePage() {
 
   // --- Extraction des réponses des joueurs depuis game_state ---
   const extractAnswersFromGameState = (
-    rawGameState: unknown
+    rawGameState: unknown,
+    isNumericMode: boolean
   ): Record<string, string> => {
     if (!rawGameState || typeof rawGameState !== "object") return {};
-    const stateObj = rawGameState as { answers?: unknown };
-    if (!stateObj.answers || typeof stateObj.answers !== "object") return {};
+    const stateObj = rawGameState as {
+      answers?: unknown;
+      estimates?: unknown;
+      guesses?: unknown;
+    };
+    const sourceMap = isNumericMode
+      ? stateObj.estimates ?? stateObj.guesses ?? stateObj.answers
+      : stateObj.answers;
+
+    if (!sourceMap || typeof sourceMap !== "object") return {};
 
     const nextAnswers: Record<string, string> = {};
     for (const [playerId, rawVal] of Object.entries(
-      stateObj.answers as Record<string, unknown>
+      sourceMap as Record<string, unknown>
     )) {
-      const formatted = formatPlayerAnswer(rawVal);
-      if (formatted) {
-        nextAnswers[playerId] = formatted;
+      if (isNumericMode) {
+        const guessNum = formatNumericGuess(rawVal);
+        if (guessNum !== null) {
+          nextAnswers[playerId] = String(guessNum);
+        }
+      } else {
+        const formatted = formatPlayerAnswer(rawVal);
+        if (formatted) {
+          nextAnswers[playerId] = formatted;
+        }
       }
     }
     return nextAnswers;
@@ -639,7 +727,9 @@ export default function AdminConsolePage() {
 
     if (sessionRow) {
       const gs = (sessionRow as { game_state?: unknown }).game_state;
-      setPlayerAnswersById(extractAnswersFromGameState(gs));
+      setPlayerAnswersById(
+        extractAnswersFromGameState(gs, isJusteChiffre)
+      );
       syncQuestionStateFromGameState(gs);
     }
   };
@@ -696,7 +786,7 @@ export default function AdminConsolePage() {
           const nextRow = payload.new as { game_state?: unknown } | undefined;
           if (nextRow && "game_state" in nextRow) {
             setPlayerAnswersById(
-              extractAnswersFromGameState(nextRow.game_state)
+              extractAnswersFromGameState(nextRow.game_state, isJusteChiffre)
             );
             syncQuestionStateFromGameState(nextRow.game_state);
           }
@@ -709,7 +799,7 @@ export default function AdminConsolePage() {
       void supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [supabase, sessionId]);
+  }, [supabase, sessionId, isJusteChiffre]);
 
   // --- Enregistrement / mise à jour de la session dans Supabase ---
   const syncSessionToDb = async (params: {
@@ -724,6 +814,7 @@ export default function AdminConsolePage() {
     nextSeriesNumber?: number;
     nextSeriesSeed?: string;
     nextSeriesQuestions?: unknown[];
+    nextJusteChiffreQuestions?: JusteChiffreQuestion[];
     resetAnswers?: boolean;
   }) => {
     if (!supabase) {
@@ -733,7 +824,8 @@ export default function AdminConsolePage() {
       return;
     }
 
-    const validGameUuid = resolveValidGameUuid(params.game ?? selectedGame);
+    const activeTargetGame = params.game ?? selectedGame;
+    const validGameUuid = resolveValidGameUuid(activeTargetGame);
     if (!validGameUuid) {
       setDbError(
         "Aucun UUID de jeu trouvé dans la table 'games' Supabase. Vérifie les permissions SELECT sur 'games'."
@@ -769,23 +861,36 @@ export default function AdminConsolePage() {
         ? params.nextSeriesQuestions
         : seriesQuestions;
 
+    const effectiveJcQuestions =
+      params.nextJusteChiffreQuestions !== undefined
+        ? params.nextJusteChiffreQuestions
+        : justeChiffreQuestions;
+
+    const numericGameMode = isJusteChiffreGame(activeTargetGame);
     const isQuizGame =
       validGameUuid === GRAND_QUIZ_UUID ||
-      (params.game ?? selectedGame)?.slug === "quiz" ||
-      (params.game ?? selectedGame)?.title?.toLowerCase().includes("quiz");
+      activeTargetGame?.slug === "quiz" ||
+      activeTargetGame?.title?.toLowerCase().includes("quiz");
 
     const hasQuestionStarted = effectiveQuestionIndex >= 0;
     const isPaused = params.nextStatus === "paused";
+    const shouldResetAnswers = params.resetAnswers !== false;
 
-    const activeQuestionForState =
-      hasQuestionStarted
-        ? effectiveSeriesQuestions.at(
+    const activeQuestionForState = hasQuestionStarted
+      ? numericGameMode
+        ? effectiveJcQuestions.at(
+            Math.min(
+              effectiveQuestionIndex,
+              Math.max(0, effectiveJcQuestions.length - 1)
+            )
+          ) ?? null
+        : effectiveSeriesQuestions.at(
             Math.min(
               effectiveQuestionIndex,
               Math.max(0, effectiveSeriesQuestions.length - 1)
             )
           ) ?? null
-        : null;
+      : null;
 
     setRemoteCurrentQuestion(activeQuestionForState);
 
@@ -799,7 +904,30 @@ export default function AdminConsolePage() {
         show_qr: params.qrVisible,
       };
 
-      if (isQuizGame) {
+      if (numericGameMode) {
+        basePayload.game_state = {
+          mode: "juste-chiffre",
+          minValue: JUSTE_CHIFFRE_MIN,
+          maxValue: JUSTE_CHIFFRE_MAX,
+          questionStarted: hasQuestionStarted,
+          roundTriggered: hasQuestionStarted,
+          questionIndex: effectiveQuestionIndex,
+          currentQuestionIndex: effectiveQuestionIndex,
+          currentQuestion: activeQuestionForState,
+          targetNumber:
+            (activeQuestionForState as JusteChiffreQuestion | null)?.answer ??
+            null,
+          questionStartedAt: hasQuestionStarted ? effectiveStartedAt : null,
+          durationSeconds: JUSTE_CHIFFRE_DURATION_SECONDS,
+          isPaused,
+          pausedRemainingSeconds: isPaused ? effectivePausedRemaining : null,
+          seriesNumber: effectiveSeries,
+          seriesSeed: effectiveSeed,
+          questions: effectiveJcQuestions,
+          revealed: false,
+          ...(shouldResetAnswers ? { estimates: {}, answers: {} } : {}),
+        };
+      } else if (isQuizGame) {
         basePayload.game_state = {
           questionStarted: hasQuestionStarted,
           roundTriggered: hasQuestionStarted,
@@ -815,7 +943,7 @@ export default function AdminConsolePage() {
           seriesQuestions: effectiveSeriesQuestions,
           questions: effectiveSeriesQuestions,
           revealed: false,
-          ...(params.resetAnswers !== false ? { answers: {} } : {}),
+          ...(shouldResetAnswers ? { answers: {} } : {}),
         };
       }
 
@@ -912,10 +1040,16 @@ export default function AdminConsolePage() {
           QUESTIONS_PER_GAME,
           `${sessionCode}-1-${initialSeed}`
         );
+        const initialJcPicked = pickSeriesQuestions(
+          JUSTE_CHIFFRE_QUESTIONS,
+          QUESTIONS_PER_GAME,
+          `${sessionCode}-jc-1-${initialSeed}`
+        );
         if (firstUuidGame) {
           setSelectedGameId(firstUuidGame.id);
           setSeriesSeed(initialSeed);
           setSeriesQuestions(initialPicked);
+          setJusteChiffreQuestions(initialJcPicked);
           await syncSessionToDb({
             id: null,
             code: sessionCode,
@@ -928,6 +1062,7 @@ export default function AdminConsolePage() {
             nextSeriesNumber: 1,
             nextSeriesSeed: initialSeed,
             nextSeriesQuestions: initialPicked,
+            nextJusteChiffreQuestions: initialJcPicked,
           });
         }
       } else if (!cancelled) {
@@ -957,6 +1092,11 @@ export default function AdminConsolePage() {
       QUESTIONS_PER_GAME,
       `${newCode}-1-${newSeed}`
     );
+    const newJcPicked = pickSeriesQuestions(
+      JUSTE_CHIFFRE_QUESTIONS,
+      QUESTIONS_PER_GAME,
+      `${newCode}-jc-1-${newSeed}`
+    );
     const previousSessionId = sessionId;
 
     if (supabase && previousSessionId && isUuid(previousSessionId)) {
@@ -981,6 +1121,7 @@ export default function AdminConsolePage() {
     setSeriesNumber(1);
     setSeriesSeed(newSeed);
     setSeriesQuestions(newPicked);
+    setJusteChiffreQuestions(newJcPicked);
     setRemoteCurrentQuestion(null);
     setPlayers([]);
     setScores([]);
@@ -998,6 +1139,7 @@ export default function AdminConsolePage() {
       nextSeriesNumber: 1,
       nextSeriesSeed: newSeed,
       nextSeriesQuestions: newPicked,
+      nextJusteChiffreQuestions: newJcPicked,
     });
   };
 
@@ -1031,12 +1173,12 @@ export default function AdminConsolePage() {
 
     // Mise en pause : on calcule et sauvegarde le temps restant exact pour stopper le chrono TV
     if (nextStatus === "paused") {
-      let remaining = QUESTION_DURATION_SECONDS;
+      let remaining = activeDurationSeconds;
       if (questionStartedAt) {
         const startMs = Date.parse(questionStartedAt);
         if (!Number.isNaN(startMs)) {
           const elapsed = Math.max(0, (nowMs - startMs) / 1000);
-          remaining = Math.max(0, QUESTION_DURATION_SECONDS - elapsed);
+          remaining = Math.max(0, activeDurationSeconds - elapsed);
         }
       }
       setStatus("paused");
@@ -1063,7 +1205,7 @@ export default function AdminConsolePage() {
         questionIndex >= 0
       ) {
         const elapsedBeforePause =
-          QUESTION_DURATION_SECONDS - pausedRemainingSeconds;
+          activeDurationSeconds - pausedRemainingSeconds;
         resumedStartedAt = new Date(
           nowMs - elapsedBeforePause * 1000
         ).toISOString();
@@ -1086,7 +1228,7 @@ export default function AdminConsolePage() {
     }
   };
 
-  // Relance une nouvelle série de 15 questions différente à la fin de la partie
+  // Relance une nouvelle série de questions différente à la fin de la partie
   const handleRestartNewSeries = async () => {
     const nextSeries = seriesNumber + 1;
     const nextSeed = generateSeriesSeed();
@@ -1095,12 +1237,18 @@ export default function AdminConsolePage() {
       QUESTIONS_PER_GAME,
       `${sessionCode}-${nextSeries}-${nextSeed}`
     );
+    const nextJcPicked = pickSeriesQuestions(
+      JUSTE_CHIFFRE_QUESTIONS,
+      QUESTIONS_PER_GAME,
+      `${sessionCode}-jc-${nextSeries}-${nextSeed}`
+    );
     const startedIso = new Date().toISOString();
 
     setStatus("playing");
     setSeriesNumber(nextSeries);
     setSeriesSeed(nextSeed);
     setSeriesQuestions(nextPicked);
+    setJusteChiffreQuestions(nextJcPicked);
     setQuestionIndex(0);
     setQuestionStartedAt(startedIso);
     setPausedRemainingSeconds(null);
@@ -1118,11 +1266,12 @@ export default function AdminConsolePage() {
       nextSeriesNumber: nextSeries,
       nextSeriesSeed: nextSeed,
       nextSeriesQuestions: nextPicked,
+      nextJusteChiffreQuestions: nextJcPicked,
       resetAnswers: true,
     });
   };
 
-  // Passe à la question suivante (index 0 au 1er clic, puis 1, 2, ... jusqu'à 14)
+  // Passe à la question suivante (index 0 au 1er clic, puis 1, 2, ... jusqu'à la fin de la série)
   const handleNextQuestion = async () => {
     const nextIdx =
       questionIndex < 0
@@ -1164,7 +1313,16 @@ export default function AdminConsolePage() {
 
   const handleSelectGame = async (gameId: string) => {
     const targetGame = games.find((g) => g.id === gameId) ?? null;
+    const nextSeed = generateSeriesSeed();
+    const nextJcPicked = pickSeriesQuestions(
+      JUSTE_CHIFFRE_QUESTIONS,
+      QUESTIONS_PER_GAME,
+      `${sessionCode}-jc-${seriesNumber}-${nextSeed}`
+    );
+
     setSelectedGameId(gameId);
+    setSeriesSeed(nextSeed);
+    setJusteChiffreQuestions(nextJcPicked);
     setQuestionIndex(-1);
     setQuestionStartedAt(null);
     setPausedRemainingSeconds(null);
@@ -1179,6 +1337,8 @@ export default function AdminConsolePage() {
       nextQuestionIndex: -1,
       nextQuestionStartedAt: null,
       nextPausedRemaining: null,
+      nextSeriesSeed: nextSeed,
+      nextJusteChiffreQuestions: nextJcPicked,
       resetAnswers: true,
     });
   };
@@ -1511,8 +1671,27 @@ export default function AdminConsolePage() {
                 </p>
 
                 <div className="flex items-center gap-2 shrink-0">
-                  {/* Pastille de la bonne réponse à la question en cours */}
+                  {/* Cible numérique pour Le Juste Chiffre */}
                   {showPlayerAnswersInAdmin &&
+                    isJusteChiffre &&
+                    currentJusteChiffreQuestion && (
+                      <span
+                        className="px-2.5 py-1 rounded-full border border-amber-300/60 bg-amber-400/20 text-amber-200 font-mono text-xs font-black flex items-center gap-1 shrink-0"
+                        title="Cible à approcher (1 à 1000)"
+                      >
+                        <Target className="w-3.5 h-3.5 text-amber-300" />
+                        <span>
+                          {currentJusteChiffreQuestion.answer}
+                          {currentJusteChiffreQuestion.unit
+                            ? ` ${currentJusteChiffreQuestion.unit}`
+                            : ""}
+                        </span>
+                      </span>
+                    )}
+
+                  {/* Pastille de la bonne réponse à la question en cours (Quiz) */}
+                  {showPlayerAnswersInAdmin &&
+                    !isJusteChiffre &&
                     currentCorrectLetter &&
                     currentCorrectBadgeStyle && (
                       <span
@@ -1751,9 +1930,10 @@ export default function AdminConsolePage() {
                   {players.map((player) => {
                     const color = getUniquePlayerColor(player.id, players);
                     const answerValue = playerAnswersById[player.id] ?? null;
-                    const badgeStyle = answerValue
-                      ? getAnswerBadgeStyle(answerValue)
-                      : null;
+                    const badgeStyle =
+                      !isJusteChiffre && answerValue
+                        ? getAnswerBadgeStyle(answerValue)
+                        : null;
 
                     return (
                       <div
@@ -1796,8 +1976,21 @@ export default function AdminConsolePage() {
                           </div>
 
                           <div className="flex items-center gap-2 shrink-0">
-                            {/* Pastille ronde avec la lettre et la couleur de la réponse */}
+                            {/* Estimation numérique (Le Juste Chiffre) */}
                             {showPlayerAnswersInAdmin &&
+                              isJusteChiffre &&
+                              answerValue && (
+                                <span
+                                  className="px-2.5 h-8 rounded-full border-2 border-white bg-black/55 text-white flex items-center justify-center font-mono text-xs font-black shadow-md shrink-0"
+                                  title={`Estimation : ${answerValue}`}
+                                >
+                                  {answerValue}
+                                </span>
+                              )}
+
+                            {/* Pastille ronde avec la lettre et la couleur de la réponse (Quiz) */}
+                            {showPlayerAnswersInAdmin &&
+                              !isJusteChiffre &&
                               answerValue &&
                               badgeStyle && (
                                 <span
