@@ -37,6 +37,7 @@ interface QuizQuestionPayload {
   correct_index?: number;
   correctAnswer?: string | number;
   correct_answer?: string | number;
+  answer?: string | number;
   points?: number;
 }
 
@@ -146,24 +147,35 @@ function extractOptions(
   );
 }
 
-function normalizeAnswerLetter(raw: unknown): string | null {
+function normalizeAnswerLetter(
+  raw: unknown,
+  options: string[] = []
+): string | null {
   if (typeof raw === "number" && Number.isInteger(raw) && raw >= 0 && raw <= 3) {
     return LETTERS[raw] ?? null;
   }
   if (typeof raw === "string") {
-    const upper = raw.trim().toUpperCase();
+    const trimmed = raw.trim();
+    const upper = trimmed.toUpperCase();
     if (upper === "A" || upper === "B" || upper === "C" || upper === "D") {
       return upper;
     }
     if (upper === "0" || upper === "1" || upper === "2" || upper === "3") {
       return LETTERS[Number(upper)] ?? null;
     }
+    const matchedIdx = options.findIndex(
+      (opt) => opt.trim().toLowerCase() === trimmed.toLowerCase()
+    );
+    if (matchedIdx >= 0 && matchedIdx <= 3) {
+      return LETTERS[matchedIdx] ?? null;
+    }
   }
   return null;
 }
 
 function resolveCorrectLetter(
-  question: QuizQuestionPayload | null
+  question: QuizQuestionPayload | null,
+  options: string[] = []
 ): string | null {
   if (!question) return null;
   const rawIdx =
@@ -176,7 +188,11 @@ function resolveCorrectLetter(
     return LETTERS[rawIdx] ?? null;
   }
   return normalizeAnswerLetter(
-    question.correct ?? question.correctAnswer ?? question.correct_answer
+    question.correct ??
+      question.correctAnswer ??
+      question.correct_answer ??
+      question.answer,
+    options
   );
 }
 
@@ -243,6 +259,8 @@ export default function PlayerControllerPage() {
   const highlightTimeoutRef = useRef<number | null>(null);
   const wakeLockRef = useRef<WakeLockSentinelLike | null>(null);
   const settledQuestionsRef = useRef<Set<string>>(new Set());
+  const scoresRef = useRef<PlayerScore[]>(scores);
+  scoresRef.current = scores;
 
   const clearHighlightTimer = () => {
     if (highlightTimeoutRef.current !== null) {
@@ -631,23 +649,38 @@ export default function PlayerControllerPage() {
 
     const settlementKey = `${identity.playerId}::${currentQuestionKey}`;
     if (settledQuestionsRef.current.has(settlementKey)) return;
-    settledQuestionsRef.current.add(settlementKey);
 
     const chosenLetter =
       submittedQuestionKey === currentQuestionKey
         ? submittedChoiceLetter
-        : normalizeAnswerLetter(quizState.answers?.[String(identity.playerId)]);
+        : normalizeAnswerLetter(
+            quizState.answers?.[String(identity.playerId)],
+            parsedOptions
+          );
+
+    settledQuestionsRef.current.add(settlementKey);
 
     if (!chosenLetter) {
       setStatusMessage("Temps écoulé • 0 pt");
       return;
     }
 
-    const correctLetter = resolveCorrectLetter(activeQuestion);
+    const correctLetter = resolveCorrectLetter(activeQuestion, parsedOptions);
     const isCorrect =
       Boolean(correctLetter) && chosenLetter === correctLetter;
     const delta = isCorrect ? 3 : -1;
-    const nextScore = Math.max(0, myScore + delta);
+
+    const currentMatch = scoresRef.current.find(
+      (s) => s.player_id === identity.playerId
+    );
+    const currentRecord = currentMatch as
+      | { total_score?: number; score?: number }
+      | undefined;
+    const baseScore = Math.max(
+      0,
+      currentRecord?.total_score ?? currentRecord?.score ?? 0
+    );
+    const nextScore = Math.max(0, baseScore + delta);
 
     setScores((prev) => {
       const exists = prev.some((s) => s.player_id === identity.playerId);
@@ -698,11 +731,11 @@ export default function PlayerControllerPage() {
     identity,
     currentQuestionKey,
     activeQuestion,
+    parsedOptions,
     isTimerExpired,
     quizState.answers,
     submittedQuestionKey,
     submittedChoiceLetter,
-    myScore,
     supabase,
     session?.id,
     sessionCode,
