@@ -149,7 +149,12 @@ function pickRandomQuestionsSeries(
   };
   for (let i = copy.length - 1; i > 0; i--) {
     const j = Math.floor(nextRand() * (i + 1));
-    [copy[i], copy[j]] = [copy[j], copy[i]];
+    const itemI = copy[i];
+    const itemJ = copy[j];
+    if (itemI !== undefined && itemJ !== undefined) {
+      copy[i] = itemJ;
+      copy[j] = itemI;
+    }
   }
   return copy.slice(0, Math.min(count, copy.length));
 }
