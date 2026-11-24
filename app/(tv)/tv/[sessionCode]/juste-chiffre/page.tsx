@@ -203,6 +203,9 @@ export default function TvJusteChiffrePage() {
   const [roundPointsByPlayer, setRoundPointsByPlayer] = useState<
     Record<string, number>
   >({});
+  const [exactPlayersByRound, setExactPlayersByRound] = useState<
+    Record<string, boolean>
+  >({});
   const [launchFlyBadges, setLaunchFlyBadges] = useState<boolean>(false);
   const [laserImpactFlash, setLaserImpactFlash] = useState<boolean>(false);
   const [screenShake, setScreenShake] = useState<boolean>(false);
@@ -218,7 +221,7 @@ export default function TvJusteChiffrePage() {
   const activeRoundSignatureRef = useRef<string>("");
   const zeroSequenceRoundRef = useRef<string>("");
   const revealAnimRoundRef = useRef<string>("");
-  const fxRoundRef = useRef<string>("");
+  const fxRoundSignatureRef = useRef<string>("");
 
   const startParticlesLoop = () => {
     if (rafLoopRef.current) return;
@@ -650,7 +653,7 @@ export default function TvJusteChiffrePage() {
       activeRoundSignatureRef.current = "";
       zeroSequenceRoundRef.current = "";
       revealAnimRoundRef.current = "";
-      fxRoundRef.current = "";
+      fxRoundSignatureRef.current = "";
       setLocalStartMs(null);
       setFrozenRemaining(null);
       setShowTopQuestion(false);
@@ -664,6 +667,7 @@ export default function TvJusteChiffrePage() {
       setTargetCounterValue(0);
       setDisplayCounters({});
       setRoundPointsByPlayer({});
+      setExactPlayersByRound({});
       setLaunchFlyBadges(false);
       setLaserImpactFlash(false);
       setScreenShake(false);
@@ -674,7 +678,7 @@ export default function TvJusteChiffrePage() {
     activeRoundSignatureRef.current = roundSignature;
     zeroSequenceRoundRef.current = "";
     revealAnimRoundRef.current = "";
-    fxRoundRef.current = "";
+    fxRoundSignatureRef.current = "";
 
     const start = remoteStartMs ?? Date.now();
     setLocalStartMs(start);
@@ -691,6 +695,7 @@ export default function TvJusteChiffrePage() {
     setTargetCounterValue(0);
     setDisplayCounters({});
     setRoundPointsByPlayer({});
+    setExactPlayersByRound({});
     setLaunchFlyBadges(false);
     setLaserImpactFlash(false);
     setScreenShake(false);
@@ -869,9 +874,6 @@ export default function TvJusteChiffrePage() {
       ? Math.max(0, Math.min(100, (targetNumber / MAX_VALUE) * 100))
       : null;
 
-  // 1) Déplacement de toutes les barres des joueurs en premier
-  // 2) Attente de 1,5 s après que toutes les barres des joueurs soient en place
-  // 3) Déplacement de la barre verticale cible (8 s pour 0 -> 1000, proportionnel à targetNumber) + compteur cible de 0 à targetNumber
   useEffect(() => {
     if (!shouldReveal || !roundSignature) return;
 
@@ -1033,21 +1035,28 @@ export default function TvJusteChiffrePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldReveal, roundSignature, estimatesKey, targetNumber]);
 
+  // Effets visuels + pastilles + confettis/secousse rejoués à chaque question révélée
   useEffect(() => {
     if (phase !== "revealed" || !roundSignature) return;
-    if (fxRoundRef.current === roundSignature) return;
-    fxRoundRef.current = roundSignature;
+    const fxKey = `${roundSignature}-${targetNumber ?? "none"}-${estimatesKey}`;
+    if (fxRoundSignatureRef.current === fxKey) return;
+    fxRoundSignatureRef.current = fxKey;
 
     const currentRanked = rankedPlayersRef.current;
     const ptsMap: Record<string, number> = {};
+    const exactMap: Record<string, boolean> = {};
     let hasExact = false;
 
     for (const item of currentRanked) {
+      const pid = String(item.player.id);
+      if (item.isExact && item.guess !== null) {
+        exactMap[pid] = true;
+        hasExact = true;
+      }
       if (item.isWinner && item.guess !== null) {
-        ptsMap[String(item.player.id)] = item.isExact ? 5 : 3;
-        if (item.isExact) hasExact = true;
+        ptsMap[pid] = item.isExact ? 5 : 3;
 
-        const barEl = barRefs.current[String(item.player.id)];
+        const barEl = barRefs.current[pid];
         if (barEl) {
           const rect = barEl.getBoundingClientRect();
           spawnSparks(
@@ -1058,7 +1067,7 @@ export default function TvJusteChiffrePage() {
           );
         }
       } else if (item.guess !== null) {
-        const barEl = barRefs.current[String(item.player.id)];
+        const barEl = barRefs.current[pid];
         if (barEl) {
           const rect = barEl.getBoundingClientRect();
           spawnSmoke(
@@ -1071,23 +1080,28 @@ export default function TvJusteChiffrePage() {
     }
 
     setRoundPointsByPlayer(ptsMap);
+    setExactPlayersByRound(exactMap);
     setLaunchFlyBadges(true);
 
     if (hasExact) {
-      spawnConfetti(110);
-      setScreenShake(true);
-      window.setTimeout(() => setScreenShake(false), 500);
+      spawnConfetti(120);
+      setScreenShake(false);
+      window.requestAnimationFrame(() => {
+        setScreenShake(true);
+      });
+      window.setTimeout(() => setScreenShake(false), 520);
     }
 
     const flyResetTimer = window.setTimeout(() => {
       setLaunchFlyBadges(false);
-    }, 1300);
+    }, 1400);
 
     return () => {
       window.clearTimeout(flyResetTimer);
     };
-  }, [phase, roundSignature]);
+  }, [phase, roundSignature, targetNumber, estimatesKey]);
 
+  // Attribution des points dans player_scores à chaque question (s'appuie sur l'index de question et la signature de manche)
   useEffect(() => {
     if (
       !supabase ||
@@ -1099,7 +1113,7 @@ export default function TvJusteChiffrePage() {
       return;
     }
 
-    const roundKey = `${session.id}-jc-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}`;
+    const roundKey = `${session.id}-jc-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${remoteStartMs ?? 0}`;
     if (scoredRoundsRef.current.has(roundKey) || isScoringRef.current) return;
 
     isScoringRef.current = true;
@@ -1112,8 +1126,16 @@ export default function TvJusteChiffrePage() {
         );
         if (winners.length === 0) return;
 
+        const { data: latestScores } = await supabase
+          .from("player_scores")
+          .select("*")
+          .eq("session_id", session.id);
+
+        const baseRows =
+          (latestScores as PlayerScore[] | null) ?? scoresRowsRef.current;
+
         const currentMap = new Map<string, number>();
-        for (const row of scoresRowsRef.current) {
+        for (const row of baseRows) {
           const rec = row as unknown as {
             player_id?: string | null;
             total_score?: number | null;
@@ -1131,6 +1153,7 @@ export default function TvJusteChiffrePage() {
           const pid = String(w.player.id);
           const pts = w.isExact ? 5 : 3;
           const nextScore = (currentMap.get(pid) ?? 0) + pts;
+          currentMap.set(pid, nextScore);
 
           await supabase.from("player_scores").upsert(
             {
@@ -1163,6 +1186,7 @@ export default function TvJusteChiffrePage() {
     targetNumber,
     seriesNumber,
     seriesSeed,
+    remoteStartMs,
   ]);
 
   return (
@@ -1298,7 +1322,6 @@ export default function TvJusteChiffrePage() {
       </header>
 
       <main className="flex-1 min-h-0 flex items-stretch gap-0 mt-3 overflow-hidden">
-        {/* CLASSEMENT À GAUCHE (z-30 pour masquer le point de départ des barres derrière lui) */}
         <aside className="relative z-30 w-[280px] xl:w-[340px] shrink-0 bg-neutral-900 border border-white/15 rounded-l-3xl p-3 flex flex-col gap-2">
           <div className="flex items-center gap-2 pb-1.5 border-b border-white/10 shrink-0">
             <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
@@ -1415,9 +1438,7 @@ export default function TvJusteChiffrePage() {
               </div>
             </section>
           ) : (
-            /* PISTE FIXE (ne bouge jamais verticalement quand la question apparaît/disparaît) */
             <section className="relative flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl flex flex-col justify-between py-3 px-0 overflow-hidden">
-              {/* QUESTION AFFICHÉE EN HAUT EN OVERLAY FIXE */}
               {showTopQuestion && currentQuestion.question && (
                 <div
                   aria-live="polite"
@@ -1436,12 +1457,10 @@ export default function TvJusteChiffrePage() {
                 </div>
               )}
 
-              {/* Conteneur de piste pleine largeur (0% à 100% aligné exactement avec les barres des joueurs) */}
               <div
                 ref={targetTrackRef}
                 className="relative flex-1 min-h-0 w-full flex flex-col justify-between"
               >
-                {/* Bande d'échelle 1 / 500 / 1000 + compteur cible défilant de 0 à targetNumber */}
                 <div className="relative h-10 shrink-0 mx-4 font-mono font-black text-2xl xl:text-3xl leading-none border-b border-white/15">
                   <span className="absolute left-0 top-1 text-white">1</span>
                   <span className="absolute left-1/2 -translate-x-1/2 top-1 text-amber-300">
@@ -1450,13 +1469,11 @@ export default function TvJusteChiffrePage() {
                   <span className="absolute right-0 top-1 text-white">1000</span>
                 </div>
 
-                {/* Ligne verticale milieu (500) */}
                 <div
                   aria-hidden="true"
                   className="pointer-events-none absolute top-10 bottom-0 left-1/2 border-l-2 border-dashed border-white/25 z-0"
                 />
 
-                {/* Barre verticale cible (faisceau laser vert + compteur de 0 à targetNumber) */}
                 {targetLineVisible && targetPercent !== null && (
                   <div
                     style={{
@@ -1480,7 +1497,6 @@ export default function TvJusteChiffrePage() {
                   </div>
                 )}
 
-                {/* Barres des joueurs démarrant à 0 depuis le bord gauche (masquées sous le classement) */}
                 <div className="relative z-10 flex-1 min-h-0 flex flex-col justify-center gap-1.5">
                   {rankedPlayers.map(({ player, guess, isWinner }) => {
                     const idStr = String(player.id);
@@ -1508,6 +1524,8 @@ export default function TvJusteChiffrePage() {
 
                     const isLoser = isBarAnimatingNow && !isWinner;
                     const wonPts = roundPointsByPlayer[idStr];
+                    const isExactBadge =
+                      phase === "revealed" && Boolean(exactPlayersByRound[idStr]);
 
                     const transitionStyle = `width ${barDurationMs}ms cubic-bezier(0.34, 1.42, 0.64, 1)`;
 
@@ -1549,6 +1567,17 @@ export default function TvJusteChiffrePage() {
                             </span>
                           )}
                         </div>
+
+                        {isExactBadge && (
+                          <span
+                            style={{
+                              left: `${Math.min(88, Math.max(4, (guess ?? 0) / 10))}%`,
+                            }}
+                            className="pointer-events-none absolute -top-3 z-40 px-2.5 py-0.5 rounded-full bg-emerald-400 text-black font-mono text-xs xl:text-sm font-black uppercase tracking-wider shadow-lg border border-white/50 animate-bounce"
+                          >
+                            Exact !
+                          </span>
+                        )}
 
                         {launchFlyBadges && wonPts !== undefined && (
                           <span
