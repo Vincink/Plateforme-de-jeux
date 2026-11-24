@@ -184,14 +184,11 @@ export default function TvJusteChiffrePage() {
   const [localStartMs, setLocalStartMs] = useState<number | null>(null);
   const [frozenRemaining, setFrozenRemaining] = useState<number | null>(null);
 
-  // Question affichée en haut dès le clic sur "question suivante",
-  // puis disparaît en fondu à 0s avant le délai de 2s puis révélation
   const [showTopQuestion, setShowTopQuestion] = useState<boolean>(false);
   const [isQuestionFadingOut, setIsQuestionFadingOut] = useState<boolean>(false);
   const [canStartRevealSequence, setCanStartRevealSequence] =
     useState<boolean>(false);
 
-  // États d'animation des barres, ligne cible, compteurs et effets (1, 6, 4, 2+15, 12, 8)
   const [barsExpanded, setBarsExpanded] = useState<boolean>(false);
   const [targetLineExpanded, setTargetLineExpanded] = useState<boolean>(false);
   const [displayCounters, setDisplayCounters] = useState<
@@ -207,32 +204,24 @@ export default function TvJusteChiffrePage() {
 
   const fxCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const particlesRef = useRef<Particle[]>([]);
+  const rafLoopRef = useRef<number>(0);
   const barRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const targetTrackRef = useRef<HTMLDivElement | null>(null);
 
   const scoredRoundsRef = useRef<Set<string>>(new Set());
   const isScoringRef = useRef<boolean>(false);
-  const lastRoundKeyRef = useRef<string>("");
-  const zeroSequenceStartedRef = useRef<boolean>(false);
-  const revealAnimStartedRoundRef = useRef<string>("");
-  const fxStartedRoundRef = useRef<string>("");
+  const activeRoundSignatureRef = useRef<string>("");
+  const zeroSequenceRoundRef = useRef<string>("");
+  const revealAnimRoundRef = useRef<string>("");
+  const fxRoundRef = useRef<string>("");
 
-  // --- Moteur de particules (étincelles 2, fumée 12, confettis 8) ---
-  useEffect(() => {
+  const startParticlesLoop = () => {
+    if (rafLoopRef.current) return;
     const canvas = fxCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const ctx = canvas?.getContext("2d");
+    if (!canvas || !ctx) return;
 
-    const handleResize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
-    };
-    handleResize();
-    window.addEventListener("resize", handleResize);
-
-    let rafId = 0;
-    const renderLoop = () => {
+    const step = () => {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       particlesRef.current = particlesRef.current.filter(
         (p) => p.alpha > 0.015 && p.y < canvas.height + 60
@@ -278,13 +267,33 @@ export default function TvJusteChiffrePage() {
       }
 
       ctx.globalAlpha = 1;
-      rafId = window.requestAnimationFrame(renderLoop);
+
+      if (particlesRef.current.length > 0) {
+        rafLoopRef.current = window.requestAnimationFrame(step);
+      } else {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        rafLoopRef.current = 0;
+      }
     };
 
-    rafId = window.requestAnimationFrame(renderLoop);
+    rafLoopRef.current = window.requestAnimationFrame(step);
+  };
+
+  useEffect(() => {
+    const canvas = fxCanvasRef.current;
+    if (!canvas) return;
+    const handleResize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
     return () => {
       window.removeEventListener("resize", handleResize);
-      window.cancelAnimationFrame(rafId);
+      if (rafLoopRef.current) {
+        window.cancelAnimationFrame(rafLoopRef.current);
+        rafLoopRef.current = 0;
+      }
     };
   }, []);
 
@@ -304,6 +313,7 @@ export default function TvJusteChiffrePage() {
         color: colors[Math.floor(Math.random() * colors.length)] ?? "#fde047",
       });
     }
+    startParticlesLoop();
   };
 
   const spawnSmoke = (x: number, y: number, count = 20) => {
@@ -320,6 +330,7 @@ export default function TvJusteChiffrePage() {
         grow: 0.35,
       });
     }
+    startParticlesLoop();
   };
 
   const spawnConfetti = (count = 110) => {
@@ -348,6 +359,7 @@ export default function TvJusteChiffrePage() {
         color: colors[Math.floor(Math.random() * colors.length)] ?? "#fde047",
       });
     }
+    startParticlesLoop();
   };
 
   // --- Synchronisation temps réel Supabase ---
@@ -577,7 +589,9 @@ export default function TvJusteChiffrePage() {
 
   const currentQuestion = useMemo<JusteChiffreQuestion | null>(() => {
     if (activeQuestionIndex === null || isSeriesCompleted) return null;
-    if (statePayload.currentQuestion) return statePayload.currentQuestion;
+    if (statePayload.currentQuestion && statePayload.currentQuestion.question) {
+      return statePayload.currentQuestion;
+    }
     if (questions.length > 0) {
       return (
         questions[Math.min(activeQuestionIndex, questions.length - 1)] ?? null
@@ -615,11 +629,25 @@ export default function TvJusteChiffrePage() {
     parseTimestampMs(statePayload.questionStartedAt) ??
     parseTimestampMs(statePayload.question_started_at);
 
-  // À chaque clic sur "question suivante" :
-  // - La question apparaît immédiatement en haut
-  // - On réinitialise les barres, compteurs et effets de la manche précédente
+  const roundSignature = useMemo(() => {
+    if (activeQuestionIndex === null || !currentQuestion) return "";
+    return `${session?.id ?? ""}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${remoteStartMs ?? 0}`;
+  }, [
+    activeQuestionIndex,
+    currentQuestion,
+    session?.id,
+    seriesNumber,
+    seriesSeed,
+    remoteStartMs,
+  ]);
+
+  // Réinitialisation fiable à chaque nouvelle question / clic sur "question suivante"
   useEffect(() => {
-    if (activeQuestionIndex === null || !currentQuestion) {
+    if (!roundSignature) {
+      activeRoundSignatureRef.current = "";
+      zeroSequenceRoundRef.current = "";
+      revealAnimRoundRef.current = "";
+      fxRoundRef.current = "";
       setLocalStartMs(null);
       setFrozenRemaining(null);
       setShowTopQuestion(false);
@@ -633,16 +661,14 @@ export default function TvJusteChiffrePage() {
       setLaunchFlyBadges(false);
       setLaserImpactFlash(false);
       setScreenShake(false);
-      zeroSequenceStartedRef.current = false;
-      revealAnimStartedRoundRef.current = "";
-      fxStartedRoundRef.current = "";
-      lastRoundKeyRef.current = "";
       return;
     }
 
-    const roundKey = `${session?.id ?? ""}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${remoteStartMs ?? ""}`;
-    if (lastRoundKeyRef.current === roundKey) return;
-    lastRoundKeyRef.current = roundKey;
+    if (activeRoundSignatureRef.current === roundSignature) return;
+    activeRoundSignatureRef.current = roundSignature;
+    zeroSequenceRoundRef.current = "";
+    revealAnimRoundRef.current = "";
+    fxRoundRef.current = "";
 
     const start = remoteStartMs ?? Date.now();
     setLocalStartMs(start);
@@ -659,17 +685,7 @@ export default function TvJusteChiffrePage() {
     setLaunchFlyBadges(false);
     setLaserImpactFlash(false);
     setScreenShake(false);
-    zeroSequenceStartedRef.current = false;
-    revealAnimStartedRoundRef.current = "";
-    fxStartedRoundRef.current = "";
-  }, [
-    activeQuestionIndex,
-    currentQuestion,
-    remoteStartMs,
-    session?.id,
-    seriesNumber,
-    seriesSeed,
-  ]);
+  }, [roundSignature, remoteStartMs]);
 
   useEffect(() => {
     if (!isPaused || activeQuestionIndex === null) {
@@ -731,14 +747,11 @@ export default function TvJusteChiffrePage() {
 
   const isQuestionEnded = Boolean(isTimerZero || statePayload.revealed);
 
-  // Dès que le chrono atteint 0 :
-  // 1) Disparition en fondu de la question en haut (550 ms)
-  // 2) Attente stricte de 2000 ms (2 secondes)
-  // 3) Lancement de la révélation
+  // Séquence fin de chrono : fondu de la question en haut (550 ms) + attente 2000 ms + révélation
   useEffect(() => {
-    if (!isQuestionEnded || activeQuestionIndex === null) return;
-    if (zeroSequenceStartedRef.current) return;
-    zeroSequenceStartedRef.current = true;
+    if (!isQuestionEnded || !roundSignature) return;
+    if (zeroSequenceRoundRef.current === roundSignature) return;
+    zeroSequenceRoundRef.current = roundSignature;
 
     setIsQuestionFadingOut(true);
 
@@ -754,7 +767,7 @@ export default function TvJusteChiffrePage() {
       window.clearTimeout(hideQuestionTimer);
       window.clearTimeout(revealWaitTimer);
     };
-  }, [isQuestionEnded, activeQuestionIndex]);
+  }, [isQuestionEnded, roundSignature]);
 
   const shouldReveal = canStartRevealSequence;
 
@@ -770,6 +783,15 @@ export default function TvJusteChiffrePage() {
     }
     return result;
   }, [statePayload.estimates, statePayload.guesses, statePayload.answers]);
+
+  const estimatesKey = useMemo(
+    () =>
+      Object.entries(estimatesByPlayerId)
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([k, v]) => `${k}:${v}`)
+        .join("|"),
+    [estimatesByPlayerId]
+  );
 
   const answeredPlayersCount = useMemo(() => {
     return players.filter(
@@ -825,6 +847,15 @@ export default function TvJusteChiffrePage() {
       .sort((a, b) => b.score - a.score);
   }, [players, scoresRows, estimatesByPlayerId, targetNumber, shouldReveal]);
 
+  const rankedPlayersRef = useRef(rankedPlayers);
+  rankedPlayersRef.current = rankedPlayers;
+  const scoresRowsRef = useRef(scoresRows);
+  scoresRowsRef.current = scoresRows;
+  const estimatesRef = useRef(estimatesByPlayerId);
+  estimatesRef.current = estimatesByPlayerId;
+  const playersRef = useRef(players);
+  playersRef.current = players;
+
   const targetPercent =
     targetNumber !== null
       ? Math.max(0, Math.min(100, (targetNumber / MAX_VALUE) * 100))
@@ -838,22 +869,26 @@ export default function TvJusteChiffrePage() {
         )
       : FULL_SCALE_BAR_MS;
 
-  // Déploiement des barres + ligne cible + compteurs figés dès l'arrivée de chaque barre
+  // Déploiement systématique des barres + ligne cible + compteurs figés à l'arrivée
   useEffect(() => {
-    if (!shouldReveal || activeQuestionIndex === null || !currentQuestion) {
-      return;
-    }
+    if (!shouldReveal || !roundSignature) return;
 
-    const animKey = `${session?.id ?? ""}-q${activeQuestionIndex}`;
-    if (revealAnimStartedRoundRef.current === animKey) return;
-    revealAnimStartedRoundRef.current = animKey;
+    const snapshotGuesses: Record<string, number> = { ...estimatesRef.current };
+    const playerIds = playersRef.current.map((p) => String(p.id));
+    const animSignature = `${roundSignature}-${estimatesKey}-${targetNumber ?? "none"}`;
 
-    const snapshotGuesses: Record<string, number> = { ...estimatesByPlayerId };
-    const playerIds = players.map((p) => String(p.id));
+    if (revealAnimRoundRef.current === animSignature) return;
+    revealAnimRoundRef.current = animSignature;
 
-    const startFrameId = window.requestAnimationFrame(() => {
-      setBarsExpanded(true);
-      setTargetLineExpanded(true);
+    setBarsExpanded(false);
+    setTargetLineExpanded(false);
+
+    let innerRaf = 0;
+    const outerRaf = window.requestAnimationFrame(() => {
+      innerRaf = window.requestAnimationFrame(() => {
+        setBarsExpanded(true);
+        setTargetLineExpanded(true);
+      });
     });
 
     const flashTimer = window.setTimeout(() => {
@@ -881,7 +916,7 @@ export default function TvJusteChiffrePage() {
       Math.round((maxGuess / MAX_VALUE) * FULL_SCALE_BAR_MS)
     );
     const animStart = performance.now();
-    let rafId = 0;
+    let counterRaf = 0;
     let isCancelled = false;
 
     const tickCounter = (now: number) => {
@@ -912,11 +947,11 @@ export default function TvJusteChiffrePage() {
       setDisplayCounters(nextCounters);
 
       if (anyStillRunning) {
-        rafId = window.requestAnimationFrame(tickCounter);
+        counterRaf = window.requestAnimationFrame(tickCounter);
       }
     };
 
-    rafId = window.requestAnimationFrame(tickCounter);
+    counterRaf = window.requestAnimationFrame(tickCounter);
 
     const revealDelay = Math.max(maxAnimDurationMs, REVEAL_DELAY_AFTER_BARS_MS);
 
@@ -929,24 +964,25 @@ export default function TvJusteChiffrePage() {
     return () => {
       isCancelled = true;
       window.clearTimeout(flashTimer);
-      window.cancelAnimationFrame(startFrameId);
-      window.cancelAnimationFrame(rafId);
+      window.cancelAnimationFrame(outerRaf);
+      window.cancelAnimationFrame(innerRaf);
+      window.cancelAnimationFrame(counterRaf);
       window.clearTimeout(revealTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shouldReveal, activeQuestionIndex]);
+  }, [shouldReveal, roundSignature, estimatesKey, targetNumber]);
 
   // Effets de verdict (2: onde néon + étincelles, 15: badge volant, 12: fumée perdants, 8: confettis + secousse exact)
   useEffect(() => {
-    if (phase !== "revealed" || activeQuestionIndex === null) return;
-    const fxKey = `${session?.id ?? ""}-fx-q${activeQuestionIndex}`;
-    if (fxStartedRoundRef.current === fxKey) return;
-    fxStartedRoundRef.current = fxKey;
+    if (phase !== "revealed" || !roundSignature) return;
+    if (fxRoundRef.current === roundSignature) return;
+    fxRoundRef.current = roundSignature;
 
+    const currentRanked = rankedPlayersRef.current;
     const ptsMap: Record<string, number> = {};
     let hasExact = false;
 
-    for (const item of rankedPlayers) {
+    for (const item of currentRanked) {
       if (item.isWinner && item.guess !== null) {
         ptsMap[String(item.player.id)] = item.isExact ? 5 : 3;
         if (item.isExact) hasExact = true;
@@ -965,7 +1001,11 @@ export default function TvJusteChiffrePage() {
         const barEl = barRefs.current[String(item.player.id)];
         if (barEl) {
           const rect = barEl.getBoundingClientRect();
-          spawnSmoke(rect.left + rect.width * 0.5, rect.top + rect.height / 2, 16);
+          spawnSmoke(
+            rect.left + rect.width * 0.5,
+            rect.top + rect.height / 2,
+            16
+          );
         }
       }
     }
@@ -986,7 +1026,7 @@ export default function TvJusteChiffrePage() {
     return () => {
       window.clearTimeout(flyResetTimer);
     };
-  }, [phase, activeQuestionIndex, rankedPlayers, session?.id]);
+  }, [phase, roundSignature]);
 
   // Attribution des points (+5 si exact, +3 pour le plus proche)
   useEffect(() => {
@@ -1008,13 +1048,13 @@ export default function TvJusteChiffrePage() {
 
     void (async () => {
       try {
-        const winners = rankedPlayers.filter(
+        const winners = rankedPlayersRef.current.filter(
           (r) => r.isWinner && r.guess !== null
         );
         if (winners.length === 0) return;
 
         const currentMap = new Map<string, number>();
-        for (const row of scoresRows) {
+        for (const row of scoresRowsRef.current) {
           const rec = row as unknown as {
             player_id?: string | null;
             total_score?: number | null;
@@ -1064,8 +1104,6 @@ export default function TvJusteChiffrePage() {
     targetNumber,
     seriesNumber,
     seriesSeed,
-    rankedPlayers,
-    scoresRows,
   ]);
 
   return (
@@ -1139,7 +1177,6 @@ export default function TvJusteChiffrePage() {
         }
       `}</style>
 
-      {/* ================= EN-TÊTE ================= */}
       <header className="flex items-center justify-between border-b border-white/15 pb-3 shrink-0 gap-6">
         <div className="flex items-center gap-4 min-w-0">
           <div className="w-13 h-13 rounded-2xl bg-amber-400/15 border border-amber-400/35 flex items-center justify-center shrink-0 p-2.5">
@@ -1211,9 +1248,7 @@ export default function TvJusteChiffrePage() {
         </div>
       </header>
 
-      {/* ================= ZONE PRINCIPALE ================= */}
       <main className="flex-1 min-h-0 flex items-stretch gap-0 mt-3 overflow-hidden">
-        {/* CLASSEMENT COMPACT À GAUCHE (RANG + PSEUDO + SCORE) */}
         <aside className="w-[250px] xl:w-[280px] shrink-0 bg-white/[0.05] border border-white/15 rounded-l-3xl p-3 flex flex-col gap-2">
           <div className="flex items-center gap-2 pb-1.5 border-b border-white/10 shrink-0">
             <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
@@ -1265,10 +1300,8 @@ export default function TvJusteChiffrePage() {
           </div>
         </aside>
 
-        {/* COLONNE DROITE : ÉCRAN D'ATTENTE / FIN DE SÉRIE OU QUESTION + PISTE DES JAUGES */}
-        <div className="flex-1 min-w-0 flex flex-col gap-2.5">
+        <div className="flex-1 min-h-0 flex flex-col gap-2.5">
           {isSeriesCompleted ? (
-            /* ÉCRAN FIN DE PARTIE (PODIUM) */
             <section className="flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl p-8 flex flex-col items-center justify-center text-center gap-6">
               <div className="w-20 h-20 rounded-3xl bg-amber-400/20 border-2 border-amber-400 flex items-center justify-center">
                 <Trophy className="w-11 h-11 text-amber-300" />
@@ -1310,7 +1343,6 @@ export default function TvJusteChiffrePage() {
               </div>
             </section>
           ) : activeQuestionIndex === null || !currentQuestion ? (
-            /* ÉCRAN D'ATTENTE DU LANCEMENT DE LA QUESTION */
             <section className="flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl p-8 flex flex-col items-center justify-center text-center gap-5">
               <div className="w-20 h-20 rounded-3xl bg-amber-400/15 border border-amber-400/35 flex items-center justify-center">
                 <Sparkles className="w-10 h-10 text-amber-300" />
@@ -1333,7 +1365,6 @@ export default function TvJusteChiffrePage() {
               </div>
             </section>
           ) : (
-            /* JEU EN COURS : QUESTION EN HAUT + PISTE DES JAUGES */
             <>
               {showTopQuestion && currentQuestion.question && (
                 <div
@@ -1357,7 +1388,6 @@ export default function TvJusteChiffrePage() {
                 ref={targetTrackRef}
                 className="relative flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl flex flex-col justify-between py-3 px-5"
               >
-                {/* Bande d'échelle 1 / 500 / 1000 + chiffre cible aligné sur la même ligne */}
                 <div className="relative h-9 shrink-0 font-mono font-black text-2xl xl:text-3xl leading-none border-b border-white/15">
                   <span className="absolute left-0 top-0 text-white">1</span>
                   <span className="absolute left-1/2 -translate-x-1/2 top-0 text-amber-300">
@@ -1380,13 +1410,11 @@ export default function TvJusteChiffrePage() {
                   )}
                 </div>
 
-                {/* Ligne verticale milieu (500) */}
                 <div
                   aria-hidden="true"
                   className="pointer-events-none absolute top-12 bottom-3 left-1/2 border-l-2 border-dashed border-white/25 z-0"
                 />
 
-                {/* Effet 4 : Faisceau laser cible partant de 0 avec la même vitesse que les barres */}
                 {shouldReveal && targetPercent !== null && (
                   <div
                     style={{
@@ -1405,7 +1433,6 @@ export default function TvJusteChiffrePage() {
                   </div>
                 )}
 
-                {/* Pastilles & barres centrées verticalement avec peu d'espace entre elles */}
                 <div className="relative z-10 flex-1 min-h-0 flex flex-col justify-center gap-1.5">
                   {rankedPlayers.map(({ player, guess, isWinner }) => {
                     const idStr = String(player.id);
@@ -1434,7 +1461,6 @@ export default function TvJusteChiffrePage() {
                     const isLoser = isBarAnimatingNow && !isWinner;
                     const wonPts = roundPointsByPlayer[idStr];
 
-                    // Effet 6 : rebond élastique en butée lors du déploiement
                     const transitionStyle = `width ${barDurationMs}ms cubic-bezier(0.34, 1.42, 0.64, 1)`;
 
                     return (
@@ -1442,7 +1468,6 @@ export default function TvJusteChiffrePage() {
                         key={player.id}
                         className="relative h-12 flex items-center"
                       >
-                        {/* Pastille de départ du joueur à gauche de la piste */}
                         <div
                           style={{
                             backgroundColor: pColor.bgHex,
@@ -1464,7 +1489,6 @@ export default function TvJusteChiffrePage() {
                           )}
                         </div>
 
-                        {/* Barre colorée avec effet 1 (verre poli + reflet) */}
                         <div className="relative flex-1 h-10 flex items-center">
                           <div
                             ref={(el) => {
@@ -1487,7 +1511,6 @@ export default function TvJusteChiffrePage() {
                                 : ""
                             }`}
                           >
-                            {/* Chiffre qui monte avec la barre puis reste figé sur l'estimation */}
                             {shouldReveal && hasAnswered && (
                               <span
                                 className={`relative z-10 ml-2 px-2.5 py-0.5 rounded-lg font-mono text-xl xl:text-2xl font-black leading-none shadow-md shrink-0 ${
@@ -1501,7 +1524,6 @@ export default function TvJusteChiffrePage() {
                             )}
                           </div>
 
-                          {/* Effet 15 : Badge +3 / +5 volant vers le classement */}
                           {launchFlyBadges && wonPts !== undefined && (
                             <span
                               style={{
