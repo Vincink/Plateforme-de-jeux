@@ -362,7 +362,6 @@ export default function TvJusteChiffrePage() {
     startParticlesLoop();
   };
 
-  // --- Synchronisation temps réel Supabase ---
   useEffect(() => {
     if (!supabase || !sessionCode) return;
 
@@ -641,7 +640,6 @@ export default function TvJusteChiffrePage() {
     remoteStartMs,
   ]);
 
-  // Réinitialisation fiable à chaque nouvelle question / clic sur "question suivante"
   useEffect(() => {
     if (!roundSignature) {
       activeRoundSignatureRef.current = "";
@@ -747,7 +745,6 @@ export default function TvJusteChiffrePage() {
 
   const isQuestionEnded = Boolean(isTimerZero || statePayload.revealed);
 
-  // Séquence fin de chrono : fondu de la question en haut (550 ms) + attente 2000 ms + révélation
   useEffect(() => {
     if (!isQuestionEnded || !roundSignature) return;
     if (zeroSequenceRoundRef.current === roundSignature) return;
@@ -869,7 +866,6 @@ export default function TvJusteChiffrePage() {
         )
       : FULL_SCALE_BAR_MS;
 
-  // Déploiement systématique des barres + ligne cible + compteurs figés à l'arrivée
   useEffect(() => {
     if (!shouldReveal || !roundSignature) return;
 
@@ -972,7 +968,6 @@ export default function TvJusteChiffrePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldReveal, roundSignature, estimatesKey, targetNumber]);
 
-  // Effets de verdict (2: onde néon + étincelles, 15: badge volant, 12: fumée perdants, 8: confettis + secousse exact)
   useEffect(() => {
     if (phase !== "revealed" || !roundSignature) return;
     if (fxRoundRef.current === roundSignature) return;
@@ -1028,7 +1023,6 @@ export default function TvJusteChiffrePage() {
     };
   }, [phase, roundSignature]);
 
-  // Attribution des points (+5 si exact, +3 pour le plus proche)
   useEffect(() => {
     if (
       !supabase ||
@@ -1249,17 +1243,17 @@ export default function TvJusteChiffrePage() {
       </header>
 
       <main className="flex-1 min-h-0 flex items-stretch gap-0 mt-3 overflow-hidden">
-        <aside className="w-[250px] xl:w-[280px] shrink-0 bg-white/[0.05] border border-white/15 rounded-l-3xl p-3 flex flex-col gap-2">
+        <aside className="w-[270px] xl:w-[320px] shrink-0 bg-white/[0.05] border border-white/15 rounded-l-3xl p-3 flex flex-col gap-2">
           <div className="flex items-center gap-2 pb-1.5 border-b border-white/10 shrink-0">
             <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
-            <span className="text-lg xl:text-xl font-black truncate">
+            <span className="text-xl xl:text-2xl font-black truncate">
               Classement
             </span>
           </div>
 
           <div className="flex-1 min-h-0 flex flex-col justify-center gap-1.5">
             {rankedPlayers.length === 0 ? (
-              <div className="text-center text-neutral-400 text-sm py-6">
+              <div className="text-center text-neutral-400 text-base py-6">
                 En attente des joueurs...
               </div>
             ) : (
@@ -1275,22 +1269,22 @@ export default function TvJusteChiffrePage() {
                     }}
                     className="h-12 rounded-xl border border-white/25 px-2.5 flex items-center justify-between gap-2 shadow-md transition"
                   >
-                    <div className="flex items-center gap-1.5 min-w-0">
+                    <div className="flex items-center gap-2 min-w-0">
                       <span
                         style={{ backgroundColor: pColor.badgeBgHex }}
-                        className="w-6 h-6 rounded-lg flex items-center justify-center font-mono font-black text-xs shrink-0"
+                        className="w-7 h-7 rounded-lg flex items-center justify-center font-mono font-black text-sm shrink-0"
                       >
                         {idx + 1}
                       </span>
-                      <span className="font-black text-base xl:text-lg truncate flex items-center gap-1 min-w-0">
+                      <span className="font-black text-xl xl:text-2xl truncate flex items-center gap-1.5 min-w-0">
                         {isWinner && (
-                          <Crown className="w-4 h-4 text-amber-300 shrink-0" />
+                          <Crown className="w-5 h-5 text-amber-300 shrink-0" />
                         )}
                         <span className="truncate">{player.nickname}</span>
                       </span>
                     </div>
 
-                    <span className="font-mono font-black text-base xl:text-lg shrink-0">
+                    <span className="font-mono font-black text-xl xl:text-2xl shrink-0">
                       {score}
                     </span>
                   </div>
@@ -1300,7 +1294,7 @@ export default function TvJusteChiffrePage() {
           </div>
         </aside>
 
-        <div className="flex-1 min-h-0 flex flex-col gap-2.5">
+        <div className="flex-1 min-w-0 flex flex-col gap-2.5">
           {isSeriesCompleted ? (
             <section className="flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl p-8 flex flex-col items-center justify-center text-center gap-6">
               <div className="w-20 h-20 rounded-3xl bg-amber-400/20 border-2 border-amber-400 flex items-center justify-center">
@@ -1331,7 +1325,7 @@ export default function TvJusteChiffrePage() {
                       <span className="font-mono font-black text-2xl">
                         #{idx + 1}
                       </span>
-                      <span className="font-black text-xl xl:text-2xl">
+                      <span className="font-black text-2xl xl:text-3xl">
                         {item.player.nickname}
                       </span>
                       <span className="font-mono font-black text-xl xl:text-2xl px-3 py-1 rounded-xl bg-black/30">
@@ -1475,7 +1469,7 @@ export default function TvJusteChiffrePage() {
                           }}
                           className="relative z-20 h-10 px-3 rounded-l-2xl border border-white/25 flex items-center gap-2 shrink-0 shadow-md"
                         >
-                          <span className="font-black text-sm xl:text-base truncate max-w-[110px]">
+                          <span className="font-black text-lg xl:text-xl truncate max-w-[120px]">
                             {player.nickname}
                           </span>
                           {!shouldReveal && (
