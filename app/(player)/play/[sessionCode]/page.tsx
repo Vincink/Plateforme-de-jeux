@@ -400,23 +400,36 @@ export default function PlayerControllerPage() {
 
     let isDisposed = false;
 
+    const navWithWakeLock = navigator as Navigator & {
+      wakeLock?: {
+        request: (type: "screen") => Promise<WakeLockSentinelLike>;
+      };
+    };
+
+    const releaseWakeLock = async () => {
+      const current = wakeLockRef.current;
+      wakeLockRef.current = null;
+      if (current) {
+        await current.release().catch(() => {});
+      }
+    };
+
     const requestWakeLock = async () => {
       if (isDisposed || document.visibilityState !== "visible") return;
+      if (wakeLockRef.current) return;
+
       try {
-        const navWithLock = navigator as Navigator & {
-          wakeLock?: {
-            request: (type: "screen") => Promise<WakeLockSentinelLike>;
-          };
-        };
-        if (wakeLockRef.current) return;
-        const sentinel = await navWithLock.wakeLock?.request("screen");
+        const sentinel = await navWithWakeLock.wakeLock?.request("screen");
+        if (!sentinel) return;
+
         if (isDisposed) {
-          await sentinel?.release?.();
+          await sentinel.release().catch(() => {});
           return;
         }
-        wakeLockRef.current = sentinel ?? null;
+
+        wakeLockRef.current = sentinel;
       } catch {
-        // Ignore if unsupported or blocked by device
+        wakeLockRef.current = null;
       }
     };
 
@@ -424,20 +437,27 @@ export default function PlayerControllerPage() {
       if (document.visibilityState === "visible") {
         void requestWakeLock();
       } else {
-        wakeLockRef.current = null;
+        void releaseWakeLock();
+      }
+    };
+
+    const handleResume = () => {
+      if (document.visibilityState === "visible") {
+        void requestWakeLock();
       }
     };
 
     void requestWakeLock();
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("pageshow", handleResume);
+    window.addEventListener("focus", handleResume);
 
     return () => {
       isDisposed = true;
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      if (wakeLockRef.current) {
-        void wakeLockRef.current.release().catch(() => {});
-        wakeLockRef.current = null;
-      }
+      window.removeEventListener("pageshow", handleResume);
+      window.removeEventListener("focus", handleResume);
+      void releaseWakeLock();
     };
   }, []);
 
