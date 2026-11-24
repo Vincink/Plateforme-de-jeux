@@ -1101,7 +1101,7 @@ export default function TvJusteChiffrePage() {
     };
   }, [phase, roundSignature, targetNumber, estimatesKey]);
 
-  // Attribution des points dans player_scores à chaque question (s'appuie sur l'index de question et la signature de manche)
+  // Attribution et addition des points dans player_scores à chaque question (calcul indépendant de rankedPlayersRef)
   useEffect(() => {
     if (
       !supabase ||
@@ -1113,7 +1113,26 @@ export default function TvJusteChiffrePage() {
       return;
     }
 
-    const roundKey = `${session.id}-jc-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${remoteStartMs ?? 0}`;
+    const currentPlayers = playersRef.current;
+    const currentEstimates = estimatesRef.current;
+
+    const candidates = currentPlayers
+      .map((player) => {
+        const pid = String(player.id);
+        const guess = currentEstimates[pid] ?? null;
+        const diff = guess !== null ? Math.abs(guess - targetNumber) : null;
+        const isExact = guess !== null && guess === targetNumber;
+        return { player, pid, guess, diff, isExact };
+      })
+      .filter((c) => c.guess !== null && c.diff !== null);
+
+    if (candidates.length === 0) return;
+
+    const minDiff = Math.min(...candidates.map((c) => c.diff as number));
+    const winners = candidates.filter((c) => c.diff === minDiff);
+    if (winners.length === 0) return;
+
+    const roundKey = `${session.id}-jc-s${seriesNumber}-q${activeQuestionIndex}`;
     if (scoredRoundsRef.current.has(roundKey) || isScoringRef.current) return;
 
     isScoringRef.current = true;
@@ -1121,11 +1140,6 @@ export default function TvJusteChiffrePage() {
 
     void (async () => {
       try {
-        const winners = rankedPlayersRef.current.filter(
-          (r) => r.isWinner && r.guess !== null
-        );
-        if (winners.length === 0) return;
-
         const { data: latestScores } = await supabase
           .from("player_scores")
           .select("*")
@@ -1135,6 +1149,7 @@ export default function TvJusteChiffrePage() {
           (latestScores as PlayerScore[] | null) ?? scoresRowsRef.current;
 
         const currentMap = new Map<string, number>();
+        const existingIdSet = new Set<string>();
         for (const row of baseRows) {
           const rec = row as unknown as {
             player_id?: string | null;
@@ -1142,36 +1157,77 @@ export default function TvJusteChiffrePage() {
             score?: number | null;
           };
           if (rec.player_id) {
-            currentMap.set(
-              String(rec.player_id),
-              rec.total_score ?? rec.score ?? 0
-            );
+            const pid = String(rec.player_id);
+            existingIdSet.add(pid);
+            currentMap.set(pid, rec.total_score ?? rec.score ?? 0);
           }
         }
 
-        for (const w of winners) {
-          const pid = String(w.player.id);
-          const pts = w.isExact ? 5 : 3;
-          const nextScore = (currentMap.get(pid) ?? 0) + pts;
-          currentMap.set(pid, nextScore);
+        const updatedTotals = new Map<string, number>();
 
-          await supabase.from("player_scores").upsert(
-            {
+        for (const w of winners) {
+          const pts = w.isExact ? 5 : 3;
+          const nextScore = (currentMap.get(w.pid) ?? 0) + pts;
+          currentMap.set(w.pid, nextScore);
+          updatedTotals.set(w.pid, nextScore);
+
+          if (existingIdSet.has(w.pid)) {
+            await supabase
+              .from("player_scores")
+              .update({
+                total_score: nextScore,
+                score: nextScore,
+                nickname: w.player.nickname,
+              })
+              .eq("session_id", session.id)
+              .eq("player_id", w.pid);
+          } else {
+            await supabase.from("player_scores").insert({
               session_id: session.id,
-              player_id: pid,
+              player_id: w.pid,
               nickname: w.player.nickname,
               avatar_id: w.player.avatar_id ?? "gamepad",
               total_score: nextScore,
-            },
-            { onConflict: "session_id,player_id" }
-          );
+              score: nextScore,
+            });
+          }
         }
+
+        setScoresRows((prev) => {
+          const next = [...prev];
+          for (const [pid, newTotal] of updatedTotals.entries()) {
+            const idx = next.findIndex(
+              (r) =>
+                String(
+                  (r as unknown as { player_id?: string | null }).player_id
+                ) === pid
+            );
+            if (idx >= 0) {
+              next[idx] = {
+                ...next[idx],
+                total_score: newTotal,
+                score: newTotal,
+              } as PlayerScore;
+            } else {
+              const playerObj = winners.find((w) => w.pid === pid)?.player;
+              next.push({
+                session_id: session.id,
+                player_id: pid,
+                nickname: playerObj?.nickname ?? "",
+                avatar_id: playerObj?.avatar_id ?? "gamepad",
+                total_score: newTotal,
+                score: newTotal,
+              } as unknown as PlayerScore);
+            }
+          }
+          return next;
+        });
 
         const { data: refreshed } = await supabase
           .from("player_scores")
           .select("*")
           .eq("session_id", session.id);
-        if (refreshed) {
+        if (refreshed && refreshed.length > 0) {
           setScoresRows(refreshed as PlayerScore[]);
         }
       } finally {
@@ -1185,8 +1241,7 @@ export default function TvJusteChiffrePage() {
     activeQuestionIndex,
     targetNumber,
     seriesNumber,
-    seriesSeed,
-    remoteStartMs,
+    estimatesKey,
   ]);
 
   return (
