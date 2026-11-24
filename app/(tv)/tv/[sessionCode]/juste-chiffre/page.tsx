@@ -2,7 +2,17 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Clock, Crown, Target, Trophy, Tv } from "lucide-react";
+import {
+  Clock,
+  Crown,
+  Gamepad2,
+  PauseCircle,
+  Sparkles,
+  Target,
+  Trophy,
+  Tv,
+  Users,
+} from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import {
@@ -16,7 +26,6 @@ const MAX_VALUE = 1000;
 const FULL_SCALE_BAR_MS = 4000;
 const POST_ZERO_FADE_MS = 550;
 const POST_FADE_DELAY_MS = 2000;
-const NEXT_QUESTION_CARD_DELAY_MS = 4000;
 const DEFAULT_DURATION_SECONDS = 20;
 const QUESTIONS_PER_GAME = 15;
 const REVEAL_DELAY_AFTER_BARS_MS = 900;
@@ -50,6 +59,7 @@ interface JusteChiffreStatePayload {
   guesses?: Record<string, unknown>;
   answers?: Record<string, unknown>;
   revealed?: boolean;
+  finished?: boolean;
 }
 
 type ExtendedSession = GameSession & {
@@ -59,6 +69,23 @@ type ExtendedSession = GameSession & {
 type ExtendedPlayer = SessionPlayer & {
   avatar_id?: string | null;
 };
+
+interface Particle {
+  type: "spark" | "confetti" | "smoke";
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  gravity: number;
+  alpha: number;
+  size: number;
+  w?: number;
+  h?: number;
+  angle?: number;
+  spin?: number;
+  grow?: number;
+  color?: string;
+}
 
 function toFiniteNumber(raw: unknown): number | null {
   if (typeof raw === "number" && Number.isFinite(raw)) return raw;
@@ -157,25 +184,171 @@ export default function TvJusteChiffrePage() {
   const [localStartMs, setLocalStartMs] = useState<number | null>(null);
   const [frozenRemaining, setFrozenRemaining] = useState<number | null>(null);
 
-  // États de la carte centrale de question + séquence après chrono à 0
-  const [showCenterCard, setShowCenterCard] = useState<boolean>(false);
+  // Question affichée en haut dès le clic sur "question suivante",
+  // puis disparaît en fondu à 0s avant le délai de 2s puis révélation
+  const [showTopQuestion, setShowTopQuestion] = useState<boolean>(false);
   const [isQuestionFadingOut, setIsQuestionFadingOut] = useState<boolean>(false);
   const [canStartRevealSequence, setCanStartRevealSequence] =
     useState<boolean>(false);
 
-  // États d'animation des barres, ligne cible et compteurs
+  // États d'animation des barres, ligne cible, compteurs et effets (1, 6, 4, 2+15, 12, 8)
   const [barsExpanded, setBarsExpanded] = useState<boolean>(false);
   const [targetLineExpanded, setTargetLineExpanded] = useState<boolean>(false);
   const [displayCounters, setDisplayCounters] = useState<
     Record<string, number>
   >({});
   const [phase, setPhase] = useState<"idle" | "playing" | "revealed">("idle");
+  const [roundPointsByPlayer, setRoundPointsByPlayer] = useState<
+    Record<string, number>
+  >({});
+  const [launchFlyBadges, setLaunchFlyBadges] = useState<boolean>(false);
+  const [laserImpactFlash, setLaserImpactFlash] = useState<boolean>(false);
+  const [screenShake, setScreenShake] = useState<boolean>(false);
+
+  const fxCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const particlesRef = useRef<Particle[]>([]);
+  const barRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const targetTrackRef = useRef<HTMLDivElement | null>(null);
 
   const scoredRoundsRef = useRef<Set<string>>(new Set());
   const isScoringRef = useRef<boolean>(false);
   const lastRoundKeyRef = useRef<string>("");
   const zeroSequenceStartedRef = useRef<boolean>(false);
   const revealAnimStartedRoundRef = useRef<string>("");
+  const fxStartedRoundRef = useRef<string>("");
+
+  // --- Moteur de particules (étincelles 2, fumée 12, confettis 8) ---
+  useEffect(() => {
+    const canvas = fxCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const handleResize = () => {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    };
+    handleResize();
+    window.addEventListener("resize", handleResize);
+
+    let rafId = 0;
+    const renderLoop = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      particlesRef.current = particlesRef.current.filter(
+        (p) => p.alpha > 0.015 && p.y < canvas.height + 60
+      );
+
+      for (const p of particlesRef.current) {
+        p.x += p.vx;
+        p.y += p.vy;
+
+        if (p.type === "smoke") {
+          p.size += p.grow ?? 0.35;
+          p.alpha *= 0.965;
+          ctx.globalAlpha = p.alpha;
+          ctx.fillStyle = "#a1a1aa";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fill();
+        } else if (p.type === "confetti") {
+          p.vy += p.gravity;
+          p.angle = (p.angle ?? 0) + (p.spin ?? 0.1);
+          if (p.y > canvas.height * 0.78) p.alpha *= 0.94;
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.angle);
+          ctx.globalAlpha = p.alpha;
+          ctx.fillStyle = p.color ?? "#fde047";
+          ctx.fillRect(
+            -(p.w ?? 8) / 2,
+            -(p.h ?? 5) / 2,
+            p.w ?? 8,
+            p.h ?? 5
+          );
+          ctx.restore();
+        } else {
+          p.vy += p.gravity;
+          p.alpha *= 0.96;
+          ctx.globalAlpha = p.alpha;
+          ctx.fillStyle = p.color ?? "#fde047";
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+
+      ctx.globalAlpha = 1;
+      rafId = window.requestAnimationFrame(renderLoop);
+    };
+
+    rafId = window.requestAnimationFrame(renderLoop);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      window.cancelAnimationFrame(rafId);
+    };
+  }, []);
+
+  const spawnSparks = (x: number, y: number, colors: string[], count = 36) => {
+    for (let i = 0; i < count; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 2 + Math.random() * 6;
+      particlesRef.current.push({
+        type: "spark",
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 2,
+        gravity: 0.16,
+        alpha: 1,
+        size: 3 + Math.random() * 4,
+        color: colors[Math.floor(Math.random() * colors.length)] ?? "#fde047",
+      });
+    }
+  };
+
+  const spawnSmoke = (x: number, y: number, count = 20) => {
+    for (let i = 0; i < count; i++) {
+      particlesRef.current.push({
+        type: "smoke",
+        x: x + (Math.random() - 0.5) * 140,
+        y: y + (Math.random() - 0.5) * 18,
+        vx: (Math.random() - 0.5) * 1.4,
+        vy: -0.7 - Math.random() * 1.6,
+        gravity: 0,
+        alpha: 0.5,
+        size: 9 + Math.random() * 14,
+        grow: 0.35,
+      });
+    }
+  };
+
+  const spawnConfetti = (count = 110) => {
+    const colors = [
+      "#fde047",
+      "#34d399",
+      "#38bdf8",
+      "#f472b6",
+      "#a78bfa",
+      "#fb923c",
+    ];
+    for (let i = 0; i < count; i++) {
+      particlesRef.current.push({
+        type: "confetti",
+        x: Math.random() * window.innerWidth,
+        y: -20 - Math.random() * 140,
+        vx: (Math.random() - 0.5) * 4,
+        vy: 3 + Math.random() * 4.5,
+        gravity: 0.06,
+        alpha: 1,
+        size: 5,
+        w: 7 + Math.random() * 6,
+        h: 4 + Math.random() * 4,
+        angle: Math.random() * Math.PI * 2,
+        spin: (Math.random() - 0.5) * 0.22,
+        color: colors[Math.floor(Math.random() * colors.length)] ?? "#fde047",
+      });
+    }
+  };
 
   // --- Synchronisation temps réel Supabase ---
   useEffect(() => {
@@ -396,8 +569,14 @@ export default function TvJusteChiffrePage() {
     return startedFlag ? 0 : null;
   }, [statePayload]);
 
+  const isSeriesCompleted =
+    Boolean(statePayload.finished) ||
+    (activeQuestionIndex !== null &&
+      questions.length > 0 &&
+      activeQuestionIndex >= questions.length);
+
   const currentQuestion = useMemo<JusteChiffreQuestion | null>(() => {
-    if (activeQuestionIndex === null) return null;
+    if (activeQuestionIndex === null || isSeriesCompleted) return null;
     if (statePayload.currentQuestion) return statePayload.currentQuestion;
     if (questions.length > 0) {
       return (
@@ -405,7 +584,12 @@ export default function TvJusteChiffrePage() {
       );
     }
     return null;
-  }, [activeQuestionIndex, statePayload.currentQuestion, questions]);
+  }, [
+    activeQuestionIndex,
+    isSeriesCompleted,
+    statePayload.currentQuestion,
+    questions,
+  ]);
 
   const targetNumber = useMemo<number | null>(() => {
     const fromPayload = toFiniteNumber(statePayload.targetNumber);
@@ -431,22 +615,27 @@ export default function TvJusteChiffrePage() {
     parseTimestampMs(statePayload.questionStartedAt) ??
     parseTimestampMs(statePayload.question_started_at);
 
-  // À chaque clic sur "question suivante" (changement de question) :
-  // - On réinitialise les barres/révélation de la manche précédente
-  // - La case de la nouvelle question apparaît 4 secondes après
+  // À chaque clic sur "question suivante" :
+  // - La question apparaît immédiatement en haut
+  // - On réinitialise les barres, compteurs et effets de la manche précédente
   useEffect(() => {
     if (activeQuestionIndex === null || !currentQuestion) {
       setLocalStartMs(null);
       setFrozenRemaining(null);
-      setShowCenterCard(false);
+      setShowTopQuestion(false);
       setIsQuestionFadingOut(false);
       setCanStartRevealSequence(false);
       setPhase("idle");
       setBarsExpanded(false);
       setTargetLineExpanded(false);
       setDisplayCounters({});
+      setRoundPointsByPlayer({});
+      setLaunchFlyBadges(false);
+      setLaserImpactFlash(false);
+      setScreenShake(false);
       zeroSequenceStartedRef.current = false;
       revealAnimStartedRoundRef.current = "";
+      fxStartedRoundRef.current = "";
       lastRoundKeyRef.current = "";
       return;
     }
@@ -459,24 +648,20 @@ export default function TvJusteChiffrePage() {
     setLocalStartMs(start);
     setFrozenRemaining(null);
     setNowMs(Date.now());
-    setShowCenterCard(false);
+    setShowTopQuestion(true);
     setIsQuestionFadingOut(false);
     setCanStartRevealSequence(false);
     setPhase("playing");
     setBarsExpanded(false);
     setTargetLineExpanded(false);
     setDisplayCounters({});
+    setRoundPointsByPlayer({});
+    setLaunchFlyBadges(false);
+    setLaserImpactFlash(false);
+    setScreenShake(false);
     zeroSequenceStartedRef.current = false;
     revealAnimStartedRoundRef.current = "";
-
-    const showCardTimer = window.setTimeout(() => {
-      setShowCenterCard(true);
-      setIsQuestionFadingOut(false);
-    }, NEXT_QUESTION_CARD_DELAY_MS);
-
-    return () => {
-      window.clearTimeout(showCardTimer);
-    };
+    fxStartedRoundRef.current = "";
   }, [
     activeQuestionIndex,
     currentQuestion,
@@ -546,10 +731,10 @@ export default function TvJusteChiffrePage() {
 
   const isQuestionEnded = Boolean(isTimerZero || statePayload.revealed);
 
-  // Déclenchement unique dès que le chrono atteint 0 :
-  // 1) Fondu de la carte question (550 ms)
+  // Dès que le chrono atteint 0 :
+  // 1) Disparition en fondu de la question en haut (550 ms)
   // 2) Attente stricte de 2000 ms (2 secondes)
-  // 3) Lancement des barres et de la ligne cible
+  // 3) Lancement de la révélation
   useEffect(() => {
     if (!isQuestionEnded || activeQuestionIndex === null) return;
     if (zeroSequenceStartedRef.current) return;
@@ -557,8 +742,8 @@ export default function TvJusteChiffrePage() {
 
     setIsQuestionFadingOut(true);
 
-    const hideCardTimer = window.setTimeout(() => {
-      setShowCenterCard(false);
+    const hideQuestionTimer = window.setTimeout(() => {
+      setShowTopQuestion(false);
     }, POST_ZERO_FADE_MS);
 
     const revealWaitTimer = window.setTimeout(() => {
@@ -566,14 +751,13 @@ export default function TvJusteChiffrePage() {
     }, POST_ZERO_FADE_MS + POST_FADE_DELAY_MS);
 
     return () => {
-      window.clearTimeout(hideCardTimer);
+      window.clearTimeout(hideQuestionTimer);
       window.clearTimeout(revealWaitTimer);
     };
   }, [isQuestionEnded, activeQuestionIndex]);
 
   const shouldReveal = canStartRevealSequence;
 
-  // Estimations des joueurs
   const estimatesByPlayerId = useMemo<Record<string, number>>(() => {
     const rawMap =
       statePayload.estimates ?? statePayload.guesses ?? statePayload.answers ?? {};
@@ -587,7 +771,12 @@ export default function TvJusteChiffrePage() {
     return result;
   }, [statePayload.estimates, statePayload.guesses, statePayload.answers]);
 
-  // Classement et calcul du / des vainqueur(s) (le plus proche de targetNumber)
+  const answeredPlayersCount = useMemo(() => {
+    return players.filter(
+      (p) => estimatesByPlayerId[String(p.id)] !== undefined
+    ).length;
+  }, [players, estimatesByPlayerId]);
+
   const rankedPlayers = useMemo(() => {
     const scoreById = new Map<string, number>();
     for (const row of scoresRows) {
@@ -636,8 +825,20 @@ export default function TvJusteChiffrePage() {
       .sort((a, b) => b.score - a.score);
   }, [players, scoresRows, estimatesByPlayerId, targetNumber, shouldReveal]);
 
-  // Déploiement simultané des barres et de la ligne cible (4s pour 0 -> 1000)
-  // Chaque compteur monte pendant exactement la durée de sa barre puis reste définitivement figé sur guess
+  const targetPercent =
+    targetNumber !== null
+      ? Math.max(0, Math.min(100, (targetNumber / MAX_VALUE) * 100))
+      : null;
+
+  const targetDurationMs =
+    targetNumber !== null
+      ? Math.max(
+          400,
+          Math.round((targetNumber / MAX_VALUE) * FULL_SCALE_BAR_MS)
+        )
+      : FULL_SCALE_BAR_MS;
+
+  // Déploiement des barres + ligne cible + compteurs figés dès l'arrivée de chaque barre
   useEffect(() => {
     if (!shouldReveal || activeQuestionIndex === null || !currentQuestion) {
       return;
@@ -654,6 +855,21 @@ export default function TvJusteChiffrePage() {
       setBarsExpanded(true);
       setTargetLineExpanded(true);
     });
+
+    const flashTimer = window.setTimeout(() => {
+      setLaserImpactFlash(true);
+      if (targetTrackRef.current && targetPercent !== null) {
+        const rect = targetTrackRef.current.getBoundingClientRect();
+        const impactX = rect.left + (rect.width * targetPercent) / 100;
+        const impactY = rect.top + rect.height / 2;
+        spawnSparks(
+          impactX,
+          impactY,
+          ["#34d399", "#a7f3d0", "#ffffff"],
+          28
+        );
+      }
+    }, targetDurationMs);
 
     const maxGuess = Math.max(
       1,
@@ -712,12 +928,65 @@ export default function TvJusteChiffrePage() {
 
     return () => {
       isCancelled = true;
+      window.clearTimeout(flashTimer);
       window.cancelAnimationFrame(startFrameId);
       window.cancelAnimationFrame(rafId);
       window.clearTimeout(revealTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldReveal, activeQuestionIndex]);
+
+  // Effets de verdict (2: onde néon + étincelles, 15: badge volant, 12: fumée perdants, 8: confettis + secousse exact)
+  useEffect(() => {
+    if (phase !== "revealed" || activeQuestionIndex === null) return;
+    const fxKey = `${session?.id ?? ""}-fx-q${activeQuestionIndex}`;
+    if (fxStartedRoundRef.current === fxKey) return;
+    fxStartedRoundRef.current = fxKey;
+
+    const ptsMap: Record<string, number> = {};
+    let hasExact = false;
+
+    for (const item of rankedPlayers) {
+      if (item.isWinner && item.guess !== null) {
+        ptsMap[String(item.player.id)] = item.isExact ? 5 : 3;
+        if (item.isExact) hasExact = true;
+
+        const barEl = barRefs.current[String(item.player.id)];
+        if (barEl) {
+          const rect = barEl.getBoundingClientRect();
+          spawnSparks(
+            rect.right - 16,
+            rect.top + rect.height / 2,
+            ["#fde047", "#34d399", "#ffffff"],
+            38
+          );
+        }
+      } else if (item.guess !== null) {
+        const barEl = barRefs.current[String(item.player.id)];
+        if (barEl) {
+          const rect = barEl.getBoundingClientRect();
+          spawnSmoke(rect.left + rect.width * 0.5, rect.top + rect.height / 2, 16);
+        }
+      }
+    }
+
+    setRoundPointsByPlayer(ptsMap);
+    setLaunchFlyBadges(true);
+
+    if (hasExact) {
+      spawnConfetti(110);
+      setScreenShake(true);
+      window.setTimeout(() => setScreenShake(false), 500);
+    }
+
+    const flyResetTimer = window.setTimeout(() => {
+      setLaunchFlyBadges(false);
+    }, 1300);
+
+    return () => {
+      window.clearTimeout(flyResetTimer);
+    };
+  }, [phase, activeQuestionIndex, rankedPlayers, session?.id]);
 
   // Attribution des points (+5 si exact, +3 pour le plus proche)
   useEffect(() => {
@@ -799,65 +1068,74 @@ export default function TvJusteChiffrePage() {
     scoresRows,
   ]);
 
-  const targetPercent =
-    targetNumber !== null
-      ? Math.max(0, Math.min(100, (targetNumber / MAX_VALUE) * 100))
-      : null;
-
-  const targetDurationMs =
-    targetNumber !== null
-      ? Math.max(
-          400,
-          Math.round((targetNumber / MAX_VALUE) * FULL_SCALE_BAR_MS)
-        )
-      : FULL_SCALE_BAR_MS;
-
   return (
-    <div className="relative h-[100dvh] w-screen overflow-hidden bg-neutral-950 text-white px-6 py-4 flex flex-col justify-between select-none">
+    <div
+      className={`relative h-[100dvh] w-screen overflow-hidden bg-neutral-950 text-white px-6 py-4 flex flex-col justify-between select-none ${
+        screenShake ? "jc-screen-shake" : ""
+      }`}
+    >
+      <canvas
+        ref={fxCanvasRef}
+        aria-hidden="true"
+        className="pointer-events-none fixed inset-0 z-50"
+      />
+
       <style jsx>{`
-        @keyframes winnerWave {
-          0%,
-          100% {
-            transform: translateY(0px) scaleY(1);
-            filter: brightness(1);
-          }
-          25% {
-            transform: translateY(-4px) scaleY(1.08);
-            filter: brightness(1.18);
-          }
-          50% {
-            transform: translateY(2px) scaleY(0.95);
-            filter: brightness(1.08);
-          }
-          75% {
-            transform: translateY(-3px) scaleY(1.06);
-            filter: brightness(1.15);
-          }
+        @keyframes jcScreenShake {
+          10%, 90% { transform: translate3d(-2px, 1px, 0); }
+          20%, 80% { transform: translate3d(3px, -1px, 0); }
+          30%, 50%, 70% { transform: translate3d(-4px, 2px, 0); }
+          40%, 60% { transform: translate3d(4px, -2px, 0); }
         }
 
-        @keyframes loserCrack {
-          0% {
-            transform: translateX(0) rotate(0deg);
-            opacity: 1;
-          }
-          25% {
-            transform: translateX(-5px) rotate(-1.5deg);
-          }
-          50% {
-            transform: translateX(5px) rotate(1.5deg);
-          }
-          100% {
-            transform: translateY(10px) rotate(-3deg);
-            opacity: 0.25;
-          }
+        @keyframes jcGlassShine {
+          0% { left: -60%; }
+          60%, 100% { left: 130%; }
         }
 
-        .winner-bar-wave {
-          animation: winnerWave 0.75s ease-in-out infinite;
+        @keyframes jcWinnerNeon {
+          0%, 100% { transform: scaleY(1); filter: brightness(1); }
+          50% { transform: scaleY(1.08); filter: brightness(1.22); }
         }
 
-        .loser-bar-crack {
-          animation: loserCrack 0.65s ease-out forwards;
+        @keyframes jcLoserSmoke {
+          0% { opacity: 1; filter: blur(0px); transform: translateY(0) scaleY(1); }
+          100% { opacity: 0.2; filter: blur(4px); transform: translateY(8px) scaleY(0.78); }
+        }
+
+        @keyframes jcFlyPoints {
+          0% { opacity: 0; transform: translate(0, 8px) scale(0.65); }
+          20% { opacity: 1; transform: translate(-12px, -14px) scale(1.15); }
+          75% { opacity: 1; transform: translate(-160px, -26px) scale(1); }
+          100% { opacity: 0; transform: translate(-220px, -34px) scale(0.75); }
+        }
+
+        .jc-screen-shake {
+          animation: jcScreenShake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
+        }
+
+        .jc-glass-shine::after {
+          content: "";
+          position: absolute;
+          top: 0;
+          left: -60%;
+          width: 45%;
+          height: 100%;
+          background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+          transform: skewX(-25deg);
+          animation: jcGlassShine 2.3s ease-in-out infinite;
+        }
+
+        .jc-winner-neon {
+          animation: jcWinnerNeon 1.05s ease-in-out infinite;
+        }
+
+        .jc-loser-smoke {
+          animation: jcLoserSmoke 0.85s ease-out forwards;
+        }
+
+        .jc-fly-points {
+          animation: jcFlyPoints 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
         }
       `}</style>
 
@@ -868,13 +1146,15 @@ export default function TvJusteChiffrePage() {
             <Tv className="w-7 h-7 text-amber-400" />
           </div>
           <div className="min-w-0">
-            {activeQuestionIndex !== null && questions.length > 0 && (
-              <div className="text-sm xl:text-base uppercase tracking-[0.18em] text-amber-300 font-extrabold">
-                Question{" "}
-                {Math.min(activeQuestionIndex, questions.length - 1) + 1} /{" "}
-                {questions.length} • 1 à 1000
-              </div>
-            )}
+            {activeQuestionIndex !== null &&
+              !isSeriesCompleted &&
+              questions.length > 0 && (
+                <div className="text-sm xl:text-base uppercase tracking-[0.18em] text-amber-300 font-extrabold">
+                  Question{" "}
+                  {Math.min(activeQuestionIndex, questions.length - 1) + 1} /{" "}
+                  {questions.length} • 1 à 1000
+                </div>
+              )}
             <h1 className="text-2xl xl:text-4xl font-black tracking-tight truncate">
               {gameTitle}
             </h1>
@@ -882,7 +1162,7 @@ export default function TvJusteChiffrePage() {
         </div>
 
         <div className="flex items-center gap-4 shrink-0">
-          {shouldReveal && targetNumber !== null && (
+          {shouldReveal && targetNumber !== null && !isSeriesCompleted && (
             <div className="flex items-center gap-2.5 px-5 py-2 rounded-2xl bg-emerald-500/20 border-2 border-emerald-400 text-emerald-200 font-mono text-2xl xl:text-3xl font-black">
               <Target className="w-7 h-7 text-emerald-300" />
               <span>
@@ -892,20 +1172,38 @@ export default function TvJusteChiffrePage() {
             </div>
           )}
 
-          {remainingSeconds !== null && !isQuestionEnded && (
-            <div
-              className={`flex items-center gap-2.5 px-5 py-2 rounded-2xl border-2 font-mono text-2xl xl:text-3xl font-black ${
-                isPaused
-                  ? "bg-amber-500/20 border-amber-400/60 text-amber-200"
-                  : remainingSeconds <= 4
-                  ? "bg-rose-500/25 border-rose-400 text-rose-200 animate-pulse"
-                  : "bg-sky-500/15 border-sky-400/45 text-sky-200"
-              }`}
-            >
-              <Clock className="w-6 h-6 shrink-0" />
-              <span>{remainingSeconds}s</span>
-            </div>
-          )}
+          {activeQuestionIndex !== null &&
+            !isSeriesCompleted &&
+            !isQuestionEnded &&
+            players.length > 0 && (
+              <div className="flex items-center gap-2 px-4 py-2 rounded-2xl bg-white/[0.06] border border-white/15 text-neutral-200 font-mono text-xl xl:text-2xl font-bold">
+                <Users className="w-5 h-5 text-amber-300" />
+                <span>
+                  {answeredPlayersCount}/{players.length}
+                </span>
+              </div>
+            )}
+
+          {remainingSeconds !== null &&
+            !isQuestionEnded &&
+            !isSeriesCompleted && (
+              <div
+                className={`flex items-center gap-2.5 px-5 py-2 rounded-2xl border-2 font-mono text-2xl xl:text-3xl font-black ${
+                  isPaused
+                    ? "bg-amber-500/20 border-amber-400/60 text-amber-200"
+                    : remainingSeconds <= 4
+                    ? "bg-rose-500/25 border-rose-400 text-rose-200 animate-pulse"
+                    : "bg-sky-500/15 border-sky-400/45 text-sky-200"
+                }`}
+              >
+                {isPaused ? (
+                  <PauseCircle className="w-6 h-6 shrink-0" />
+                ) : (
+                  <Clock className="w-6 h-6 shrink-0" />
+                )}
+                <span>{isPaused ? "Pause" : `${remainingSeconds}s`}</span>
+              </div>
+            )}
 
           <div className="px-5 py-2 rounded-2xl bg-amber-400/15 border-2 border-amber-400/45 text-amber-300 font-mono text-2xl xl:text-3xl font-black tracking-[0.2em]">
             {sessionCode || "----"}
@@ -913,7 +1211,7 @@ export default function TvJusteChiffrePage() {
         </div>
       </header>
 
-      {/* ================= ZONE PRINCIPALE : CLASSEMENT COMPACT À GAUCHE + JAUGES 1-1000 À DROITE ================= */}
+      {/* ================= ZONE PRINCIPALE ================= */}
       <main className="flex-1 min-h-0 flex items-stretch gap-0 mt-3 overflow-hidden">
         {/* CLASSEMENT COMPACT À GAUCHE (RANG + PSEUDO + SCORE) */}
         <aside className="w-[250px] xl:w-[280px] shrink-0 bg-white/[0.05] border border-white/15 rounded-l-3xl p-3 flex flex-col gap-2">
@@ -925,185 +1223,305 @@ export default function TvJusteChiffrePage() {
           </div>
 
           <div className="flex-1 min-h-0 flex flex-col justify-center gap-1.5">
-            {rankedPlayers.map(({ player, score, isWinner }, idx) => {
-              const pColor = getUniquePlayerColor(player.id, players);
+            {rankedPlayers.length === 0 ? (
+              <div className="text-center text-neutral-400 text-sm py-6">
+                En attente des joueurs...
+              </div>
+            ) : (
+              rankedPlayers.map(({ player, score, isWinner }, idx) => {
+                const pColor = getUniquePlayerColor(player.id, players);
 
-              return (
-                <div
-                  key={player.id}
-                  style={{
-                    backgroundColor: pColor.bgHex,
-                    color: pColor.textHex,
-                  }}
-                  className="h-12 rounded-xl border border-white/25 px-2.5 flex items-center justify-between gap-2 shadow-md transition"
-                >
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    <span
-                      style={{ backgroundColor: pColor.badgeBgHex }}
-                      className="w-6 h-6 rounded-lg flex items-center justify-center font-mono font-black text-xs shrink-0"
-                    >
-                      {idx + 1}
-                    </span>
-                    <span className="font-black text-base xl:text-lg truncate flex items-center gap-1 min-w-0">
-                      {isWinner && (
-                        <Crown className="w-4 h-4 text-amber-300 shrink-0" />
-                      )}
-                      <span className="truncate">{player.nickname}</span>
+                return (
+                  <div
+                    key={player.id}
+                    style={{
+                      backgroundColor: pColor.bgHex,
+                      color: pColor.textHex,
+                    }}
+                    className="h-12 rounded-xl border border-white/25 px-2.5 flex items-center justify-between gap-2 shadow-md transition"
+                  >
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span
+                        style={{ backgroundColor: pColor.badgeBgHex }}
+                        className="w-6 h-6 rounded-lg flex items-center justify-center font-mono font-black text-xs shrink-0"
+                      >
+                        {idx + 1}
+                      </span>
+                      <span className="font-black text-base xl:text-lg truncate flex items-center gap-1 min-w-0">
+                        {isWinner && (
+                          <Crown className="w-4 h-4 text-amber-300 shrink-0" />
+                        )}
+                        <span className="truncate">{player.nickname}</span>
+                      </span>
+                    </div>
+
+                    <span className="font-mono font-black text-base xl:text-lg shrink-0">
+                      {score}
                     </span>
                   </div>
-
-                  <span className="font-mono font-black text-base xl:text-lg shrink-0">
-                    {score}
-                  </span>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </aside>
 
-        {/* PISTE DES JAUGES (1 À 1000) SUR TOUT L'ESPACE DROIT */}
-        <section className="relative flex-1 min-w-0 bg-white/[0.03] border-y border-r border-white/15 rounded-r-3xl flex flex-col justify-between py-3 px-5">
-          {/* Bande d'échelle 1 / 500 / 1000 + chiffre cible aligné exactement sur la même ligne */}
-          <div className="relative h-9 shrink-0 font-mono font-black text-2xl xl:text-3xl leading-none border-b border-white/15">
-            <span className="absolute left-0 top-0 text-white">1</span>
-            <span className="absolute left-1/2 -translate-x-1/2 top-0 text-amber-300">
-              500
-            </span>
-            <span className="absolute right-0 top-0 text-white">1000</span>
-
-            {shouldReveal && targetPercent !== null && (
-              <div
-                style={{
-                  left: `${targetLineExpanded ? targetPercent : 0}%`,
-                  transition: `left ${targetDurationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`,
-                }}
-                className="pointer-events-none absolute top-0 z-40 -translate-x-1/2 px-2 py-0 rounded-md bg-emerald-400 text-black font-mono text-2xl xl:text-3xl font-black leading-none shadow-lg whitespace-nowrap"
-              >
-                {targetNumber}
+        {/* COLONNE DROITE : ÉCRAN D'ATTENTE / FIN DE SÉRIE OU QUESTION + PISTE DES JAUGES */}
+        <div className="flex-1 min-w-0 flex flex-col gap-2.5">
+          {isSeriesCompleted ? (
+            /* ÉCRAN FIN DE PARTIE (PODIUM) */
+            <section className="flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl p-8 flex flex-col items-center justify-center text-center gap-6">
+              <div className="w-20 h-20 rounded-3xl bg-amber-400/20 border-2 border-amber-400 flex items-center justify-center">
+                <Trophy className="w-11 h-11 text-amber-300" />
               </div>
-            )}
-          </div>
-
-          {/* Ligne verticale milieu (500) */}
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute top-12 bottom-3 left-1/2 border-l-2 border-dashed border-white/25 z-0"
-          />
-
-          {/* Ligne verticale cible partant de 0 avec la même vitesse que les barres */}
-          {shouldReveal && targetPercent !== null && (
-            <div
-              style={{
-                left: `${targetLineExpanded ? targetPercent : 0}%`,
-                transition: `left ${targetDurationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`,
-              }}
-              className="pointer-events-none absolute top-12 bottom-3 z-30 -translate-x-1/2 flex flex-col items-center"
-            >
-              <div className="w-1.5 flex-1 bg-emerald-400 shadow-[0_0_16px_rgba(52,211,153,0.95)]" />
-            </div>
-          )}
-
-          {/* Pastilles & barres centrées verticalement avec peu d'espace entre elles */}
-          <div className="relative z-10 flex-1 min-h-0 flex flex-col justify-center gap-1.5">
-            {rankedPlayers.map(({ player, guess, isWinner }) => {
-              const idStr = String(player.id);
-              const pColor = getUniquePlayerColor(player.id, players);
-              const widthPercent =
-                barsExpanded && guess !== null
-                  ? Math.max(2, Math.min(100, (guess / MAX_VALUE) * 100))
-                  : 0;
-              const barDurationMs =
-                guess !== null
-                  ? Math.max(
-                      400,
-                      Math.round((guess / MAX_VALUE) * FULL_SCALE_BAR_MS)
-                    )
-                  : FULL_SCALE_BAR_MS;
-
-              const isBarAnimatingNow = phase === "revealed" && guess !== null;
-
-              const counterValue =
-                guess === null
-                  ? 0
-                  : phase === "revealed" || displayCounters[idStr] === guess
-                  ? guess
-                  : displayCounters[idStr] ?? 0;
-
-              const isLoser = isBarAnimatingNow && !isWinner;
-
-              const transitionStyle = `width ${barDurationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`;
-
-              return (
+              <div>
+                <div className="text-sm uppercase tracking-[0.22em] text-amber-300 font-extrabold">
+                  Fin des {questions.length} questions
+                </div>
+                <h2 className="text-3xl xl:text-5xl font-black mt-1">
+                  {rankedPlayers[0]
+                    ? `Victoire de ${rankedPlayers[0].player.nickname} !`
+                    : "Partie terminée !"}
+                </h2>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-4 max-w-3xl">
+                {rankedPlayers.slice(0, 3).map((item, idx) => {
+                  const pColor = getUniquePlayerColor(item.player.id, players);
+                  return (
+                    <div
+                      key={item.player.id}
+                      style={{
+                        backgroundColor: pColor.bgHex,
+                        color: pColor.textHex,
+                      }}
+                      className="px-6 py-4 rounded-2xl border border-white/30 flex items-center gap-3 shadow-xl"
+                    >
+                      <span className="font-mono font-black text-2xl">
+                        #{idx + 1}
+                      </span>
+                      <span className="font-black text-xl xl:text-2xl">
+                        {item.player.nickname}
+                      </span>
+                      <span className="font-mono font-black text-xl xl:text-2xl px-3 py-1 rounded-xl bg-black/30">
+                        {item.score} pts
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ) : activeQuestionIndex === null || !currentQuestion ? (
+            /* ÉCRAN D'ATTENTE DU LANCEMENT DE LA QUESTION */
+            <section className="flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl p-8 flex flex-col items-center justify-center text-center gap-5">
+              <div className="w-20 h-20 rounded-3xl bg-amber-400/15 border border-amber-400/35 flex items-center justify-center">
+                <Sparkles className="w-10 h-10 text-amber-300" />
+              </div>
+              <h2 className="text-3xl xl:text-4xl font-black">
+                Prêts pour Le Juste Chiffre ?
+              </h2>
+              <p className="text-lg xl:text-2xl text-neutral-300 max-w-2xl">
+                Estimez un nombre entre{" "}
+                <span className="text-amber-300 font-black">1</span> et{" "}
+                <span className="text-amber-300 font-black">1000</span>. L’animateur
+                va lancer la première question !
+              </p>
+              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white/[0.06] border border-white/15 text-neutral-300 text-base">
+                <Gamepad2 className="w-5 h-5 text-amber-300" />
+                <span>
+                  {players.length} joueur{players.length > 1 ? "s" : ""}{" "}
+                  connecté{players.length > 1 ? "s" : ""}
+                </span>
+              </div>
+            </section>
+          ) : (
+            /* JEU EN COURS : QUESTION EN HAUT + PISTE DES JAUGES */
+            <>
+              {showTopQuestion && currentQuestion.question && (
                 <div
-                  key={player.id}
-                  className="relative h-12 flex items-center"
+                  aria-live="polite"
+                  style={{
+                    transition: `opacity ${POST_ZERO_FADE_MS}ms ease-out, transform ${POST_ZERO_FADE_MS}ms ease-out`,
+                  }}
+                  className={`shrink-0 rounded-2xl bg-white/[0.06] border border-amber-400/40 px-5 py-3 shadow-lg ${
+                    isQuestionFadingOut
+                      ? "opacity-0 -translate-y-2"
+                      : "opacity-100 translate-y-0"
+                  }`}
                 >
-                  {/* Barre colorée partant du bord gauche */}
+                  <p className="text-xl xl:text-3xl font-black text-white leading-snug">
+                    {currentQuestion.question}
+                  </p>
+                </div>
+              )}
+
+              <section
+                ref={targetTrackRef}
+                className="relative flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl flex flex-col justify-between py-3 px-5"
+              >
+                {/* Bande d'échelle 1 / 500 / 1000 + chiffre cible aligné sur la même ligne */}
+                <div className="relative h-9 shrink-0 font-mono font-black text-2xl xl:text-3xl leading-none border-b border-white/15">
+                  <span className="absolute left-0 top-0 text-white">1</span>
+                  <span className="absolute left-1/2 -translate-x-1/2 top-0 text-amber-300">
+                    500
+                  </span>
+                  <span className="absolute right-0 top-0 text-white">
+                    1000
+                  </span>
+
+                  {shouldReveal && targetPercent !== null && (
+                    <div
+                      style={{
+                        left: `${targetLineExpanded ? targetPercent : 0}%`,
+                        transition: `left ${targetDurationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`,
+                      }}
+                      className="pointer-events-none absolute top-0 z-40 -translate-x-1/2 px-2 py-0 rounded-md bg-emerald-400 text-black font-mono text-2xl xl:text-3xl font-black leading-none shadow-lg whitespace-nowrap"
+                    >
+                      {targetNumber}
+                    </div>
+                  )}
+                </div>
+
+                {/* Ligne verticale milieu (500) */}
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute top-12 bottom-3 left-1/2 border-l-2 border-dashed border-white/25 z-0"
+                />
+
+                {/* Effet 4 : Faisceau laser cible partant de 0 avec la même vitesse que les barres */}
+                {shouldReveal && targetPercent !== null && (
                   <div
                     style={{
-                      width: `${widthPercent}%`,
-                      backgroundColor: pColor.bgHex,
-                      transition: transitionStyle,
+                      left: `${targetLineExpanded ? targetPercent : 0}%`,
+                      transition: `left ${targetDurationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`,
                     }}
-                    className={`h-10 rounded-r-2xl border border-white/25 shadow-lg flex items-center justify-end pr-3 overflow-visible ${
-                      isWinner && phase === "revealed"
-                        ? "winner-bar-wave"
-                        : isLoser
-                        ? "loser-bar-crack"
-                        : ""
-                    }`}
+                    className="pointer-events-none absolute top-12 bottom-3 z-30 -translate-x-1/2 flex flex-col items-center"
                   >
-                    {/* Chiffre grand et lisible qui monte avec la barre puis reste figé sur l'estimation */}
-                    {shouldReveal && guess !== null && (
-                      <span
-                        className={`ml-2 px-2.5 py-0.5 rounded-lg font-mono text-xl xl:text-2xl font-black leading-none shadow-md shrink-0 ${
-                          isWinner
-                            ? "bg-amber-300 text-black"
-                            : "bg-neutral-900/95 text-white border border-white/25"
-                        }`}
-                      >
-                        {counterValue}
-                      </span>
-                    )}
-
-                    {/* Trait de fissure visuel pour les perdants */}
-                    {isLoser && (
-                      <span className="w-1 h-full bg-black/80 rotate-12 ml-1 shrink-0" />
-                    )}
+                    <div
+                      className={`w-1.5 flex-1 bg-emerald-400 ${
+                        laserImpactFlash
+                          ? "shadow-[0_0_26px_#34d399,0_0_44px_#ffffff]"
+                          : "shadow-[0_0_16px_rgba(52,211,153,0.95)]"
+                      }`}
+                    />
                   </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      </main>
+                )}
 
-      {/* ================= CARTE CENTRALE DE QUESTION (APPARAÎT 4s APRÈS QUESTION SUIVANTE, DISPARAÎT EN FONDU À 0s) ================= */}
-      {showCenterCard && currentQuestion?.question && (
-        <div
-          aria-live="polite"
-          style={{
-            transition: `opacity ${POST_ZERO_FADE_MS}ms ease-out, transform ${POST_ZERO_FADE_MS}ms ease-out`,
-          }}
-          className={`pointer-events-none fixed inset-0 z-40 flex items-center justify-center px-8 ${
-            isQuestionFadingOut
-              ? "opacity-0 scale-95"
-              : "opacity-100 scale-100"
-          }`}
-        >
-          <div className="max-w-4xl w-full rounded-[2rem] bg-neutral-900/95 border-2 border-amber-400/60 px-10 py-8 shadow-2xl text-center backdrop-blur-md">
-            <div className="text-sm uppercase tracking-[0.22em] text-amber-300 font-extrabold mb-3">
-              Question{" "}
-              {activeQuestionIndex !== null && questions.length > 0
-                ? `${Math.min(activeQuestionIndex, questions.length - 1) + 1} / ${questions.length}`
-                : ""}
-            </div>
-            <h2 className="text-3xl xl:text-5xl font-black text-white leading-tight">
-              {currentQuestion.question}
-            </h2>
-          </div>
+                {/* Pastilles & barres centrées verticalement avec peu d'espace entre elles */}
+                <div className="relative z-10 flex-1 min-h-0 flex flex-col justify-center gap-1.5">
+                  {rankedPlayers.map(({ player, guess, isWinner }) => {
+                    const idStr = String(player.id);
+                    const pColor = getUniquePlayerColor(player.id, players);
+                    const hasAnswered = guess !== null;
+                    const widthPercent =
+                      barsExpanded && hasAnswered
+                        ? Math.max(2, Math.min(100, (guess / MAX_VALUE) * 100))
+                        : 0;
+                    const barDurationMs = hasAnswered
+                      ? Math.max(
+                          400,
+                          Math.round((guess / MAX_VALUE) * FULL_SCALE_BAR_MS)
+                        )
+                      : FULL_SCALE_BAR_MS;
+
+                    const isBarAnimatingNow =
+                      phase === "revealed" && hasAnswered;
+
+                    const counterValue = !hasAnswered
+                      ? 0
+                      : phase === "revealed" || displayCounters[idStr] === guess
+                      ? guess
+                      : displayCounters[idStr] ?? 0;
+
+                    const isLoser = isBarAnimatingNow && !isWinner;
+                    const wonPts = roundPointsByPlayer[idStr];
+
+                    // Effet 6 : rebond élastique en butée lors du déploiement
+                    const transitionStyle = `width ${barDurationMs}ms cubic-bezier(0.34, 1.42, 0.64, 1)`;
+
+                    return (
+                      <div
+                        key={player.id}
+                        className="relative h-12 flex items-center"
+                      >
+                        {/* Pastille de départ du joueur à gauche de la piste */}
+                        <div
+                          style={{
+                            backgroundColor: pColor.bgHex,
+                            color: pColor.textHex,
+                          }}
+                          className="relative z-20 h-10 px-3 rounded-l-2xl border border-white/25 flex items-center gap-2 shrink-0 shadow-md"
+                        >
+                          <span className="font-black text-sm xl:text-base truncate max-w-[110px]">
+                            {player.nickname}
+                          </span>
+                          {!shouldReveal && (
+                            <span
+                              className={`w-2.5 h-2.5 rounded-full ${
+                                hasAnswered
+                                  ? "bg-emerald-300 shadow-[0_0_8px_#6ee7b7]"
+                                  : "bg-black/35"
+                              }`}
+                            />
+                          )}
+                        </div>
+
+                        {/* Barre colorée avec effet 1 (verre poli + reflet) */}
+                        <div className="relative flex-1 h-10 flex items-center">
+                          <div
+                            ref={(el) => {
+                              barRefs.current[idStr] = el;
+                            }}
+                            style={{
+                              width: `${widthPercent}%`,
+                              backgroundColor: pColor.bgHex,
+                              transition: transitionStyle,
+                              boxShadow:
+                                isWinner && phase === "revealed"
+                                  ? `0 0 26px ${pColor.bgHex}, inset 0 1px 1px rgba(255,255,255,0.65)`
+                                  : "inset 0 1px 1px rgba(255,255,255,0.45)",
+                            }}
+                            className={`relative h-10 rounded-r-2xl border border-l-0 border-white/25 flex items-center justify-end pr-3 overflow-hidden jc-glass-shine ${
+                              isWinner && phase === "revealed"
+                                ? "jc-winner-neon"
+                                : isLoser
+                                ? "jc-loser-smoke"
+                                : ""
+                            }`}
+                          >
+                            {/* Chiffre qui monte avec la barre puis reste figé sur l'estimation */}
+                            {shouldReveal && hasAnswered && (
+                              <span
+                                className={`relative z-10 ml-2 px-2.5 py-0.5 rounded-lg font-mono text-xl xl:text-2xl font-black leading-none shadow-md shrink-0 ${
+                                  isWinner
+                                    ? "bg-amber-300 text-black"
+                                    : "bg-neutral-900/95 text-white border border-white/25"
+                                }`}
+                              >
+                                {counterValue}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Effet 15 : Badge +3 / +5 volant vers le classement */}
+                          {launchFlyBadges && wonPts !== undefined && (
+                            <span
+                              style={{
+                                left: `${Math.min(92, Math.max(8, (guess ?? 0) / 10))}%`,
+                              }}
+                              className="pointer-events-none absolute -top-2 z-40 px-2.5 py-0.5 rounded-full bg-amber-300 text-black font-mono text-sm xl:text-base font-black shadow-lg jc-fly-points"
+                            >
+                              +{wonPts} pts
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            </>
+          )}
         </div>
-      )}
+      </main>
     </div>
   );
 }
