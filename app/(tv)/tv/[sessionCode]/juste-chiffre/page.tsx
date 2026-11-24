@@ -8,7 +8,6 @@ import {
   Gamepad2,
   PauseCircle,
   Sparkles,
-  Target,
   Trophy,
   Tv,
   Users,
@@ -24,6 +23,7 @@ import type { GameSession, PlayerScore, SessionPlayer } from "@/types/game.types
 const MIN_VALUE = 1;
 const MAX_VALUE = 1000;
 const FULL_SCALE_BAR_MS = 4000;
+const TARGET_LINE_MOVE_MS = 1600;
 const POST_ZERO_FADE_MS = 550;
 const POST_FADE_DELAY_MS = 2000;
 const DEFAULT_DURATION_SECONDS = 20;
@@ -190,7 +190,9 @@ export default function TvJusteChiffrePage() {
     useState<boolean>(false);
 
   const [barsExpanded, setBarsExpanded] = useState<boolean>(false);
+  const [targetLineMoving, setTargetLineMoving] = useState<boolean>(false);
   const [targetLineExpanded, setTargetLineExpanded] = useState<boolean>(false);
+  const [targetCounterValue, setTargetCounterValue] = useState<number>(0);
   const [displayCounters, setDisplayCounters] = useState<
     Record<string, number>
   >({});
@@ -653,7 +655,9 @@ export default function TvJusteChiffrePage() {
       setCanStartRevealSequence(false);
       setPhase("idle");
       setBarsExpanded(false);
+      setTargetLineMoving(false);
       setTargetLineExpanded(false);
+      setTargetCounterValue(0);
       setDisplayCounters({});
       setRoundPointsByPlayer({});
       setLaunchFlyBadges(false);
@@ -677,7 +681,9 @@ export default function TvJusteChiffrePage() {
     setCanStartRevealSequence(false);
     setPhase("playing");
     setBarsExpanded(false);
+    setTargetLineMoving(false);
     setTargetLineExpanded(false);
+    setTargetCounterValue(0);
     setDisplayCounters({});
     setRoundPointsByPlayer({});
     setLaunchFlyBadges(false);
@@ -858,14 +864,8 @@ export default function TvJusteChiffrePage() {
       ? Math.max(0, Math.min(100, (targetNumber / MAX_VALUE) * 100))
       : null;
 
-  const targetDurationMs =
-    targetNumber !== null
-      ? Math.max(
-          400,
-          Math.round((targetNumber / MAX_VALUE) * FULL_SCALE_BAR_MS)
-        )
-      : FULL_SCALE_BAR_MS;
-
+  // 1) Déplacement de toutes les barres des joueurs en premier
+  // 2) Une fois TOUTES les barres arrivées, déplacement de la barre verticale cible + compteur cible de 0 à targetNumber
   useEffect(() => {
     if (!shouldReveal || !roundSignature) return;
 
@@ -877,45 +877,33 @@ export default function TvJusteChiffrePage() {
     revealAnimRoundRef.current = animSignature;
 
     setBarsExpanded(false);
+    setTargetLineMoving(false);
     setTargetLineExpanded(false);
+    setTargetCounterValue(0);
 
     let innerRaf = 0;
     const outerRaf = window.requestAnimationFrame(() => {
       innerRaf = window.requestAnimationFrame(() => {
         setBarsExpanded(true);
-        setTargetLineExpanded(true);
       });
     });
 
-    const flashTimer = window.setTimeout(() => {
-      setLaserImpactFlash(true);
-      if (targetTrackRef.current && targetPercent !== null) {
-        const rect = targetTrackRef.current.getBoundingClientRect();
-        const impactX = rect.left + (rect.width * targetPercent) / 100;
-        const impactY = rect.top + rect.height / 2;
-        spawnSparks(
-          impactX,
-          impactY,
-          ["#34d399", "#a7f3d0", "#ffffff"],
-          28
-        );
-      }
-    }, targetDurationMs);
+    const guessValues = Object.values(snapshotGuesses);
+    const maxGuessValue = guessValues.length > 0 ? Math.max(...guessValues) : 0;
+    const allPlayerBarsDurationMs =
+      maxGuessValue > 0
+        ? Math.max(
+            400,
+            Math.round((maxGuessValue / MAX_VALUE) * FULL_SCALE_BAR_MS)
+          )
+        : 400;
 
-    const maxGuess = Math.max(
-      1,
-      ...Object.values(snapshotGuesses),
-      targetNumber ?? 0
-    );
-    const maxAnimDurationMs = Math.max(
-      400,
-      Math.round((maxGuess / MAX_VALUE) * FULL_SCALE_BAR_MS)
-    );
     const animStart = performance.now();
     let counterRaf = 0;
+    let targetCounterRaf = 0;
     let isCancelled = false;
 
-    const tickCounter = (now: number) => {
+    const tickPlayerCounters = (now: number) => {
       if (isCancelled) return;
       const elapsed = now - animStart;
       let anyStillRunning = false;
@@ -943,27 +931,76 @@ export default function TvJusteChiffrePage() {
       setDisplayCounters(nextCounters);
 
       if (anyStillRunning) {
-        counterRaf = window.requestAnimationFrame(tickCounter);
+        counterRaf = window.requestAnimationFrame(tickPlayerCounters);
       }
     };
 
-    counterRaf = window.requestAnimationFrame(tickCounter);
+    counterRaf = window.requestAnimationFrame(tickPlayerCounters);
 
-    const revealDelay = Math.max(maxAnimDurationMs, REVEAL_DELAY_AFTER_BARS_MS);
+    let flashTimer = 0;
+    let revealTimer = 0;
 
-    const revealTimer = window.setTimeout(() => {
+    const startTargetLineTimer = window.setTimeout(() => {
       if (isCancelled) return;
       setDisplayCounters(snapshotGuesses);
-      setPhase("revealed");
-    }, revealDelay);
+
+      if (targetNumber !== null && targetPercent !== null) {
+        setTargetLineMoving(true);
+        setTargetLineExpanded(true);
+
+        const targetStart = performance.now();
+        const tickTargetCounter = (now: number) => {
+          if (isCancelled) return;
+          const elapsed = now - targetStart;
+          const progress = Math.min(1, elapsed / TARGET_LINE_MOVE_MS);
+          const eased = 1 - Math.pow(1 - progress, 3);
+          setTargetCounterValue(Math.round(targetNumber * eased));
+
+          if (progress < 1) {
+            targetCounterRaf = window.requestAnimationFrame(tickTargetCounter);
+          } else {
+            setTargetCounterValue(targetNumber);
+          }
+        };
+        targetCounterRaf = window.requestAnimationFrame(tickTargetCounter);
+
+        flashTimer = window.setTimeout(() => {
+          if (isCancelled) return;
+          setLaserImpactFlash(true);
+          if (targetTrackRef.current) {
+            const rect = targetTrackRef.current.getBoundingClientRect();
+            const impactX = rect.left + (rect.width * targetPercent) / 100;
+            const impactY = rect.top + rect.height / 2;
+            spawnSparks(
+              impactX,
+              impactY,
+              ["#34d399", "#a7f3d0", "#ffffff"],
+              28
+            );
+          }
+        }, TARGET_LINE_MOVE_MS);
+
+        revealTimer = window.setTimeout(() => {
+          if (isCancelled) return;
+          setPhase("revealed");
+        }, TARGET_LINE_MOVE_MS + REVEAL_DELAY_AFTER_BARS_MS);
+      } else {
+        revealTimer = window.setTimeout(() => {
+          if (isCancelled) return;
+          setPhase("revealed");
+        }, REVEAL_DELAY_AFTER_BARS_MS);
+      }
+    }, allPlayerBarsDurationMs);
 
     return () => {
       isCancelled = true;
-      window.clearTimeout(flashTimer);
+      window.clearTimeout(startTargetLineTimer);
+      if (flashTimer) window.clearTimeout(flashTimer);
+      if (revealTimer) window.clearTimeout(revealTimer);
       window.cancelAnimationFrame(outerRaf);
       window.cancelAnimationFrame(innerRaf);
       window.cancelAnimationFrame(counterRaf);
-      window.clearTimeout(revealTimer);
+      if (targetCounterRaf) window.cancelAnimationFrame(targetCounterRaf);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldReveal, roundSignature, estimatesKey, targetNumber]);
@@ -1193,16 +1230,6 @@ export default function TvJusteChiffrePage() {
         </div>
 
         <div className="flex items-center gap-4 shrink-0">
-          {shouldReveal && targetNumber !== null && !isSeriesCompleted && (
-            <div className="flex items-center gap-2.5 px-5 py-2 rounded-2xl bg-emerald-500/20 border-2 border-emerald-400 text-emerald-200 font-mono text-2xl xl:text-3xl font-black">
-              <Target className="w-7 h-7 text-emerald-300" />
-              <span>
-                Cible : {targetNumber}
-                {currentQuestion?.unit ? ` ${currentQuestion.unit}` : ""}
-              </span>
-            </div>
-          )}
-
           {activeQuestionIndex !== null &&
             !isSeriesCompleted &&
             !isQuestionEnded &&
@@ -1243,7 +1270,8 @@ export default function TvJusteChiffrePage() {
       </header>
 
       <main className="flex-1 min-h-0 flex items-stretch gap-0 mt-3 overflow-hidden">
-        <aside className="w-[270px] xl:w-[320px] shrink-0 bg-white/[0.05] border border-white/15 rounded-l-3xl p-3 flex flex-col gap-2">
+        {/* CLASSEMENT À GAUCHE (z-30 pour masquer le point de départ des barres derrière lui) */}
+        <aside className="relative z-30 w-[280px] xl:w-[340px] shrink-0 bg-neutral-900 border border-white/15 rounded-l-3xl p-3 flex flex-col gap-2">
           <div className="flex items-center gap-2 pb-1.5 border-b border-white/10 shrink-0">
             <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
             <span className="text-xl xl:text-2xl font-black truncate">
@@ -1267,7 +1295,7 @@ export default function TvJusteChiffrePage() {
                       backgroundColor: pColor.bgHex,
                       color: pColor.textHex,
                     }}
-                    className="h-12 rounded-xl border border-white/25 px-2.5 flex items-center justify-between gap-2 shadow-md transition"
+                    className="h-12 rounded-xl border border-white/25 px-3 flex items-center justify-between gap-2 shadow-md transition"
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       <span
@@ -1276,7 +1304,7 @@ export default function TvJusteChiffrePage() {
                       >
                         {idx + 1}
                       </span>
-                      <span className="font-black text-xl xl:text-2xl truncate flex items-center gap-1.5 min-w-0">
+                      <span className="font-black text-2xl xl:text-3xl truncate flex items-center gap-1.5 min-w-0">
                         {isWinner && (
                           <Crown className="w-5 h-5 text-amber-300 shrink-0" />
                         )}
@@ -1294,7 +1322,7 @@ export default function TvJusteChiffrePage() {
           </div>
         </aside>
 
-        <div className="flex-1 min-w-0 flex flex-col gap-2.5">
+        <div className="relative flex-1 min-w-0 flex flex-col">
           {isSeriesCompleted ? (
             <section className="flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl p-8 flex flex-col items-center justify-center text-center gap-6">
               <div className="w-20 h-20 rounded-3xl bg-amber-400/20 border-2 border-amber-400 flex items-center justify-center">
@@ -1325,7 +1353,7 @@ export default function TvJusteChiffrePage() {
                       <span className="font-mono font-black text-2xl">
                         #{idx + 1}
                       </span>
-                      <span className="font-black text-2xl xl:text-3xl">
+                      <span className="font-black text-3xl xl:text-4xl">
                         {item.player.nickname}
                       </span>
                       <span className="font-mono font-black text-xl xl:text-2xl px-3 py-1 rounded-xl bg-black/30">
@@ -1359,14 +1387,19 @@ export default function TvJusteChiffrePage() {
               </div>
             </section>
           ) : (
-            <>
+            /* PISTE FIXE (ne bouge jamais verticalement quand la question apparaît/disparaît) */
+            <section
+              ref={targetTrackRef}
+              className="relative flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl flex flex-col justify-between py-3 px-0 overflow-hidden"
+            >
+              {/* QUESTION AFFICHÉE EN HAUT EN OVERLAY FIXE */}
               {showTopQuestion && currentQuestion.question && (
                 <div
                   aria-live="polite"
                   style={{
                     transition: `opacity ${POST_ZERO_FADE_MS}ms ease-out, transform ${POST_ZERO_FADE_MS}ms ease-out`,
                   }}
-                  className={`shrink-0 rounded-2xl bg-white/[0.06] border border-amber-400/40 px-5 py-3 shadow-lg ${
+                  className={`pointer-events-none absolute top-11 left-4 right-4 z-40 rounded-2xl bg-neutral-900/95 border border-amber-400/50 px-5 py-3 shadow-2xl ${
                     isQuestionFadingOut
                       ? "opacity-0 -translate-y-2"
                       : "opacity-100 translate-y-0"
@@ -1378,163 +1411,140 @@ export default function TvJusteChiffrePage() {
                 </div>
               )}
 
-              <section
-                ref={targetTrackRef}
-                className="relative flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl flex flex-col justify-between py-3 px-5"
-              >
-                <div className="relative h-9 shrink-0 font-mono font-black text-2xl xl:text-3xl leading-none border-b border-white/15">
-                  <span className="absolute left-0 top-0 text-white">1</span>
-                  <span className="absolute left-1/2 -translate-x-1/2 top-0 text-amber-300">
-                    500
-                  </span>
-                  <span className="absolute right-0 top-0 text-white">
-                    1000
-                  </span>
+              {/* Bande d'échelle 1 / 500 / 1000 + compteur cible défilant de 0 à targetNumber */}
+              <div className="relative h-10 shrink-0 mx-5 font-mono font-black text-2xl xl:text-3xl leading-none border-b border-white/15">
+                <span className="absolute left-0 top-1 text-white">1</span>
+                <span className="absolute left-1/2 -translate-x-1/2 top-1 text-amber-300">
+                  500
+                </span>
+                <span className="absolute right-0 top-1 text-white">1000</span>
 
-                  {shouldReveal && targetPercent !== null && (
-                    <div
-                      style={{
-                        left: `${targetLineExpanded ? targetPercent : 0}%`,
-                        transition: `left ${targetDurationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`,
-                      }}
-                      className="pointer-events-none absolute top-0 z-40 -translate-x-1/2 px-2 py-0 rounded-md bg-emerald-400 text-black font-mono text-2xl xl:text-3xl font-black leading-none shadow-lg whitespace-nowrap"
-                    >
-                      {targetNumber}
-                    </div>
-                  )}
-                </div>
-
-                <div
-                  aria-hidden="true"
-                  className="pointer-events-none absolute top-12 bottom-3 left-1/2 border-l-2 border-dashed border-white/25 z-0"
-                />
-
-                {shouldReveal && targetPercent !== null && (
+                {targetLineMoving && targetPercent !== null && (
                   <div
                     style={{
                       left: `${targetLineExpanded ? targetPercent : 0}%`,
-                      transition: `left ${targetDurationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`,
+                      transition: `left ${TARGET_LINE_MOVE_MS}ms cubic-bezier(0.16, 1, 0.3, 1)`,
                     }}
-                    className="pointer-events-none absolute top-12 bottom-3 z-30 -translate-x-1/2 flex flex-col items-center"
+                    className="pointer-events-none absolute -top-0.5 z-40 -translate-x-1/2 px-3 py-0.5 rounded-lg bg-emerald-400 text-black font-mono text-3xl xl:text-4xl font-black leading-none shadow-lg whitespace-nowrap"
                   >
-                    <div
-                      className={`w-1.5 flex-1 bg-emerald-400 ${
-                        laserImpactFlash
-                          ? "shadow-[0_0_26px_#34d399,0_0_44px_#ffffff]"
-                          : "shadow-[0_0_16px_rgba(52,211,153,0.95)]"
-                      }`}
-                    />
+                    {targetCounterValue}
                   </div>
                 )}
+              </div>
 
-                <div className="relative z-10 flex-1 min-h-0 flex flex-col justify-center gap-1.5">
-                  {rankedPlayers.map(({ player, guess, isWinner }) => {
-                    const idStr = String(player.id);
-                    const pColor = getUniquePlayerColor(player.id, players);
-                    const hasAnswered = guess !== null;
-                    const widthPercent =
-                      barsExpanded && hasAnswered
-                        ? Math.max(2, Math.min(100, (guess / MAX_VALUE) * 100))
-                        : 0;
-                    const barDurationMs = hasAnswered
-                      ? Math.max(
-                          400,
-                          Math.round((guess / MAX_VALUE) * FULL_SCALE_BAR_MS)
-                        )
-                      : FULL_SCALE_BAR_MS;
+              {/* Ligne verticale milieu (500) */}
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute top-13 bottom-3 left-1/2 border-l-2 border-dashed border-white/25 z-0"
+              />
 
-                    const isBarAnimatingNow =
-                      phase === "revealed" && hasAnswered;
+              {/* Effet 4 : Faisceau laser cible qui démarre uniquement après la fin de toutes les barres */}
+              {targetLineMoving && targetPercent !== null && (
+                <div
+                  style={{
+                    left: `${targetLineExpanded ? targetPercent : 0}%`,
+                    transition: `left ${TARGET_LINE_MOVE_MS}ms cubic-bezier(0.16, 1, 0.3, 1)`,
+                  }}
+                  className="pointer-events-none absolute top-13 bottom-3 z-30 -translate-x-1/2 flex flex-col items-center"
+                >
+                  <div
+                    className={`w-1.5 flex-1 bg-emerald-400 ${
+                      laserImpactFlash
+                        ? "shadow-[0_0_26px_#34d399,0_0_44px_#ffffff]"
+                        : "shadow-[0_0_16px_rgba(52,211,153,0.95)]"
+                    }`}
+                  />
+                </div>
+              )}
 
-                    const counterValue = !hasAnswered
-                      ? 0
-                      : phase === "revealed" || displayCounters[idStr] === guess
-                      ? guess
-                      : displayCounters[idStr] ?? 0;
+              {/* Barres des joueurs démarrant à 0 depuis le bord gauche (masquées sous le classement) */}
+              <div className="relative z-10 flex-1 min-h-0 flex flex-col justify-center gap-1.5">
+                {rankedPlayers.map(({ player, guess, isWinner }) => {
+                  const idStr = String(player.id);
+                  const pColor = getUniquePlayerColor(player.id, players);
+                  const hasAnswered = guess !== null;
+                  const widthPercent =
+                    barsExpanded && hasAnswered
+                      ? Math.max(0, Math.min(100, (guess / MAX_VALUE) * 100))
+                      : 0;
+                  const barDurationMs = hasAnswered
+                    ? Math.max(
+                        400,
+                        Math.round((guess / MAX_VALUE) * FULL_SCALE_BAR_MS)
+                      )
+                    : FULL_SCALE_BAR_MS;
 
-                    const isLoser = isBarAnimatingNow && !isWinner;
-                    const wonPts = roundPointsByPlayer[idStr];
+                  const isBarAnimatingNow =
+                    phase === "revealed" && hasAnswered;
 
-                    const transitionStyle = `width ${barDurationMs}ms cubic-bezier(0.34, 1.42, 0.64, 1)`;
+                  const counterValue = !hasAnswered
+                    ? 0
+                    : phase === "revealed" || displayCounters[idStr] === guess
+                    ? guess
+                    : displayCounters[idStr] ?? 0;
 
-                    return (
+                  const isLoser = isBarAnimatingNow && !isWinner;
+                  const wonPts = roundPointsByPlayer[idStr];
+
+                  // Effet 6 : rebond élastique en butée lors du déploiement
+                  const transitionStyle = `width ${barDurationMs}ms cubic-bezier(0.34, 1.42, 0.64, 1)`;
+
+                  return (
+                    <div
+                      key={player.id}
+                      className="relative h-12 flex items-center"
+                    >
+                      {/* Barre colorée avec effet 1 (verre poli + reflet) alignée pile sur le pourcentage */}
                       <div
-                        key={player.id}
-                        className="relative h-12 flex items-center"
+                        ref={(el) => {
+                          barRefs.current[idStr] = el;
+                        }}
+                        style={{
+                          width: `${widthPercent}%`,
+                          backgroundColor: pColor.bgHex,
+                          transition: transitionStyle,
+                          boxShadow:
+                            isWinner && phase === "revealed"
+                              ? `0 0 26px ${pColor.bgHex}, inset 0 1px 1px rgba(255,255,255,0.65)`
+                              : "inset 0 1px 1px rgba(255,255,255,0.45)",
+                        }}
+                        className={`relative h-10 rounded-r-2xl border border-l-0 border-white/25 flex items-center justify-end pr-2.5 overflow-hidden jc-glass-shine ${
+                          isWinner && phase === "revealed"
+                            ? "jc-winner-neon"
+                            : isLoser
+                            ? "jc-loser-smoke"
+                            : ""
+                        }`}
                       >
-                        <div
-                          style={{
-                            backgroundColor: pColor.bgHex,
-                            color: pColor.textHex,
-                          }}
-                          className="relative z-20 h-10 px-3 rounded-l-2xl border border-white/25 flex items-center gap-2 shrink-0 shadow-md"
-                        >
-                          <span className="font-black text-lg xl:text-xl truncate max-w-[120px]">
-                            {player.nickname}
-                          </span>
-                          {!shouldReveal && (
-                            <span
-                              className={`w-2.5 h-2.5 rounded-full ${
-                                hasAnswered
-                                  ? "bg-emerald-300 shadow-[0_0_8px_#6ee7b7]"
-                                  : "bg-black/35"
-                              }`}
-                            />
-                          )}
-                        </div>
-
-                        <div className="relative flex-1 h-10 flex items-center">
-                          <div
-                            ref={(el) => {
-                              barRefs.current[idStr] = el;
-                            }}
-                            style={{
-                              width: `${widthPercent}%`,
-                              backgroundColor: pColor.bgHex,
-                              transition: transitionStyle,
-                              boxShadow:
-                                isWinner && phase === "revealed"
-                                  ? `0 0 26px ${pColor.bgHex}, inset 0 1px 1px rgba(255,255,255,0.65)`
-                                  : "inset 0 1px 1px rgba(255,255,255,0.45)",
-                            }}
-                            className={`relative h-10 rounded-r-2xl border border-l-0 border-white/25 flex items-center justify-end pr-3 overflow-hidden jc-glass-shine ${
-                              isWinner && phase === "revealed"
-                                ? "jc-winner-neon"
-                                : isLoser
-                                ? "jc-loser-smoke"
-                                : ""
+                        {shouldReveal && hasAnswered && (
+                          <span
+                            className={`relative z-10 px-2 py-0.5 rounded-lg font-mono text-lg xl:text-xl font-black leading-none shadow-md shrink-0 ${
+                              isWinner
+                                ? "bg-amber-300 text-black"
+                                : "bg-neutral-900/95 text-white border border-white/25"
                             }`}
                           >
-                            {shouldReveal && hasAnswered && (
-                              <span
-                                className={`relative z-10 ml-2 px-2.5 py-0.5 rounded-lg font-mono text-xl xl:text-2xl font-black leading-none shadow-md shrink-0 ${
-                                  isWinner
-                                    ? "bg-amber-300 text-black"
-                                    : "bg-neutral-900/95 text-white border border-white/25"
-                                }`}
-                              >
-                                {counterValue}
-                              </span>
-                            )}
-                          </div>
-
-                          {launchFlyBadges && wonPts !== undefined && (
-                            <span
-                              style={{
-                                left: `${Math.min(92, Math.max(8, (guess ?? 0) / 10))}%`,
-                              }}
-                              className="pointer-events-none absolute -top-2 z-40 px-2.5 py-0.5 rounded-full bg-amber-300 text-black font-mono text-sm xl:text-base font-black shadow-lg jc-fly-points"
-                            >
-                              +{wonPts} pts
-                            </span>
-                          )}
-                        </div>
+                            {counterValue}
+                          </span>
+                        )}
                       </div>
-                    );
-                  })}
-                </div>
-              </section>
-            </>
+
+                      {/* Effet 15 : Badge +3 / +5 volant vers le classement */}
+                      {launchFlyBadges && wonPts !== undefined && (
+                        <span
+                          style={{
+                            left: `${Math.min(92, Math.max(6, (guess ?? 0) / 10))}%`,
+                          }}
+                          className="pointer-events-none absolute -top-2 z-40 px-2.5 py-0.5 rounded-full bg-amber-300 text-black font-mono text-sm xl:text-base font-black shadow-lg jc-fly-points"
+                        >
+                          +{wonPts} pts
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
           )}
         </div>
       </main>
