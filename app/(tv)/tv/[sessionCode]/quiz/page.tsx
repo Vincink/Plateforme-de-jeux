@@ -747,7 +747,7 @@ export default function TvQuizPage() {
   }, [syncedSeriesQuestions, session?.id, sessionCode, seriesNumber, seriesSeed]);
 
   const activeQuestionIndex = useMemo<number | null>(() => {
-    const explicitIndex =
+    const rawIndex =
       quizState.questionIndex ??
       quizState.question_index ??
       quizState.currentQuestionIndex ??
@@ -756,23 +756,27 @@ export default function TvQuizPage() {
       session?.currentQuestionIndex ??
       session?.current_question_index;
 
-    const hasExplicitFlag = Boolean(
+    const numericIndex = toFiniteNumber(rawIndex);
+    if (numericIndex !== null) {
+      if (numericIndex < 0) return null;
+      return Math.floor(numericIndex);
+    }
+
+    const hasQuestionActivity = Boolean(
       quizState.questionStarted ||
         quizState.question_started ||
         quizState.roundTriggered ||
-        quizState.round_triggered
+        quizState.round_triggered ||
+        quizState.currentQuestion ||
+        quizState.activeQuestion ||
+        quizState.revealed ||
+        quizState.showAnswers ||
+        quizState.show_answers ||
+        quizState.isPaused ||
+        (quizState.answers && Object.keys(quizState.answers).length > 0)
     );
 
-    if (typeof explicitIndex === "number" && Number.isFinite(explicitIndex)) {
-      if (explicitIndex < 0) return null;
-      if (explicitIndex === 0 && !hasExplicitFlag) {
-        const roundVal = session?.current_round ?? 1;
-        return roundVal > 1 ? 0 : null;
-      }
-      return Math.max(0, Math.floor(explicitIndex));
-    }
-
-    if (hasExplicitFlag) {
+    if (hasQuestionActivity) {
       const roundVal = Math.max(1, Number(session?.current_round ?? 1) || 1);
       return roundVal - 1;
     }
