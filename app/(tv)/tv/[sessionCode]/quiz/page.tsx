@@ -346,6 +346,44 @@ function extractOptionsList(
   return LETTERS.map((letter) => String(rawOptions[letter] ?? ""));
 }
 
+function findMatchingLocalQuestion(
+  candidate: QuizQuestionItem | null,
+  fallbackIndex: number
+): QuizQuestionItem | null {
+  const localSource = QUESTIONS as QuizQuestionItem[];
+  if (!Array.isArray(localSource) || localSource.length === 0) return null;
+
+  if (candidate) {
+    if (candidate.id !== undefined && candidate.id !== null) {
+      const byId = localSource.find(
+        (item) => item.id !== undefined && String(item.id) === String(candidate.id)
+      );
+      if (byId) return byId;
+    }
+
+    const candidateText = String(
+      candidate.question || candidate.prompt || candidate.title || candidate.text || ""
+    )
+      .trim()
+      .toLowerCase();
+
+    if (candidateText) {
+      const byText = localSource.find((item) => {
+        const itemText = String(
+          item.question || item.prompt || item.title || item.text || ""
+        )
+          .trim()
+          .toLowerCase();
+        return itemText === candidateText;
+      });
+      if (byText) return byText;
+    }
+  }
+
+  const safeIdx = Math.max(0, Math.min(fallbackIndex, localSource.length - 1));
+  return localSource[safeIdx] ?? null;
+}
+
 function getOptionFontSize(text: string): string {
   const trimmed = text.trim();
   const longestWordLen = trimmed
@@ -371,56 +409,56 @@ function getQuestionFontSize(text: string): string {
 export default function TvQuizPage() {
   const params = useParams<{ sessionCode: string }>();
   const router = useRouter();
-  const sessionCode = (params?.sessionCode ?? "").toUpperCase();
-  const supabase = getSupabaseBrowserClient();
+  const sessionCode = (params?.sessionCode ?? "").toUpperCase(); //[span_0](start_span)[span_0](end_span)
+  const supabase = getSupabaseBrowserClient(); //[span_1](start_span)[span_1](end_span)
 
-  const [session, setSession] = useState<ExtendedSession | null>(null);
-  const [players, setPlayers] = useState<ExtendedPlayer[]>([]);
-  const [playerScoresRows, setPlayerScoresRows] = useState<PlayerScore[]>([]);
-  const [gameTitle, setGameTitle] = useState<string>("Le Grand Quiz");
-  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+  const [session, setSession] = useState<ExtendedSession | null>(null); //[span_2](start_span)[span_2](end_span)
+  const [players, setPlayers] = useState<ExtendedPlayer[]>([]); //[span_3](start_span)[span_3](end_span)
+  const [playerScoresRows, setPlayerScoresRows] = useState<PlayerScore[]>([]); //[span_4](start_span)[span_4](end_span)
+  const [gameTitle, setGameTitle] = useState<string>("Le Grand Quiz"); //[span_5](start_span)[span_5](end_span)
+  const [nowMs, setNowMs] = useState<number>(() => Date.now()); //[span_6](start_span)[span_6](end_span)
   const [localQuestionStartMs, setLocalQuestionStartMs] = useState<
     number | null
-  >(null);
+  >(null); //[span_7](start_span)[span_7](end_span)
   const [frozenRemainingSeconds, setFrozenRemainingSeconds] = useState<
     number | null
-  >(null);
-  const [isPodiumVisible, setIsPodiumVisible] = useState<boolean>(false);
+  >(null); //[span_8](start_span)[span_8](end_span)
+  const [isPodiumVisible, setIsPodiumVisible] = useState<boolean>(false); //[span_9](start_span)[span_9](end_span)
 
-  const usedQuestionKeysRef = useRef<Set<string>>(new Set());
-  const lastRecordedSeriesKeyRef = useRef<string>("");
+  const usedQuestionKeysRef = useRef<Set<string>>(new Set()); //[span_10](start_span)[span_10](end_span)
+  const lastRecordedSeriesKeyRef = useRef<string>(""); //[span_11](start_span)[span_11](end_span)
   const cachedSeriesRef = useRef<{
     signature: string;
     items: QuizQuestionItem[];
-  } | null>(null);
-  const lastTimerResetKeyRef = useRef<string>("");
-  const scoredQuestionsRef = useRef<Set<string>>(new Set());
-  const isScoringRef = useRef<boolean>(false);
-  const lastResetSignatureRef = useRef<string>("");
-  const isResettingScoresRef = useRef<boolean>(false);
-  const hasPlayedApplauseForSeriesRef = useRef<string>("");
+  } | null>(null); //[span_12](start_span)[span_12](end_span)
+  const lastTimerResetKeyRef = useRef<string>(""); //[span_13](start_span)[span_13](end_span)
+  const scoredQuestionsRef = useRef<Set<string>>(new Set()); //[span_14](start_span)[span_14](end_span)
+  const isScoringRef = useRef<boolean>(false); //[span_15](start_span)[span_15](end_span)
+  const lastResetSignatureRef = useRef<string>(""); //[span_16](start_span)[span_16](end_span)
+  const isResettingScoresRef = useRef<boolean>(false); //[span_17](start_span)[span_17](end_span)
+  const hasPlayedApplauseForSeriesRef = useRef<string>(""); //[span_18](start_span)[span_18](end_span)
 
   useEffect(() => {
-    if (!supabase || !sessionCode) return;
+    if (!supabase || !sessionCode) return; //[span_19](start_span)[span_19](end_span)
 
-    let isMounted = true;
-    let activeSessionId: string | null = null;
-    let childrenChannel: ReturnType<typeof supabase.channel> | null = null;
+    let isMounted = true; //[span_20](start_span)[span_20](end_span)
+    let activeSessionId: string | null = null; //[span_21](start_span)[span_21](end_span)
+    let childrenChannel: ReturnType<typeof supabase.channel> | null = null; //[span_22](start_span)[span_22](end_span)
 
     const loadGameTitle = async (gameId: string | null | undefined) => {
-      if (!gameId) return;
+      if (!gameId) return; //[span_23](start_span)[span_23](end_span)
       const { data } = await supabase
         .from("games")
         .select("title")
         .eq("id", gameId)
-        .maybeSingle<{ title?: string | null }>();
+        .maybeSingle<{ title?: string | null }>(); //[span_24](start_span)[span_24](end_span)
 
-      if (!isMounted) return;
-      if (data?.title) setGameTitle(data.title);
+      if (!isMounted) return; //[span_25](start_span)[span_25](end_span)
+      if (data?.title) setGameTitle(data.title); //[span_26](start_span)[span_26](end_span)
     };
 
     const loadPlayersAndScores = async (targetSessionId: string | null) => {
-      if (!targetSessionId) return;
+      if (!targetSessionId) return; //[span_27](start_span)[span_27](end_span)
       const [{ data: playersData }, { data: scoresData }] = await Promise.all([
         supabase
           .from("session_players")
@@ -431,11 +469,11 @@ export default function TvQuizPage() {
           .from("player_scores")
           .select("*")
           .eq("session_id", targetSessionId),
-      ]);
+      ]); //[span_28](start_span)[span_28](end_span)
 
-      if (!isMounted) return;
-      setPlayers((playersData as ExtendedPlayer[] | null) ?? []);
-      setPlayerScoresRows((scoresData as PlayerScore[] | null) ?? []);
+      if (!isMounted) return; //[span_29](start_span)[span_29](end_span)
+      setPlayers((playersData as ExtendedPlayer[] | null) ?? []); //[span_30](start_span)[span_30](end_span)
+      setPlayerScoresRows((scoresData as PlayerScore[] | null) ?? []); //[span_31](start_span)[span_31](end_span)
     };
 
     const refreshSessionRow = async () => {
@@ -445,9 +483,9 @@ export default function TvQuizPage() {
         .eq("code", sessionCode)
         .order("updated_at", { ascending: false })
         .limit(1)
-        .maybeSingle<ExtendedSession>();
+        .maybeSingle<ExtendedSession>(); //[span_32](start_span)[span_32](end_span)
 
-      if (!isMounted || !data) return;
+      if (!isMounted || !data) return; //[span_33](start_span)[span_33](end_span)
       setSession((prev) => {
         if (
           prev &&
@@ -460,29 +498,29 @@ export default function TvQuizPage() {
           return prev;
         }
         return data;
-      });
+      }); //[span_34](start_span)[span_34](end_span)
 
       if (data.id) {
-        activeSessionId = data.id;
-        void loadPlayersAndScores(data.id);
+        activeSessionId = data.id; //[span_35](start_span)[span_35](end_span)
+        void loadPlayersAndScores(data.id); //[span_36](start_span)[span_36](end_span)
       }
       if (data.game_id) {
-        void loadGameTitle(data.game_id);
+        void loadGameTitle(data.game_id); //[span_37](start_span)[span_37](end_span)
       }
     };
 
     const bindSession = (targetSession: ExtendedSession) => {
-      void loadPlayersAndScores(targetSession.id);
-      void loadGameTitle(targetSession.game_id);
+      void loadPlayersAndScores(targetSession.id); //[span_38](start_span)[span_38](end_span)
+      void loadGameTitle(targetSession.game_id); //[span_39](start_span)[span_39](end_span)
 
       if (activeSessionId === targetSession.id && childrenChannel) {
-        return;
+        return; //[span_40](start_span)[span_40](end_span)
       }
 
-      activeSessionId = targetSession.id;
+      activeSessionId = targetSession.id; //[span_41](start_span)[span_41](end_span)
 
       if (childrenChannel) {
-        void supabase.removeChannel(childrenChannel);
+        void supabase.removeChannel(childrenChannel); //[span_42](start_span)[span_42](end_span)
       }
 
       childrenChannel = supabase
@@ -514,7 +552,7 @@ export default function TvQuizPage() {
             void loadPlayersAndScores(targetSession.id);
           }
         )
-        .subscribe();
+        .subscribe(); //[span_43](start_span)[span_43](end_span)
     };
 
     const fetchInitial = async () => {
@@ -524,16 +562,16 @@ export default function TvQuizPage() {
         .eq("code", sessionCode)
         .order("updated_at", { ascending: false })
         .limit(1)
-        .maybeSingle<ExtendedSession>();
+        .maybeSingle<ExtendedSession>(); //[span_44](start_span)[span_44](end_span)
 
-      if (!isMounted) return;
+      if (!isMounted) return; //[span_45](start_span)[span_45](end_span)
       if (data) {
-        setSession(data);
-        bindSession(data);
+        setSession(data); //[span_46](start_span)[span_46](end_span)
+        bindSession(data); //[span_47](start_span)[span_47](end_span)
       }
     };
 
-    void fetchInitial();
+    void fetchInitial(); //[span_48](start_span)[span_48](end_span)
 
     const sessionChannel = supabase
       .channel(`tv-quiz-session-${sessionCode}-${Date.now()}`)
@@ -556,25 +594,25 @@ export default function TvQuizPage() {
           bindSession(nextRow);
         }
       )
-      .subscribe();
+      .subscribe(); //[span_49](start_span)[span_49](end_span)
 
     const syncInterval = window.setInterval(() => {
-      if (!isMounted) return;
-      void refreshSessionRow();
+      if (!isMounted) return; //[span_50](start_span)[span_50](end_span)
+      void refreshSessionRow(); //[span_51](start_span)[span_51](end_span)
       if (activeSessionId) {
-        void loadPlayersAndScores(activeSessionId);
+        void loadPlayersAndScores(activeSessionId); //[span_52](start_span)[span_52](end_span)
       }
-    }, 1500);
+    }, 1500); //[span_53](start_span)[span_53](end_span)
 
     return () => {
-      isMounted = false;
-      window.clearInterval(syncInterval);
-      void supabase.removeChannel(sessionChannel);
+      isMounted = false; //[span_54](start_span)[span_54](end_span)
+      window.clearInterval(syncInterval); //[span_55](start_span)[span_55](end_span)
+      void supabase.removeChannel(sessionChannel); //[span_56](start_span)[span_56](end_span)
       if (childrenChannel) {
-        void supabase.removeChannel(childrenChannel);
+        void supabase.removeChannel(childrenChannel); //[span_57](start_span)[span_57](end_span)
       }
     };
-  }, [supabase, sessionCode]);
+  }, [supabase, sessionCode]); //[span_58](start_span)[span_58](end_span)
 
   const quizState = useMemo<QuizStatePayload>(() => {
     return (
@@ -583,11 +621,11 @@ export default function TvQuizPage() {
       session?.state ||
       {}
     );
-  }, [session]);
+  }, [session]); //[span_59](start_span)[span_59](end_span)
 
   const seriesNumber = useMemo<number>(() => {
     return Math.max(1, toFiniteNumber(quizState.seriesNumber) ?? 1);
-  }, [quizState]);
+  }, [quizState]); //[span_60](start_span)[span_60](end_span)
 
   const seriesSeed = useMemo<string>(() => {
     const rawSeed =
@@ -595,24 +633,24 @@ export default function TvQuizPage() {
         ? quizState.seriesSeed.trim()
         : "";
     return rawSeed || `${session?.id ?? ""}-${sessionCode}-s${seriesNumber}`;
-  }, [quizState.seriesSeed, session?.id, sessionCode, seriesNumber]);
+  }, [quizState.seriesSeed, session?.id, sessionCode, seriesNumber]); //[span_61](start_span)[span_61](end_span)
 
   const sessionStatusLower = useMemo<string>(() => {
     return String(session?.status ?? "").toLowerCase();
-  }, [session?.status]);
+  }, [session?.status]); //[span_62](start_span)[span_62](end_span)
 
   const isFinishedOrLobbyStatus =
     sessionStatusLower === "lobby" ||
     sessionStatusLower === "finished" ||
     sessionStatusLower === "ended" ||
-    sessionStatusLower === "completed";
+    sessionStatusLower === "completed"; //[span_63](start_span)[span_63](end_span)
 
   useEffect(() => {
-    if (!supabase || !session?.id) return;
+    if (!supabase || !session?.id) return; //[span_64](start_span)[span_64](end_span)
 
     const resetTrigger = isFinishedOrLobbyStatus
       ? `${session.id}-status:${sessionStatusLower}`
-      : `${session.id}-series:${seriesNumber}:${seriesSeed}`;
+      : `${session.id}-series:${seriesNumber}:${seriesSeed}`; //[span_65](start_span)[span_65](end_span)
 
     const shouldReset =
       isFinishedOrLobbyStatus ||
@@ -620,45 +658,45 @@ export default function TvQuizPage() {
         !lastResetSignatureRef.current.includes(
           `series:${seriesNumber}:${seriesSeed}`
         ) &&
-        resetTrigger.includes("series:"));
+        resetTrigger.includes("series:")); //[span_66](start_span)[span_66](end_span)
 
     if (lastResetSignatureRef.current === "") {
       lastResetSignatureRef.current = resetTrigger;
       if (!isFinishedOrLobbyStatus) return;
-    }
+    } //[span_67](start_span)[span_67](end_span)
 
     if (!shouldReset && lastResetSignatureRef.current === resetTrigger) {
       return;
-    }
+    } //[span_68](start_span)[span_68](end_span)
 
     if (
       lastResetSignatureRef.current === resetTrigger ||
       isResettingScoresRef.current
     ) {
       return;
-    }
+    } //[span_69](start_span)[span_69](end_span)
 
-    lastResetSignatureRef.current = resetTrigger;
-    isResettingScoresRef.current = true;
-    scoredQuestionsRef.current = new Set();
-    hasPlayedApplauseForSeriesRef.current = "";
-    setIsPodiumVisible(false);
+    lastResetSignatureRef.current = resetTrigger; //[span_70](start_span)[span_70](end_span)
+    isResettingScoresRef.current = true; //[span_71](start_span)[span_71](end_span)
+    scoredQuestionsRef.current = new Set(); //[span_72](start_span)[span_72](end_span)
+    hasPlayedApplauseForSeriesRef.current = ""; //[span_73](start_span)[span_73](end_span)
+    setIsPodiumVisible(false); //[span_74](start_span)[span_74](end_span)
 
     void (async () => {
       try {
         await supabase
           .from("player_scores")
           .update({ total_score: 0 })
-          .eq("session_id", session.id);
+          .eq("session_id", session.id); //[span_75](start_span)[span_75](end_span)
 
         setPlayerScoresRows((prev) =>
           prev.map((row) => ({
             ...row,
             total_score: 0,
           }))
-        );
+        ); //[span_76](start_span)[span_76](end_span)
       } finally {
-        isResettingScoresRef.current = false;
+        isResettingScoresRef.current = false; //[span_77](start_span)[span_77](end_span)
       }
     })();
   }, [
@@ -668,10 +706,10 @@ export default function TvQuizPage() {
     sessionStatusLower,
     seriesNumber,
     seriesSeed,
-  ]);
+  ]); //[span_78](start_span)[span_78](end_span)
 
   useEffect(() => {
-    if (!session || !sessionCode) return;
+    if (!session || !sessionCode) return; //[span_79](start_span)[span_79](end_span)
 
     const replacementCode = (
       quizState.nextSessionCode ||
@@ -679,17 +717,17 @@ export default function TvQuizPage() {
       ""
     )
       .trim()
-      .toUpperCase();
+      .toUpperCase(); //[span_80](start_span)[span_80](end_span)
 
     if (replacementCode && replacementCode !== sessionCode) {
       router.replace(`/tv/${replacementCode}/quiz`);
       return;
-    }
+    } //[span_81](start_span)[span_81](end_span)
 
     if (isFinishedOrLobbyStatus) {
       router.replace(`/tv/${sessionCode}`);
-    }
-  }, [session, sessionCode, quizState, isFinishedOrLobbyStatus, router]);
+    } //[span_82](start_span)[span_82](end_span)
+  }, [session, sessionCode, quizState, isFinishedOrLobbyStatus, router]); //[span_83](start_span)[span_83](end_span)
 
   const syncedSeriesQuestions = useMemo<QuizQuestionItem[] | null>(() => {
     const modeStr = String(quizState.mode ?? "")
@@ -724,31 +762,31 @@ export default function TvQuizPage() {
     }
 
     return null;
-  }, [quizState, session]);
+  }, [quizState, session]); //[span_84](start_span)[span_84](end_span)
 
   const questions = useMemo<QuizQuestionItem[]>(() => {
     if (syncedSeriesQuestions) {
       return syncedSeriesQuestions;
-    }
+    } //[span_85](start_span)[span_85](end_span)
 
-    const signature = `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`;
+    const signature = `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`; //[span_86](start_span)[span_86](end_span)
     if (
       cachedSeriesRef.current &&
       cachedSeriesRef.current.signature === signature
     ) {
       return cachedSeriesRef.current.items;
-    }
+    } //[span_87](start_span)[span_87](end_span)
 
     if (lastRecordedSeriesKeyRef.current !== signature) {
       lastRecordedSeriesKeyRef.current = signature;
-    }
+    } //[span_88](start_span)[span_88](end_span)
 
     const picked = pickRandomQuestionsSeries(
       QUESTIONS as QuizQuestion[],
       QUESTIONS_PER_GAME,
       signature,
       usedQuestionKeysRef.current
-    );
+    ); //[span_89](start_span)[span_89](end_span)
 
     if ((QUESTIONS as QuizQuestion[]).length > QUESTIONS_PER_GAME) {
       if (
@@ -760,11 +798,11 @@ export default function TvQuizPage() {
       picked.forEach((item, idx) => {
         usedQuestionKeysRef.current.add(getQuestionUniqueKey(item, idx));
       });
-    }
+    } //[span_90](start_span)[span_90](end_span)
 
-    cachedSeriesRef.current = { signature, items: picked };
-    return picked;
-  }, [syncedSeriesQuestions, session?.id, sessionCode, seriesNumber, seriesSeed]);
+    cachedSeriesRef.current = { signature, items: picked }; //[span_91](start_span)[span_91](end_span)
+    return picked; //[span_92](start_span)[span_92](end_span)
+  }, [syncedSeriesQuestions, session?.id, sessionCode, seriesNumber, seriesSeed]); //[span_93](start_span)[span_93](end_span)
 
   const activeQuestionIndex = useMemo<number | null>(() => {
     const rawIndex =
@@ -802,7 +840,7 @@ export default function TvQuizPage() {
     }
 
     return null;
-  }, [quizState, session]);
+  }, [quizState, session]); //[span_94](start_span)[span_94](end_span)
 
   const currentQuestion = useMemo<QuizQuestionItem | null>(() => {
     if (activeQuestionIndex === null) return null;
@@ -815,8 +853,22 @@ export default function TvQuizPage() {
         payloadQuestion.options ||
         payloadQuestion.choices ||
         payloadQuestion.answers;
+
       if (hasValidOptionsList(rawPayloadOpts)) {
         return payloadQuestion;
+      }
+
+      const matchedLocal = findMatchingLocalQuestion(
+        payloadQuestion,
+        activeQuestionIndex
+      );
+      if (matchedLocal) {
+        return {
+          ...matchedLocal,
+          ...payloadQuestion,
+          options:
+            matchedLocal.options ?? matchedLocal.choices ?? matchedLocal.answers,
+        };
       }
     }
 
@@ -824,17 +876,35 @@ export default function TvQuizPage() {
       const safeIndex = Math.min(activeQuestionIndex, questions.length - 1);
       const fromSeries = questions[safeIndex] ?? null;
       if (fromSeries) {
-        return fromSeries;
+        const rawSeriesOpts =
+          fromSeries.options || fromSeries.choices || fromSeries.answers;
+        if (hasValidOptionsList(rawSeriesOpts)) {
+          return fromSeries;
+        }
+        const matchedLocal = findMatchingLocalQuestion(
+          fromSeries,
+          activeQuestionIndex
+        );
+        if (matchedLocal) {
+          return {
+            ...matchedLocal,
+            ...fromSeries,
+            options:
+              matchedLocal.options ??
+              matchedLocal.choices ??
+              matchedLocal.answers,
+          };
+        }
       }
     }
 
-    return payloadQuestion;
-  }, [activeQuestionIndex, quizState, questions]);
+    return findMatchingLocalQuestion(payloadQuestion, activeQuestionIndex);
+  }, [activeQuestionIndex, quizState, questions]); //[span_95](start_span)[span_95](end_span)
 
   const isPaused = useMemo<boolean>(() => {
     const status = String(session?.status ?? "").toLowerCase();
     return status === "paused" || Boolean(quizState.isPaused);
-  }, [session, quizState]);
+  }, [session, quizState]); //[span_96](start_span)[span_96](end_span)
 
   const remoteStartMs = useMemo<number | null>(() => {
     return (
@@ -845,7 +915,7 @@ export default function TvQuizPage() {
       parseTimestampMs(session?.question_started_at) ??
       parseTimestampMs(session?.round_started_at)
     );
-  }, [quizState, session]);
+  }, [quizState, session]); //[span_97](start_span)[span_97](end_span)
 
   const durationSeconds = useMemo<number>(() => {
     const rawDuration =
@@ -853,7 +923,7 @@ export default function TvQuizPage() {
       toFiniteNumber(quizState.duration_seconds) ??
       QUESTION_DURATION_SECONDS;
     return Math.max(1, Math.round(rawDuration));
-  }, [quizState]);
+  }, [quizState]); //[span_98](start_span)[span_98](end_span)
 
   useEffect(() => {
     if (activeQuestionIndex === null || !currentQuestion) {
@@ -861,25 +931,25 @@ export default function TvQuizPage() {
       setLocalQuestionStartMs(null);
       setFrozenRemainingSeconds(null);
       return;
-    }
+    } //[span_99](start_span)[span_99](end_span)
 
-    const resetKey = `${seriesNumber}-${seriesSeed}-${activeQuestionIndex}-${remoteStartMs ?? ""}`;
+    const resetKey = `${seriesNumber}-${seriesSeed}-${activeQuestionIndex}-${remoteStartMs ?? ""}`; //[span_100](start_span)[span_100](end_span)
     if (lastTimerResetKeyRef.current === resetKey) {
       return;
-    }
-    lastTimerResetKeyRef.current = resetKey;
+    } //[span_101](start_span)[span_101](end_span)
+    lastTimerResetKeyRef.current = resetKey; //[span_102](start_span)[span_102](end_span)
 
-    const startStamp = remoteStartMs ?? Date.now();
-    setLocalQuestionStartMs(startStamp);
-    setFrozenRemainingSeconds(null);
-    setNowMs(Date.now());
+    const startStamp = remoteStartMs ?? Date.now(); //[span_103](start_span)[span_103](end_span)
+    setLocalQuestionStartMs(startStamp); //[span_104](start_span)[span_104](end_span)
+    setFrozenRemainingSeconds(null); //[span_105](start_span)[span_105](end_span)
+    setNowMs(Date.now()); //[span_106](start_span)[span_106](end_span)
   }, [
     activeQuestionIndex,
     currentQuestion,
     remoteStartMs,
     seriesNumber,
     seriesSeed,
-  ]);
+  ]); //[span_107](start_span)[span_107](end_span)
 
   useEffect(() => {
     if (!isPaused || activeQuestionIndex === null || !currentQuestion) {
@@ -887,20 +957,20 @@ export default function TvQuizPage() {
         setFrozenRemainingSeconds(null);
       }
       return;
-    }
+    } //[span_108](start_span)[span_108](end_span)
 
-    const fromPayload = toFiniteNumber(quizState.pausedRemainingSeconds);
+    const fromPayload = toFiniteNumber(quizState.pausedRemainingSeconds); //[span_109](start_span)[span_109](end_span)
     if (fromPayload !== null) {
       setFrozenRemainingSeconds(Math.max(0, Math.ceil(fromPayload)));
       return;
-    }
+    } //[span_110](start_span)[span_110](end_span)
 
     setFrozenRemainingSeconds((prev) => {
       if (prev !== null) return prev;
       const effectiveStart = remoteStartMs ?? localQuestionStartMs ?? nowMs;
       const elapsedSeconds = Math.max(0, (nowMs - effectiveStart) / 1000);
       return Math.max(0, Math.ceil(durationSeconds - elapsedSeconds));
-    });
+    }); //[span_111](start_span)[span_111](end_span)
   }, [
     isPaused,
     activeQuestionIndex,
@@ -910,20 +980,20 @@ export default function TvQuizPage() {
     localQuestionStartMs,
     nowMs,
     durationSeconds,
-  ]);
+  ]); //[span_112](start_span)[span_112](end_span)
 
   useEffect(() => {
-    if (activeQuestionIndex === null || !currentQuestion || isPaused) return;
+    if (activeQuestionIndex === null || !currentQuestion || isPaused) return; //[span_113](start_span)[span_113](end_span)
     const interval = window.setInterval(() => {
       setNowMs(Date.now());
-    }, 250);
+    }, 250); //[span_114](start_span)[span_114](end_span)
     return () => {
       window.clearInterval(interval);
-    };
-  }, [activeQuestionIndex, currentQuestion, isPaused]);
+    }; //[span_115](start_span)[span_115](end_span)
+  }, [activeQuestionIndex, currentQuestion, isPaused]); //[span_116](start_span)[span_116](end_span)
 
   const remainingSeconds = useMemo<number | null>(() => {
-    if (activeQuestionIndex === null || !currentQuestion) return null;
+    if (activeQuestionIndex === null || !currentQuestion) return null; //[span_117](start_span)[span_117](end_span)
 
     if (isPaused) {
       if (frozenRemainingSeconds !== null) {
@@ -933,11 +1003,11 @@ export default function TvQuizPage() {
       if (fromPayload !== null) {
         return Math.max(0, Math.ceil(fromPayload));
       }
-    }
+    } //[span_118](start_span)[span_118](end_span)
 
-    const effectiveStart = remoteStartMs ?? localQuestionStartMs ?? nowMs;
-    const elapsedSeconds = Math.max(0, (nowMs - effectiveStart) / 1000);
-    return Math.max(0, Math.ceil(durationSeconds - elapsedSeconds));
+    const effectiveStart = remoteStartMs ?? localQuestionStartMs ?? nowMs; //[span_119](start_span)[span_119](end_span)
+    const elapsedSeconds = Math.max(0, (nowMs - effectiveStart) / 1000); //[span_120](start_span)[span_120](end_span)
+    return Math.max(0, Math.ceil(durationSeconds - elapsedSeconds)); //[span_121](start_span)[span_121](end_span)
   }, [
     activeQuestionIndex,
     currentQuestion,
@@ -948,14 +1018,14 @@ export default function TvQuizPage() {
     localQuestionStartMs,
     nowMs,
     durationSeconds,
-  ]);
+  ]); //[span_122](start_span)[span_122](end_span)
 
   const isTimerExpired =
     !isPaused &&
     activeQuestionIndex !== null &&
     currentQuestion !== null &&
     remainingSeconds !== null &&
-    remainingSeconds <= 0;
+    remainingSeconds <= 0; //[span_123](start_span)[span_123](end_span)
 
   const questionLabel = useMemo<string>(() => {
     if (!currentQuestion) return "";
@@ -966,7 +1036,7 @@ export default function TvQuizPage() {
       currentQuestion.text ||
       ""
     );
-  }, [currentQuestion]);
+  }, [currentQuestion]); //[span_124](start_span)[span_124](end_span)
 
   const options = useMemo<string[]>(() => {
     const rawOptions =
@@ -974,9 +1044,9 @@ export default function TvQuizPage() {
       currentQuestion?.choices ||
       currentQuestion?.answers;
     return extractOptionsList(rawOptions);
-  }, [currentQuestion]);
+  }, [currentQuestion]); //[span_125](start_span)[span_125](end_span)
 
-  const answersMap = quizState.answers ?? {};
+  const answersMap = quizState.answers ?? {}; //[span_126](start_span)[span_126](end_span)
   const scoresMap = useMemo<Record<string, number | string>>(() => {
     const merged: Record<string, number | string> = {
       ...(session?.player_scores ?? {}),
@@ -988,7 +1058,7 @@ export default function TvQuizPage() {
       ...(quizState.pointsMap ?? {}),
       ...(quizState.points ?? {}),
       ...(quizState.scores ?? {}),
-    };
+    }; //[span_127](start_span)[span_127](end_span)
 
     for (const row of playerScoresRows) {
       const scoreRecord = row as unknown as {
@@ -1000,40 +1070,40 @@ export default function TvQuizPage() {
       if (scoreRecord.player_id && typeof val === "number") {
         merged[String(scoreRecord.player_id)] = val;
       }
-    }
+    } //[span_128](start_span)[span_128](end_span)
 
-    const normalized: Record<string, number | string> = {};
+    const normalized: Record<string, number | string> = {}; //[span_129](start_span)[span_129](end_span)
     for (const [k, v] of Object.entries(merged)) {
       normalized[k] = v;
       normalized[k.trim().toLowerCase()] = v;
-    }
-    return normalized;
-  }, [session, quizState, playerScoresRows]);
+    } //[span_130](start_span)[span_130](end_span)
+    return normalized; //[span_131](start_span)[span_131](end_span)
+  }, [session, quizState, playerScoresRows]); //[span_132](start_span)[span_132](end_span)
 
   const isRevealed = Boolean(
     quizState.revealed ||
       quizState.showAnswers ||
       quizState.show_answers ||
       isTimerExpired
-  );
+  ); //[span_133](start_span)[span_133](end_span)
 
   const correctLetter = useMemo<AnswerLetter | null>(() => {
-    if (!currentQuestion) return null;
+    if (!currentQuestion) return null; //[span_134](start_span)[span_134](end_span)
     const rawIdx =
       typeof currentQuestion.correctIndex === "number"
         ? currentQuestion.correctIndex
         : typeof currentQuestion.correct_index === "number"
         ? currentQuestion.correct_index
-        : null;
+        : null; //[span_135](start_span)[span_135](end_span)
     if (rawIdx !== null) {
       return LETTERS[rawIdx] ?? null;
-    }
+    } //[span_136](start_span)[span_136](end_span)
     return normalizeAnswerLetter(
       currentQuestion.correct ??
         currentQuestion.correctAnswer ??
         currentQuestion.correct_answer
-    );
-  }, [currentQuestion]);
+    ); //[span_137](start_span)[span_137](end_span)
+  }, [currentQuestion]); //[span_138](start_span)[span_138](end_span)
 
   useEffect(() => {
     if (
@@ -1045,19 +1115,19 @@ export default function TvQuizPage() {
       !isRevealed
     ) {
       return;
-    }
+    } //[span_139](start_span)[span_139](end_span)
 
-    const roundKey = `${session.id}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}`;
+    const roundKey = `${session.id}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}`; //[span_140](start_span)[span_140](end_span)
     if (scoredQuestionsRef.current.has(roundKey) || isScoringRef.current) {
       return;
-    }
+    } //[span_141](start_span)[span_141](end_span)
 
-    isScoringRef.current = true;
-    scoredQuestionsRef.current.add(roundKey);
+    isScoringRef.current = true; //[span_142](start_span)[span_142](end_span)
+    scoredQuestionsRef.current.add(roundKey); //[span_143](start_span)[span_143](end_span)
 
     void (async () => {
       try {
-        const currentScoreByPlayerId = new Map<string, number>();
+        const currentScoreByPlayerId = new Map<string, number>(); //[span_144](start_span)[span_144](end_span)
         for (const row of playerScoresRows) {
           const rec = row as unknown as {
             player_id?: string | null;
@@ -1071,14 +1141,14 @@ export default function TvQuizPage() {
               typeof val === "number" && Number.isFinite(val) ? val : 0
             );
           }
-        }
+        } //[span_145](start_span)[span_145](end_span)
 
         const updates: Array<{
           playerId: string;
           nickname: string;
           avatarId: string;
           nextScore: number;
-        }> = [];
+        }> = []; //[span_146](start_span)[span_146](end_span)
 
         for (const player of players) {
           const playerIdStr = String(player.id);
@@ -1095,9 +1165,9 @@ export default function TvQuizPage() {
             avatarId: player.avatar_id ?? player.avatarId ?? "gamepad",
             nextScore,
           });
-        }
+        } //[span_147](start_span)[span_147](end_span)
 
-        if (updates.length === 0) return;
+        if (updates.length === 0) return; //[span_148](start_span)[span_148](end_span)
 
         for (const u of updates) {
           const { data: existing } = await supabase
@@ -1105,7 +1175,7 @@ export default function TvQuizPage() {
             .select("id")
             .eq("session_id", session.id)
             .eq("player_id", u.playerId)
-            .maybeSingle<{ id?: string }>();
+            .maybeSingle<{ id?: string }>(); //[span_149](start_span)[span_149](end_span)
 
           if (existing?.id) {
             await supabase
@@ -1115,7 +1185,7 @@ export default function TvQuizPage() {
                 avatar_id: u.avatarId,
                 total_score: u.nextScore,
               })
-              .eq("id", existing.id);
+              .eq("id", existing.id); //[span_150](start_span)[span_150](end_span)
           } else {
             await supabase.from("player_scores").upsert(
               {
@@ -1126,20 +1196,20 @@ export default function TvQuizPage() {
                 total_score: u.nextScore,
               },
               { onConflict: "session_id,player_id" }
-            );
+            ); //[span_151](start_span)[span_151](end_span)
           }
-        }
+        } //[span_152](start_span)[span_152](end_span)
 
         const { data: refreshedScores } = await supabase
           .from("player_scores")
           .select("*")
-          .eq("session_id", session.id);
+          .eq("session_id", session.id); //[span_153](start_span)[span_153](end_span)
 
         if (refreshedScores) {
-          setPlayerScoresRows(refreshedScores as PlayerScore[]);
+          setPlayerScoresRows(refreshedScores as PlayerScore[]); //[span_154](start_span)[span_154](end_span)
         }
       } finally {
-        isScoringRef.current = false;
+        isScoringRef.current = false; //[span_155](start_span)[span_155](end_span)
       }
     })();
   }, [
@@ -1154,7 +1224,7 @@ export default function TvQuizPage() {
     players,
     playerScoresRows,
     answersMap,
-  ]);
+  ]); //[span_156](start_span)[span_156](end_span)
 
   const rankedPlayers = useMemo(() => {
     return [...players]
@@ -1169,9 +1239,9 @@ export default function TvQuizPage() {
             : "",
           player.nickname ? String(player.nickname) : "",
           player.nickname ? String(player.nickname).trim().toLowerCase() : "",
-        ].filter(Boolean);
+        ].filter(Boolean); //[span_157](start_span)[span_157](end_span)
 
-        let mappedValue: number | null = null;
+        let mappedValue: number | null = null; //[span_158](start_span)[span_158](end_span)
         for (const key of candidateKeys) {
           if (key in scoresMap) {
             const num = toFiniteNumber(scoresMap[key]);
@@ -1180,72 +1250,72 @@ export default function TvQuizPage() {
               break;
             }
           }
-        }
+        } //[span_159](start_span)[span_159](end_span)
 
         const directPlayerScore =
           toFiniteNumber(player.score) ??
           toFiniteNumber(player.points) ??
           toFiniteNumber(player.total_score) ??
-          toFiniteNumber(player.totalPoints);
+          toFiniteNumber(player.totalPoints); //[span_160](start_span)[span_160](end_span)
 
-        const score = mappedValue ?? directPlayerScore ?? 0;
+        const score = mappedValue ?? directPlayerScore ?? 0; //[span_161](start_span)[span_161](end_span)
         const chosenLetter = normalizeAnswerLetter(
           answersMap[String(player.id)]
-        );
+        ); //[span_162](start_span)[span_162](end_span)
         return {
           player,
           score,
           chosenLetter,
         };
       })
-      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  }, [players, scoresMap, answersMap]);
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0)); //[span_163](start_span)[span_163](end_span)
+  }, [players, scoresMap, answersMap]); //[span_164](start_span)[span_164](end_span)
 
-  const totalQuestions = questions.length;
+  const totalQuestions = questions.length; //[span_165](start_span)[span_165](end_span)
   const isLastQuestionCompleted =
     !isFinishedOrLobbyStatus &&
     totalQuestions > 0 &&
     activeQuestionIndex !== null &&
     activeQuestionIndex >= totalQuestions - 1 &&
-    isRevealed;
+    isRevealed; //[span_166](start_span)[span_166](end_span)
 
   useEffect(() => {
     if (!isLastQuestionCompleted) {
       setIsPodiumVisible(false);
       return;
-    }
+    } //[span_167](start_span)[span_167](end_span)
 
     const timerId = window.setTimeout(() => {
       setIsPodiumVisible(true);
-    }, PODIUM_DELAY_MS);
+    }, PODIUM_DELAY_MS); //[span_168](start_span)[span_168](end_span)
 
     return () => {
       window.clearTimeout(timerId);
-    };
-  }, [isLastQuestionCompleted]);
+    }; //[span_169](start_span)[span_169](end_span)
+  }, [isLastQuestionCompleted]); //[span_170](start_span)[span_170](end_span)
 
   useEffect(() => {
-    if (!isPodiumVisible || !session?.id) return;
-    const playKey = `${session.id}-s${seriesNumber}-${seriesSeed}`;
-    if (hasPlayedApplauseForSeriesRef.current === playKey) return;
-    hasPlayedApplauseForSeriesRef.current = playKey;
+    if (!isPodiumVisible || !session?.id) return; //[span_171](start_span)[span_171](end_span)
+    const playKey = `${session.id}-s${seriesNumber}-${seriesSeed}`; //[span_172](start_span)[span_172](end_span)
+    if (hasPlayedApplauseForSeriesRef.current === playKey) return; //[span_173](start_span)[span_173](end_span)
+    hasPlayedApplauseForSeriesRef.current = playKey; //[span_174](start_span)[span_174](end_span)
 
-    const cleanupAudio = playApplauseSound();
+    const cleanupAudio = playApplauseSound(); //[span_175](start_span)[span_175](end_span)
     return () => {
       cleanupAudio();
-    };
-  }, [isPodiumVisible, session?.id, seriesNumber, seriesSeed]);
+    }; //[span_176](start_span)[span_176](end_span)
+  }, [isPodiumVisible, session?.id, seriesNumber, seriesSeed]); //[span_177](start_span)[span_177](end_span)
 
   const topThreePlayers = useMemo(() => {
     return rankedPlayers.slice(0, 3);
-  }, [rankedPlayers]);
+  }, [rankedPlayers]); //[span_178](start_span)[span_178](end_span)
 
   const podiumSlots = useMemo(() => {
     const first = topThreePlayers[0];
     const second = topThreePlayers[1];
     const third = topThreePlayers[2];
     return { first, second, third };
-  }, [topThreePlayers]);
+  }, [topThreePlayers]); //[span_179](start_span)[span_179](end_span)
 
   return (
     <div className="h-[100dvh] w-screen overflow-hidden bg-tvos-bg text-white px-8 py-6 flex flex-col justify-between select-none">
