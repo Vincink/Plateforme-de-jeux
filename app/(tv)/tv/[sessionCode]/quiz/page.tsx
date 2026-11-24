@@ -27,6 +27,7 @@ interface QuizQuestionItem {
 }
 
 interface QuizStatePayload {
+  mode?: string;
   questions?: QuizQuestionItem[];
   quizQuestions?: QuizQuestionItem[];
   seriesQuestions?: QuizQuestionItem[];
@@ -313,6 +314,21 @@ function normalizeAnswerLetter(raw: unknown): AnswerLetter | null {
     }
   }
   return null;
+}
+
+function hasValidOptionsList(
+  rawOptions: QuizQuestionItem["options"]
+): boolean {
+  if (!rawOptions) return false;
+  if (Array.isArray(rawOptions)) {
+    return rawOptions.some((opt) => String(opt ?? "").trim() !== "");
+  }
+  if (typeof rawOptions === "object") {
+    return Object.values(rawOptions).some(
+      (opt) => String(opt ?? "").trim() !== ""
+    );
+  }
+  return false;
 }
 
 function extractOptionsList(
@@ -676,33 +692,37 @@ export default function TvQuizPage() {
   }, [session, sessionCode, quizState, isFinishedOrLobbyStatus, router]);
 
   const syncedSeriesQuestions = useMemo<QuizQuestionItem[] | null>(() => {
-    if (
-      Array.isArray(quizState.seriesQuestions) &&
-      quizState.seriesQuestions.length > 0
-    ) {
-      return quizState.seriesQuestions;
+    const modeStr = String(quizState.mode ?? "")
+      .trim()
+      .toLowerCase();
+
+    if (modeStr && modeStr !== "quiz" && !modeStr.includes("quiz")) {
+      return null;
     }
-    if (
-      Array.isArray(quizState.shuffledQuestions) &&
-      quizState.shuffledQuestions.length > 0
-    ) {
-      return quizState.shuffledQuestions;
+
+    const candidates: unknown[] = [
+      quizState.seriesQuestions,
+      quizState.shuffledQuestions,
+      quizState.questions,
+      quizState.quizQuestions,
+      quizState.items,
+      session?.questions,
+    ];
+
+    for (const candidate of candidates) {
+      if (!Array.isArray(candidate) || candidate.length === 0) continue;
+
+      const typedList = candidate as QuizQuestionItem[];
+      const hasValidOptions = typedList.some((item) => {
+        const rawOpts = item?.options || item?.choices || item?.answers;
+        return hasValidOptionsList(rawOpts);
+      });
+
+      if (hasValidOptions) {
+        return typedList;
+      }
     }
-    if (Array.isArray(quizState.questions) && quizState.questions.length > 0) {
-      return quizState.questions;
-    }
-    if (
-      Array.isArray(quizState.quizQuestions) &&
-      quizState.quizQuestions.length > 0
-    ) {
-      return quizState.quizQuestions;
-    }
-    if (Array.isArray(quizState.items) && quizState.items.length > 0) {
-      return quizState.items;
-    }
-    if (Array.isArray(session?.questions) && session.questions.length > 0) {
-      return session.questions;
-    }
+
     return null;
   }, [quizState, session]);
 
@@ -786,13 +806,29 @@ export default function TvQuizPage() {
 
   const currentQuestion = useMemo<QuizQuestionItem | null>(() => {
     if (activeQuestionIndex === null) return null;
-    if (quizState.currentQuestion) return quizState.currentQuestion;
-    if (quizState.activeQuestion) return quizState.activeQuestion;
+
+    const payloadQuestion =
+      quizState.currentQuestion || quizState.activeQuestion || null;
+
+    if (payloadQuestion) {
+      const rawPayloadOpts =
+        payloadQuestion.options ||
+        payloadQuestion.choices ||
+        payloadQuestion.answers;
+      if (hasValidOptionsList(rawPayloadOpts)) {
+        return payloadQuestion;
+      }
+    }
+
     if (questions.length > 0) {
       const safeIndex = Math.min(activeQuestionIndex, questions.length - 1);
-      return questions[safeIndex] ?? null;
+      const fromSeries = questions[safeIndex] ?? null;
+      if (fromSeries) {
+        return fromSeries;
+      }
     }
-    return null;
+
+    return payloadQuestion;
   }, [activeQuestionIndex, quizState, questions]);
 
   const isPaused = useMemo<boolean>(() => {
