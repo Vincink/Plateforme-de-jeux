@@ -16,10 +16,10 @@ const MAX_VALUE = 1000;
 const FULL_SCALE_BAR_MS = 4000;
 const POST_ZERO_FADE_MS = 550;
 const POST_FADE_DELAY_MS = 2000;
+const NEXT_QUESTION_CARD_DELAY_MS = 4000;
 const DEFAULT_DURATION_SECONDS = 20;
 const QUESTIONS_PER_GAME = 15;
 const REVEAL_DELAY_AFTER_BARS_MS = 900;
-const RETRACT_DELAY_MS = 3200;
 
 interface JusteChiffreStatePayload {
   mode?: string;
@@ -163,24 +163,19 @@ export default function TvJusteChiffrePage() {
   const [canStartRevealSequence, setCanStartRevealSequence] =
     useState<boolean>(false);
 
-  // États d'animation des barres et des compteurs figés
+  // États d'animation des barres, ligne cible et compteurs
   const [barsExpanded, setBarsExpanded] = useState<boolean>(false);
+  const [targetLineExpanded, setTargetLineExpanded] = useState<boolean>(false);
   const [displayCounters, setDisplayCounters] = useState<
     Record<string, number>
   >({});
-  const [frozenCounters, setFrozenCounters] = useState<Record<string, number>>(
-    {}
-  );
-  const [phase, setPhase] = useState<
-    "idle" | "playing" | "revealed" | "retracting"
-  >("idle");
+  const [phase, setPhase] = useState<"idle" | "playing" | "revealed">("idle");
 
   const scoredRoundsRef = useRef<Set<string>>(new Set());
   const isScoringRef = useRef<boolean>(false);
   const lastRoundKeyRef = useRef<string>("");
-  const zeroReachedAtRef = useRef<number | null>(null);
-  const countersRef = useRef<Record<string, number>>({});
-  const countersFrozenRef = useRef<boolean>(false);
+  const zeroSequenceStartedRef = useRef<boolean>(false);
+  const revealAnimStartedRoundRef = useRef<string>("");
 
   // --- Synchronisation temps réel Supabase ---
   useEffect(() => {
@@ -436,7 +431,9 @@ export default function TvJusteChiffrePage() {
     parseTimestampMs(statePayload.questionStartedAt) ??
     parseTimestampMs(statePayload.question_started_at);
 
-  // Réinitialisation complète à chaque nouvelle question
+  // À chaque clic sur "question suivante" (changement de question) :
+  // - On réinitialise les barres/révélation de la manche précédente
+  // - La case de la nouvelle question apparaît 4 secondes après
   useEffect(() => {
     if (activeQuestionIndex === null || !currentQuestion) {
       setLocalStartMs(null);
@@ -446,11 +443,10 @@ export default function TvJusteChiffrePage() {
       setCanStartRevealSequence(false);
       setPhase("idle");
       setBarsExpanded(false);
+      setTargetLineExpanded(false);
       setDisplayCounters({});
-      setFrozenCounters({});
-      countersRef.current = {};
-      countersFrozenRef.current = false;
-      zeroReachedAtRef.current = null;
+      zeroSequenceStartedRef.current = false;
+      revealAnimStartedRoundRef.current = "";
       lastRoundKeyRef.current = "";
       return;
     }
@@ -463,16 +459,24 @@ export default function TvJusteChiffrePage() {
     setLocalStartMs(start);
     setFrozenRemaining(null);
     setNowMs(Date.now());
-    setShowCenterCard(true);
+    setShowCenterCard(false);
     setIsQuestionFadingOut(false);
     setCanStartRevealSequence(false);
     setPhase("playing");
     setBarsExpanded(false);
+    setTargetLineExpanded(false);
     setDisplayCounters({});
-    setFrozenCounters({});
-    countersRef.current = {};
-    countersFrozenRef.current = false;
-    zeroReachedAtRef.current = null;
+    zeroSequenceStartedRef.current = false;
+    revealAnimStartedRoundRef.current = "";
+
+    const showCardTimer = window.setTimeout(() => {
+      setShowCenterCard(true);
+      setIsQuestionFadingOut(false);
+    }, NEXT_QUESTION_CARD_DELAY_MS);
+
+    return () => {
+      window.clearTimeout(showCardTimer);
+    };
   }, [
     activeQuestionIndex,
     currentQuestion,
@@ -540,17 +544,16 @@ export default function TvJusteChiffrePage() {
     remainingSeconds !== null &&
     remainingSeconds <= 0;
 
-  // Quand le chrono arrive à 0 : fondu de la question puis 2 secondes d'attente avant révélation
+  const isQuestionEnded = Boolean(isTimerZero || statePayload.revealed);
+
+  // Déclenchement unique dès que le chrono atteint 0 :
+  // 1) Fondu de la carte question (550 ms)
+  // 2) Attente stricte de 2000 ms (2 secondes)
+  // 3) Lancement des barres et de la ligne cible
   useEffect(() => {
-    if (activeQuestionIndex === null || !currentQuestion) return;
-
-    if (!isTimerZero && !statePayload.revealed) {
-      return;
-    }
-
-    if (zeroReachedAtRef.current === null) {
-      zeroReachedAtRef.current = Date.now();
-    }
+    if (!isQuestionEnded || activeQuestionIndex === null) return;
+    if (zeroSequenceStartedRef.current) return;
+    zeroSequenceStartedRef.current = true;
 
     setIsQuestionFadingOut(true);
 
@@ -566,12 +569,7 @@ export default function TvJusteChiffrePage() {
       window.clearTimeout(hideCardTimer);
       window.clearTimeout(revealWaitTimer);
     };
-  }, [
-    activeQuestionIndex,
-    currentQuestion,
-    isTimerZero,
-    statePayload.revealed,
-  ]);
+  }, [isQuestionEnded, activeQuestionIndex]);
 
   const shouldReveal = canStartRevealSequence;
 
@@ -638,89 +636,88 @@ export default function TvJusteChiffrePage() {
       .sort((a, b) => b.score - a.score);
   }, [players, scoresRows, estimatesByPlayerId, targetNumber, shouldReveal]);
 
-  // Déploiement des barres (4s pour 0 -> 1000) + compteur qui fige dès l'ondulation / cassure
+  // Déploiement simultané des barres et de la ligne cible (4s pour 0 -> 1000)
+  // Chaque compteur monte pendant exactement la durée de sa barre puis reste définitivement figé sur guess
   useEffect(() => {
     if (!shouldReveal || activeQuestionIndex === null || !currentQuestion) {
       return;
     }
 
-    countersFrozenRef.current = false;
-    setFrozenCounters({});
-    setBarsExpanded(true);
+    const animKey = `${session?.id ?? ""}-q${activeQuestionIndex}`;
+    if (revealAnimStartedRoundRef.current === animKey) return;
+    revealAnimStartedRoundRef.current = animKey;
+
+    const snapshotGuesses: Record<string, number> = { ...estimatesByPlayerId };
+    const playerIds = players.map((p) => String(p.id));
+
+    const startFrameId = window.requestAnimationFrame(() => {
+      setBarsExpanded(true);
+      setTargetLineExpanded(true);
+    });
 
     const maxGuess = Math.max(
       1,
-      ...players.map((p) => estimatesByPlayerId[String(p.id)] ?? 0)
+      ...Object.values(snapshotGuesses),
+      targetNumber ?? 0
     );
-    const animDurationMs = Math.max(
+    const maxAnimDurationMs = Math.max(
       400,
       Math.round((maxGuess / MAX_VALUE) * FULL_SCALE_BAR_MS)
     );
     const animStart = performance.now();
     let rafId = 0;
-
-    const freezeNow = () => {
-      if (countersFrozenRef.current) return;
-      countersFrozenRef.current = true;
-      const snapshot: Record<string, number> = {};
-      for (const player of players) {
-        const idStr = String(player.id);
-        const guess = estimatesByPlayerId[idStr];
-        if (guess !== undefined) {
-          snapshot[idStr] = countersRef.current[idStr] ?? guess;
-        }
-      }
-      setFrozenCounters(snapshot);
-    };
+    let isCancelled = false;
 
     const tickCounter = (now: number) => {
-      if (countersFrozenRef.current) return;
-      const progress = Math.min(1, (now - animStart) / animDurationMs);
-      const eased = 1 - Math.pow(1 - progress, 3);
-
+      if (isCancelled) return;
+      const elapsed = now - animStart;
+      let anyStillRunning = false;
       const nextCounters: Record<string, number> = {};
-      for (const player of players) {
-        const idStr = String(player.id);
-        const guess = estimatesByPlayerId[idStr];
-        if (guess !== undefined) {
+
+      for (const idStr of playerIds) {
+        const guess = snapshotGuesses[idStr];
+        if (guess === undefined) continue;
+
+        const ownDurationMs = Math.max(
+          400,
+          Math.round((guess / MAX_VALUE) * FULL_SCALE_BAR_MS)
+        );
+        const progress = Math.min(1, elapsed / ownDurationMs);
+
+        if (progress >= 1) {
+          nextCounters[idStr] = guess;
+        } else {
+          anyStillRunning = true;
+          const eased = 1 - Math.pow(1 - progress, 3);
           nextCounters[idStr] = Math.round(guess * eased);
         }
       }
-      countersRef.current = nextCounters;
+
       setDisplayCounters(nextCounters);
 
-      if (progress < 1) {
+      if (anyStillRunning) {
         rafId = window.requestAnimationFrame(tickCounter);
-      } else {
-        freezeNow();
       }
     };
 
     rafId = window.requestAnimationFrame(tickCounter);
 
-    const revealTimer = window.setTimeout(() => {
-      freezeNow();
-      setPhase("revealed");
-    }, Math.max(animDurationMs, REVEAL_DELAY_AFTER_BARS_MS));
+    const revealDelay = Math.max(maxAnimDurationMs, REVEAL_DELAY_AFTER_BARS_MS);
 
-    const retractTimer = window.setTimeout(() => {
-      freezeNow();
-      setPhase("retracting");
-      setBarsExpanded(false);
-    }, Math.max(animDurationMs, REVEAL_DELAY_AFTER_BARS_MS) + RETRACT_DELAY_MS);
+    const revealTimer = window.setTimeout(() => {
+      if (isCancelled) return;
+      setDisplayCounters(snapshotGuesses);
+      setPhase("revealed");
+    }, revealDelay);
 
     return () => {
+      isCancelled = true;
+      window.cancelAnimationFrame(startFrameId);
       window.cancelAnimationFrame(rafId);
       window.clearTimeout(revealTimer);
-      window.clearTimeout(retractTimer);
     };
-  }, [
-    shouldReveal,
-    activeQuestionIndex,
-    currentQuestion,
-    players,
-    estimatesByPlayerId,
-  ]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shouldReveal, activeQuestionIndex]);
 
   // Attribution des points (+5 si exact, +3 pour le plus proche)
   useEffect(() => {
@@ -807,6 +804,14 @@ export default function TvJusteChiffrePage() {
       ? Math.max(0, Math.min(100, (targetNumber / MAX_VALUE) * 100))
       : null;
 
+  const targetDurationMs =
+    targetNumber !== null
+      ? Math.max(
+          400,
+          Math.round((targetNumber / MAX_VALUE) * FULL_SCALE_BAR_MS)
+        )
+      : FULL_SCALE_BAR_MS;
+
   return (
     <div className="relative h-[100dvh] w-screen overflow-hidden bg-neutral-950 text-white px-6 py-4 flex flex-col justify-between select-none">
       <style jsx>{`
@@ -887,7 +892,7 @@ export default function TvJusteChiffrePage() {
             </div>
           )}
 
-          {remainingSeconds !== null && !shouldReveal && (
+          {remainingSeconds !== null && !isQuestionEnded && (
             <div
               className={`flex items-center gap-2.5 px-5 py-2 rounded-2xl border-2 font-mono text-2xl xl:text-3xl font-black ${
                 isPaused
@@ -910,8 +915,8 @@ export default function TvJusteChiffrePage() {
 
       {/* ================= ZONE PRINCIPALE : CLASSEMENT COMPACT À GAUCHE + JAUGES 1-1000 À DROITE ================= */}
       <main className="flex-1 min-h-0 flex items-stretch gap-0 mt-3 overflow-hidden">
-        {/* CLASSEMENT COMPACT À GAUCHE (PSEUDO + SCORE UNIQUEMENT) */}
-        <aside className="w-[220px] xl:w-[250px] shrink-0 bg-white/[0.05] border border-white/15 rounded-l-3xl p-3 flex flex-col gap-2">
+        {/* CLASSEMENT COMPACT À GAUCHE (RANG + PSEUDO + SCORE) */}
+        <aside className="w-[250px] xl:w-[280px] shrink-0 bg-white/[0.05] border border-white/15 rounded-l-3xl p-3 flex flex-col gap-2">
           <div className="flex items-center gap-2 pb-1.5 border-b border-white/10 shrink-0">
             <Trophy className="w-5 h-5 text-amber-400 shrink-0" />
             <span className="text-lg xl:text-xl font-black truncate">
@@ -920,7 +925,7 @@ export default function TvJusteChiffrePage() {
           </div>
 
           <div className="flex-1 min-h-0 flex flex-col justify-center gap-1.5">
-            {rankedPlayers.map(({ player, score, isWinner }) => {
+            {rankedPlayers.map(({ player, score, isWinner }, idx) => {
               const pColor = getUniquePlayerColor(player.id, players);
 
               return (
@@ -928,19 +933,24 @@ export default function TvJusteChiffrePage() {
                   key={player.id}
                   style={{
                     backgroundColor: pColor.bgHex,
-                    borderColor: isWinner ? "#FDE047" : pColor.borderHex,
                     color: pColor.textHex,
                   }}
-                  className={`h-12 rounded-xl border-2 px-3 flex items-center justify-between gap-2 shadow-md transition ${
-                    isWinner ? "ring-4 ring-amber-300" : ""
-                  }`}
+                  className="h-12 rounded-xl border border-white/25 px-2.5 flex items-center justify-between gap-2 shadow-md transition"
                 >
-                  <span className="font-black text-base xl:text-lg truncate flex items-center gap-1 min-w-0">
-                    {isWinner && (
-                      <Crown className="w-4 h-4 text-amber-300 shrink-0" />
-                    )}
-                    <span className="truncate">{player.nickname}</span>
-                  </span>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <span
+                      style={{ backgroundColor: pColor.badgeBgHex }}
+                      className="w-6 h-6 rounded-lg flex items-center justify-center font-mono font-black text-xs shrink-0"
+                    >
+                      {idx + 1}
+                    </span>
+                    <span className="font-black text-base xl:text-lg truncate flex items-center gap-1 min-w-0">
+                      {isWinner && (
+                        <Crown className="w-4 h-4 text-amber-300 shrink-0" />
+                      )}
+                      <span className="truncate">{player.nickname}</span>
+                    </span>
+                  </div>
 
                   <span className="font-mono font-black text-base xl:text-lg shrink-0">
                     {score}
@@ -953,13 +963,25 @@ export default function TvJusteChiffrePage() {
 
         {/* PISTE DES JAUGES (1 À 1000) SUR TOUT L'ESPACE DROIT */}
         <section className="relative flex-1 min-w-0 bg-white/[0.03] border-y border-r border-white/15 rounded-r-3xl flex flex-col justify-between py-3 px-5">
-          {/* Repères d'échelle 1 / 500 / 1000 lisibles depuis le canapé */}
-          <div className="relative h-9 shrink-0 font-mono font-black text-2xl xl:text-3xl border-b border-white/15">
+          {/* Bande d'échelle 1 / 500 / 1000 + chiffre cible aligné exactement sur la même ligne */}
+          <div className="relative h-9 shrink-0 font-mono font-black text-2xl xl:text-3xl leading-none border-b border-white/15">
             <span className="absolute left-0 top-0 text-white">1</span>
             <span className="absolute left-1/2 -translate-x-1/2 top-0 text-amber-300">
               500
             </span>
             <span className="absolute right-0 top-0 text-white">1000</span>
+
+            {shouldReveal && targetPercent !== null && (
+              <div
+                style={{
+                  left: `${targetLineExpanded ? targetPercent : 0}%`,
+                  transition: `left ${targetDurationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`,
+                }}
+                className="pointer-events-none absolute top-0 z-40 -translate-x-1/2 px-2 py-0 rounded-md bg-emerald-400 text-black font-mono text-2xl xl:text-3xl font-black leading-none shadow-lg whitespace-nowrap"
+              >
+                {targetNumber}
+              </div>
+            )}
           </div>
 
           {/* Ligne verticale milieu (500) */}
@@ -968,15 +990,15 @@ export default function TvJusteChiffrePage() {
             className="pointer-events-none absolute top-12 bottom-3 left-1/2 border-l-2 border-dashed border-white/25 z-0"
           />
 
-          {/* Ligne cible révélée */}
+          {/* Ligne verticale cible partant de 0 avec la même vitesse que les barres */}
           {shouldReveal && targetPercent !== null && (
             <div
-              style={{ left: `${targetPercent}%` }}
-              className="pointer-events-none absolute top-11 bottom-3 z-30 -translate-x-1/2 flex flex-col items-center"
+              style={{
+                left: `${targetLineExpanded ? targetPercent : 0}%`,
+                transition: `left ${targetDurationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`,
+              }}
+              className="pointer-events-none absolute top-12 bottom-3 z-30 -translate-x-1/2 flex flex-col items-center"
             >
-              <div className="px-3 py-0.5 rounded-lg bg-emerald-400 text-black font-mono text-lg xl:text-xl font-black shadow-lg">
-                {targetNumber}
-              </div>
               <div className="w-1.5 flex-1 bg-emerald-400 shadow-[0_0_16px_rgba(52,211,153,0.95)]" />
             </div>
           )}
@@ -998,24 +1020,18 @@ export default function TvJusteChiffrePage() {
                     )
                   : FULL_SCALE_BAR_MS;
 
-              const isBarAnimatingNow =
-                (phase === "revealed" || phase === "retracting") &&
-                guess !== null;
+              const isBarAnimatingNow = phase === "revealed" && guess !== null;
 
               const counterValue =
-                isBarAnimatingNow || countersFrozenRef.current
-                  ? frozenCounters[idStr] ??
-                    countersRef.current[idStr] ??
-                    guess ??
-                    0
+                guess === null
+                  ? 0
+                  : phase === "revealed" || displayCounters[idStr] === guess
+                  ? guess
                   : displayCounters[idStr] ?? 0;
 
               const isLoser = isBarAnimatingNow && !isWinner;
 
-              const transitionStyle =
-                phase === "retracting"
-                  ? "width 900ms cubic-bezier(0.22, 1, 0.36, 1)"
-                  : `width ${barDurationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`;
+              const transitionStyle = `width ${barDurationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`;
 
               return (
                 <div
@@ -1027,10 +1043,9 @@ export default function TvJusteChiffrePage() {
                     style={{
                       width: `${widthPercent}%`,
                       backgroundColor: pColor.bgHex,
-                      borderColor: isWinner ? "#FDE047" : pColor.borderHex,
                       transition: transitionStyle,
                     }}
-                    className={`h-10 rounded-r-2xl border-2 shadow-lg flex items-center justify-end pr-3 overflow-visible ${
+                    className={`h-10 rounded-r-2xl border border-white/25 shadow-lg flex items-center justify-end pr-3 overflow-visible ${
                       isWinner && phase === "revealed"
                         ? "winner-bar-wave"
                         : isLoser
@@ -1038,8 +1053,8 @@ export default function TvJusteChiffrePage() {
                         : ""
                     }`}
                   >
-                    {/* Chiffre grand et lisible qui monte avec la barre et se fige dès l'ondulation / cassure */}
-                    {barsExpanded && guess !== null && (
+                    {/* Chiffre grand et lisible qui monte avec la barre puis reste figé sur l'estimation */}
+                    {shouldReveal && guess !== null && (
                       <span
                         className={`ml-2 px-2.5 py-0.5 rounded-lg font-mono text-xl xl:text-2xl font-black leading-none shadow-md shrink-0 ${
                           isWinner
@@ -1063,7 +1078,7 @@ export default function TvJusteChiffrePage() {
         </section>
       </main>
 
-      {/* ================= CARTE CENTRALE DE QUESTION (APPARAÎT AU LANCEMENT, DISPARAÎT EN FONDU À 0s) ================= */}
+      {/* ================= CARTE CENTRALE DE QUESTION (APPARAÎT 4s APRÈS QUESTION SUIVANTE, DISPARAÎT EN FONDU À 0s) ================= */}
       {showCenterCard && currentQuestion?.question && (
         <div
           aria-live="polite"
