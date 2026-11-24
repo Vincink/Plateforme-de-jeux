@@ -179,6 +179,9 @@ export default function TvJusteChiffrePage() {
   const [session, setSession] = useState<ExtendedSession | null>(null);
   const [players, setPlayers] = useState<ExtendedPlayer[]>([]);
   const [scoresRows, setScoresRows] = useState<PlayerScore[]>([]);
+  const [localScoresByPlayer, setLocalScoresByPlayer] = useState<
+    Record<string, number>
+  >({});
   const gameTitle = "Le Juste Chiffre";
 
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
@@ -834,9 +837,11 @@ export default function TvJusteChiffrePage() {
           : null;
       const isExact =
         guess !== null && targetNumber !== null && guess === targetNumber;
+      const dbScore = scoreById.get(idStr) ?? 0;
+      const localBonus = localScoresByPlayer[idStr] ?? 0;
       return {
         player,
-        score: scoreById.get(idStr) ?? 0,
+        score: Math.max(dbScore, localBonus),
         guess,
         diff,
         isExact,
@@ -858,7 +863,14 @@ export default function TvJusteChiffrePage() {
           item.diff === minDiff,
       }))
       .sort((a, b) => b.score - a.score);
-  }, [players, scoresRows, estimatesByPlayerId, targetNumber, shouldReveal]);
+  }, [
+    players,
+    scoresRows,
+    localScoresByPlayer,
+    estimatesByPlayerId,
+    targetNumber,
+    shouldReveal,
+  ]);
 
   const rankedPlayersRef = useRef(rankedPlayers);
   rankedPlayersRef.current = rankedPlayers;
@@ -1035,7 +1047,6 @@ export default function TvJusteChiffrePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shouldReveal, roundSignature, estimatesKey, targetNumber]);
 
-  // Effets visuels + pastilles + confettis/secousse rejoués à chaque question révélée
   useEffect(() => {
     if (phase !== "revealed" || !roundSignature) return;
     const fxKey = `${roundSignature}-${targetNumber ?? "none"}-${estimatesKey}`;
@@ -1101,11 +1112,9 @@ export default function TvJusteChiffrePage() {
     };
   }, [phase, roundSignature, targetNumber, estimatesKey]);
 
-  // Attribution et addition des points dans player_scores à chaque question (calcul indépendant de rankedPlayersRef)
+  // Addition cumulative des points à chaque question (état local fiable + synchronisation Supabase sur total_score)
   useEffect(() => {
     if (
-      !supabase ||
-      !session?.id ||
       !shouldReveal ||
       activeQuestionIndex === null ||
       targetNumber === null
@@ -1132,11 +1141,29 @@ export default function TvJusteChiffrePage() {
     const winners = candidates.filter((c) => c.diff === minDiff);
     if (winners.length === 0) return;
 
-    const roundKey = `${session.id}-jc-s${seriesNumber}-q${activeQuestionIndex}`;
+    const roundKey = `${session?.id ?? sessionCode}-jc-s${seriesNumber}-q${activeQuestionIndex}`;
     if (scoredRoundsRef.current.has(roundKey) || isScoringRef.current) return;
 
     isScoringRef.current = true;
     scoredRoundsRef.current.add(roundKey);
+
+    const awardedByPid: Record<string, number> = {};
+    for (const w of winners) {
+      awardedByPid[w.pid] = w.isExact ? 5 : 3;
+    }
+
+    setLocalScoresByPlayer((prev) => {
+      const next = { ...prev };
+      for (const [pid, pts] of Object.entries(awardedByPid)) {
+        next[pid] = (next[pid] ?? 0) + pts;
+      }
+      return next;
+    });
+
+    if (!supabase || !session?.id) {
+      isScoringRef.current = false;
+      return;
+    }
 
     void (async () => {
       try {
@@ -1163,20 +1190,16 @@ export default function TvJusteChiffrePage() {
           }
         }
 
-        const updatedTotals = new Map<string, number>();
-
         for (const w of winners) {
-          const pts = w.isExact ? 5 : 3;
+          const pts = awardedByPid[w.pid] ?? 3;
           const nextScore = (currentMap.get(w.pid) ?? 0) + pts;
           currentMap.set(w.pid, nextScore);
-          updatedTotals.set(w.pid, nextScore);
 
           if (existingIdSet.has(w.pid)) {
             await supabase
               .from("player_scores")
               .update({
                 total_score: nextScore,
-                score: nextScore,
                 nickname: w.player.nickname,
               })
               .eq("session_id", session.id)
@@ -1188,40 +1211,9 @@ export default function TvJusteChiffrePage() {
               nickname: w.player.nickname,
               avatar_id: w.player.avatar_id ?? "gamepad",
               total_score: nextScore,
-              score: nextScore,
             });
           }
         }
-
-        setScoresRows((prev) => {
-          const next = [...prev];
-          for (const [pid, newTotal] of updatedTotals.entries()) {
-            const idx = next.findIndex(
-              (r) =>
-                String(
-                  (r as unknown as { player_id?: string | null }).player_id
-                ) === pid
-            );
-            if (idx >= 0) {
-              next[idx] = {
-                ...next[idx],
-                total_score: newTotal,
-                score: newTotal,
-              } as PlayerScore;
-            } else {
-              const playerObj = winners.find((w) => w.pid === pid)?.player;
-              next.push({
-                session_id: session.id,
-                player_id: pid,
-                nickname: playerObj?.nickname ?? "",
-                avatar_id: playerObj?.avatar_id ?? "gamepad",
-                total_score: newTotal,
-                score: newTotal,
-              } as unknown as PlayerScore);
-            }
-          }
-          return next;
-        });
 
         const { data: refreshed } = await supabase
           .from("player_scores")
@@ -1237,6 +1229,7 @@ export default function TvJusteChiffrePage() {
   }, [
     supabase,
     session?.id,
+    sessionCode,
     shouldReveal,
     activeQuestionIndex,
     targetNumber,
