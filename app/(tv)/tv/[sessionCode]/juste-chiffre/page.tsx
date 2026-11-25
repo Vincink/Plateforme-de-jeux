@@ -31,8 +31,19 @@ const DEFAULT_DURATION_SECONDS = 20;
 const QUESTIONS_PER_GAME = 15;
 const REVEAL_DELAY_AFTER_BARS_MS = 900;
 
+type BotLevel = "cool" | "normal" | "expert";
+
+interface JcBotConfig {
+  id: string;
+  nickname: string;
+  avatar?: string;
+  botLevel?: BotLevel;
+  score?: number;
+}
+
 interface JusteChiffreStatePayload {
   mode?: string;
+  bots?: JcBotConfig[];
   minValue?: number;
   maxValue?: number;
   questions?: JusteChiffreQuestion[];
@@ -59,6 +70,8 @@ interface JusteChiffreStatePayload {
   estimates?: Record<string, unknown>;
   guesses?: Record<string, unknown>;
   answers?: Record<string, unknown>;
+  scores?: Record<string, unknown>;
+  points?: Record<string, unknown>;
   revealed?: boolean;
   finished?: boolean;
 }
@@ -69,6 +82,9 @@ type ExtendedSession = GameSession & {
 
 type ExtendedPlayer = SessionPlayer & {
   avatar_id?: string | null;
+  isBot?: boolean;
+  botLevel?: BotLevel;
+  score?: number | null;
 };
 
 interface Particle {
@@ -86,6 +102,42 @@ interface Particle {
   spin?: number;
   grow?: number;
   color?: string;
+}
+
+const BOT_JC_CONFIG: Record<
+  BotLevel,
+  { maxSpread: number; exactChance: number; minDelayMs: number; maxDelayMs: number }
+> = {
+  cool: { maxSpread: 340, exactChance: 0.02, minDelayMs: 2500, maxDelayMs: 8500 },
+  normal: { maxSpread: 150, exactChance: 0.06, minDelayMs: 1800, maxDelayMs: 7000 },
+  expert: { maxSpread: 55, exactChance: 0.14, minDelayMs: 1400, maxDelayMs: 5500 },
+};
+
+function pickBotEstimate(
+  level: BotLevel | undefined,
+  target: number | null
+): number {
+  const cfg = BOT_JC_CONFIG[level ?? "normal"];
+  if (target !== null && Math.random() < cfg.exactChance) {
+    return Math.max(MIN_VALUE, Math.min(MAX_VALUE, Math.round(target)));
+  }
+
+  if (target !== null) {
+    const offset = Math.round((Math.random() * 2 - 1) * cfg.maxSpread);
+    return Math.max(MIN_VALUE, Math.min(MAX_VALUE, Math.round(target + offset)));
+  }
+
+  return (
+    MIN_VALUE + Math.floor(Math.random() * (MAX_VALUE - MIN_VALUE + 1))
+  );
+}
+
+function getBotEstimateDelayMs(level: BotLevel | undefined): number {
+  const cfg = BOT_JC_CONFIG[level ?? "normal"];
+  return (
+    cfg.minDelayMs +
+    Math.floor(Math.random() * Math.max(400, cfg.maxDelayMs - cfg.minDelayMs))
+  );
 }
 
 function toFiniteNumber(raw: unknown): number | null {
@@ -177,7 +229,7 @@ export default function TvJusteChiffrePage() {
   const supabase = getSupabaseBrowserClient();
 
   const [session, setSession] = useState<ExtendedSession | null>(null);
-  const [players, setPlayers] = useState<ExtendedPlayer[]>([]);
+  const [humanPlayers, setHumanPlayers] = useState<ExtendedPlayer[]>([]);
   const [scoresRows, setScoresRows] = useState<PlayerScore[]>([]);
   const [localScoresByPlayer, setLocalScoresByPlayer] = useState<
     Record<string, number>
@@ -227,6 +279,11 @@ export default function TvJusteChiffrePage() {
   const zeroSequenceRoundRef = useRef<string>("");
   const revealAnimRoundRef = useRef<string>("");
   const fxRoundSignatureRef = useRef<string>("");
+  const botTimersRef = useRef(new Map<string, number>());
+  const botContextRef = useRef<{
+    sessionId: string;
+    target: number | null;
+  }>({ sessionId: "", target: null });
 
   const startParticlesLoop = () => {
     if (rafLoopRef.current) return;
@@ -396,7 +453,7 @@ export default function TvJusteChiffrePage() {
           .eq("session_id", targetSessionId),
       ]);
       if (!isMounted) return;
-      setPlayers((pData as ExtendedPlayer[] | null) ?? []);
+      setHumanPlayers((pData as ExtendedPlayer[] | null) ?? []);
       setScoresRows((sData as PlayerScore[] | null) ?? []);
     };
 
@@ -526,6 +583,30 @@ export default function TvJusteChiffrePage() {
     [session]
   );
 
+  const players = useMemo<ExtendedPlayer[]>(() => {
+    const stateBots = Array.isArray(statePayload.bots) ? statePayload.bots : [];
+    const botPlayers: ExtendedPlayer[] = stateBots
+      .filter((b) => Boolean(b?.id && b?.nickname))
+      .map(
+        (b) =>
+          ({
+            id: String(b.id),
+            session_id: session?.id ?? sessionCode,
+            nickname: String(b.nickname),
+            avatar: b.avatar ?? "🤖",
+            is_host: false,
+            is_connected: true,
+            isBot: true,
+            botLevel: b.botLevel ?? "normal",
+            score: toFiniteNumber(b.score),
+          }) as ExtendedPlayer
+      );
+
+    const existingIds = new Set(humanPlayers.map((p) => String(p.id)));
+    const uniqueBots = botPlayers.filter((bp) => !existingIds.has(String(bp.id)));
+    return [...humanPlayers, ...uniqueBots];
+  }, [humanPlayers, statePayload.bots, session?.id, sessionCode]);
+
   const statusLower = String(session?.status ?? "").toLowerCase();
   const isLobbyOrFinished =
     statusLower === "lobby" ||
@@ -571,6 +652,10 @@ export default function TvJusteChiffrePage() {
     lastResetSignatureRef.current = resetTrigger;
     isResettingScoresRef.current = true;
     scoredRoundsRef.current = new Set();
+    botTimersRef.current.forEach((timerId: number) => {
+      window.clearTimeout(timerId);
+    });
+    botTimersRef.current.clear();
     setLocalScoresByPlayer({});
     setScoresRows((prev) =>
       prev.map(
@@ -594,6 +679,30 @@ export default function TvJusteChiffrePage() {
           .from("player_scores")
           .update({ total_score: 0 })
           .eq("session_id", session.id);
+
+        const { data: latestRow } = await supabase
+          .from("game_sessions")
+          .select("game_state")
+          .eq("id", session.id)
+          .maybeSingle<{ game_state?: Record<string, unknown> | null }>();
+
+        if (latestRow) {
+          const baseState = (latestRow.game_state ?? {}) as JusteChiffreStatePayload;
+          const resetBots = Array.isArray(baseState.bots)
+            ? baseState.bots.map((b) => ({ ...b, score: 0 }))
+            : undefined;
+          await supabase
+            .from("game_sessions")
+            .update({
+              game_state: {
+                ...baseState,
+                scores: {},
+                points: {},
+                ...(resetBots ? { bots: resetBots } : {}),
+              },
+            })
+            .eq("id", session.id);
+        }
       } finally {
         isResettingScoresRef.current = false;
       }
@@ -867,6 +976,109 @@ export default function TvJusteChiffrePage() {
     return result;
   }, [statePayload.estimates, statePayload.guesses, statePayload.answers]);
 
+  useEffect(() => {
+    botContextRef.current = {
+      sessionId: session?.id ?? "",
+      target: targetNumber,
+    };
+  }, [session?.id, targetNumber]);
+
+  useEffect(() => {
+    const canBotsPlay =
+      Boolean(supabase) &&
+      Boolean(session?.id) &&
+      !isLobbyOrFinished &&
+      !isSeriesCompleted &&
+      !isPaused &&
+      !isQuestionEnded &&
+      activeQuestionIndex !== null &&
+      Boolean(currentQuestion);
+
+    if (!canBotsPlay) {
+      botTimersRef.current.forEach((timerId: number) => {
+        window.clearTimeout(timerId);
+      });
+      botTimersRef.current.clear();
+      return;
+    }
+
+    const activeBots = players.filter((p) => Boolean(p.isBot));
+    const activeBotIds = new Set(activeBots.map((b) => String(b.id)));
+    const roundPrefix = `s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}::`;
+
+    for (const [key, timerId] of botTimersRef.current.entries()) {
+      const botPart = key.split("::")[1] ?? "";
+      if (!key.startsWith(roundPrefix) || !activeBotIds.has(botPart)) {
+        window.clearTimeout(timerId);
+        botTimersRef.current.delete(key);
+      }
+    }
+
+    for (const bot of activeBots) {
+      const botIdStr = String(bot.id);
+      if (estimatesByPlayerId[botIdStr] !== undefined) continue;
+
+      const timerKey = `${roundPrefix}${botIdStr}`;
+      if (botTimersRef.current.has(timerKey)) continue;
+
+      const delayMs = getBotEstimateDelayMs(bot.botLevel);
+      const timerId = window.setTimeout(() => {
+        botTimersRef.current.delete(timerKey);
+        const { sessionId: targetId, target: targetVal } =
+          botContextRef.current;
+        if (!supabase || !targetId) return;
+
+        const chosenEstimate = pickBotEstimate(bot.botLevel, targetVal);
+        void (async () => {
+          const { data: latestRow } = await supabase
+            .from("game_sessions")
+            .select("game_state")
+            .eq("id", targetId)
+            .maybeSingle<{ game_state?: Record<string, unknown> | null }>();
+
+          const baseState = (latestRow?.game_state ??
+            {}) as JusteChiffreStatePayload;
+          const nextEstimates = {
+            ...(baseState.estimates ?? {}),
+            [botIdStr]: chosenEstimate,
+          };
+          const nextGameState: JusteChiffreStatePayload = {
+            ...baseState,
+            estimates: nextEstimates,
+          };
+
+          const { error } = await supabase
+            .from("game_sessions")
+            .update({ game_state: nextGameState })
+            .eq("id", targetId);
+
+          if (!error) {
+            setSession((prev) =>
+              prev && prev.id === targetId
+                ? { ...prev, game_state: nextGameState }
+                : prev
+            );
+          }
+        })();
+      }, delayMs);
+
+      botTimersRef.current.set(timerKey, timerId);
+    }
+  }, [
+    supabase,
+    session?.id,
+    isLobbyOrFinished,
+    isSeriesCompleted,
+    isPaused,
+    isQuestionEnded,
+    activeQuestionIndex,
+    currentQuestion,
+    players,
+    estimatesByPlayerId,
+    seriesNumber,
+    seriesSeed,
+  ]);
+
   const estimatesKey = useMemo(
     () =>
       Object.entries(estimatesByPlayerId)
@@ -895,6 +1107,23 @@ export default function TvJusteChiffrePage() {
       }
     }
 
+    for (const bot of players) {
+      if (bot.isBot && typeof bot.score === "number") {
+        scoreById.set(String(bot.id), bot.score);
+      }
+    }
+
+    const stateScores = (statePayload.scores ?? statePayload.points ?? {}) as Record<
+      string,
+      unknown
+    >;
+    for (const [pid, rawVal] of Object.entries(stateScores)) {
+      const num = toFiniteNumber(rawVal);
+      if (num !== null) {
+        scoreById.set(String(pid), num);
+      }
+    }
+
     const withMeta = players.map((player) => {
       const idStr = String(player.id);
       const guess = estimatesByPlayerId[idStr] ?? null;
@@ -904,11 +1133,11 @@ export default function TvJusteChiffrePage() {
           : null;
       const isExact =
         guess !== null && targetNumber !== null && guess === targetNumber;
-      const dbScore = scoreById.get(idStr) ?? 0;
+      const baseScore = scoreById.get(idStr) ?? 0;
       const localBonus = localScoresByPlayer[idStr] ?? 0;
       return {
         player,
-        score: Math.max(dbScore, localBonus),
+        score: Math.max(baseScore, localBonus),
         guess,
         diff,
         isExact,
@@ -933,6 +1162,8 @@ export default function TvJusteChiffrePage() {
   }, [
     players,
     scoresRows,
+    statePayload.scores,
+    statePayload.points,
     localScoresByPlayer,
     estimatesByPlayerId,
     targetNumber,
@@ -1179,7 +1410,7 @@ export default function TvJusteChiffrePage() {
     };
   }, [phase, roundSignature, targetNumber, estimatesKey]);
 
-  // Addition cumulative des points à chaque question (état local fiable + synchronisation Supabase sur total_score)
+  // Addition cumulative des points à chaque question (joueurs humains + bots + sync admin)
   useEffect(() => {
     if (
       !shouldReveal ||
@@ -1234,6 +1465,9 @@ export default function TvJusteChiffrePage() {
 
     void (async () => {
       try {
+        const humanWinners = winners.filter((w) => !w.player.isBot);
+        const botWinners = winners.filter((w) => Boolean(w.player.isBot));
+
         const { data: latestScores } = await supabase
           .from("player_scores")
           .select("*")
@@ -1257,7 +1491,7 @@ export default function TvJusteChiffrePage() {
           }
         }
 
-        for (const w of winners) {
+        for (const w of humanWinners) {
           const pts = awardedByPid[w.pid] ?? 3;
           const nextScore = (currentMap.get(w.pid) ?? 0) + pts;
           currentMap.set(w.pid, nextScore);
@@ -1280,6 +1514,69 @@ export default function TvJusteChiffrePage() {
               total_score: nextScore,
             });
           }
+        }
+
+        const { data: latestSessionRow } = await supabase
+          .from("game_sessions")
+          .select("game_state")
+          .eq("id", session.id)
+          .maybeSingle<{ game_state?: Record<string, unknown> | null }>();
+
+        const baseState = (latestSessionRow?.game_state ??
+          {}) as JusteChiffreStatePayload;
+        const prevScoresObj = (baseState.scores ?? {}) as Record<string, unknown>;
+        const prevPointsObj = (baseState.points ?? {}) as Record<string, unknown>;
+        const nextScoresObj: Record<string, number> = {};
+
+        for (const [k, v] of Object.entries(prevScoresObj)) {
+          const num = toFiniteNumber(v);
+          if (num !== null) nextScoresObj[k] = num;
+        }
+        for (const [pid, val] of currentMap.entries()) {
+          nextScoresObj[pid] = val;
+        }
+
+        const botScoreUpdates = new Map<string, number>();
+        for (const bw of botWinners) {
+          const pts = awardedByPid[bw.pid] ?? 3;
+          const prevBotScore =
+            toFiniteNumber(nextScoresObj[bw.pid]) ??
+            toFiniteNumber(bw.player.score) ??
+            0;
+          const nextBotScore = prevBotScore + pts;
+          botScoreUpdates.set(bw.pid, nextBotScore);
+          nextScoresObj[bw.pid] = nextBotScore;
+        }
+
+        const nextBots = Array.isArray(baseState.bots)
+          ? baseState.bots.map((b) => {
+              const bId = String(b.id);
+              const updatedScore = botScoreUpdates.get(bId);
+              return updatedScore !== undefined ? { ...b, score: updatedScore } : b;
+            })
+          : undefined;
+
+        const nextGameState: JusteChiffreStatePayload = {
+          ...baseState,
+          scores: nextScoresObj,
+          points: {
+            ...prevPointsObj,
+            ...nextScoresObj,
+          },
+          ...(nextBots ? { bots: nextBots } : {}),
+        };
+
+        const { error: stateErr } = await supabase
+          .from("game_sessions")
+          .update({ game_state: nextGameState })
+          .eq("id", session.id);
+
+        if (!stateErr) {
+          setSession((prev) =>
+            prev && prev.id === session.id
+              ? { ...prev, game_state: nextGameState }
+              : prev
+          );
         }
 
         const { data: refreshed } = await supabase
