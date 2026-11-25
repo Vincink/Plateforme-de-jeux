@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { Award, Check, Clock, Crown, Medal, Trophy, Tv } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
-import { QUESTIONS, type QuizQuestion } from "@/lib/questions";
+import { QUESTIONS } from "@/lib/questions";
 import type { GameSession, PlayerScore, SessionPlayer } from "@/types/game.types";
 
 type AnswerLetter = "A" | "B" | "C" | "D";
@@ -153,9 +153,9 @@ const BOT_CONFIG_BY_LEVEL: Record<
   BotLevel,
   { accuracy: number; minDelayMs: number; maxDelayMs: number }
 > = {
-  cool: { accuracy: 0.4, minDelayMs: 2800, maxDelayMs: 7500 },
-  normal: { accuracy: 0.65, minDelayMs: 1800, maxDelayMs: 5500 },
-  expert: { accuracy: 0.85, minDelayMs: 1200, maxDelayMs: 4000 },
+  cool: { accuracy: 0.4, minDelayMs: 2200, maxDelayMs: 6500 },
+  normal: { accuracy: 0.65, minDelayMs: 1500, maxDelayMs: 5000 },
+  expert: { accuracy: 0.85, minDelayMs: 1000, maxDelayMs: 3500 },
 };
 
 function pickBotAnswer(
@@ -510,7 +510,11 @@ export default function TvQuizPage() {
   const hasPlayedApplauseForSeriesRef = useRef<string>("");
   const lastIgnoredDirtyKeyRef = useRef<string>("");
   const lastSyncedAdminStateKeyRef = useRef<string>("");
-  const scheduledBotAnswersRef = useRef<Set<string>>(new Set());
+  const activeBotTimersRef = useRef>(new Map());
+  const botContextRef = useRef<{
+    sessionId: string;
+    correctLetter: AnswerLetter | null;
+  }>({ sessionId: "", correctLetter: null });
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
@@ -776,7 +780,8 @@ export default function TvQuizPage() {
     lastResetSignatureRef.current = resetTrigger;
     isResettingScoresRef.current = true;
     scoredQuestionsRef.current = new Set();
-    scheduledBotAnswersRef.current = new Set();
+    activeBotTimersRef.current.forEach((id) => window.clearTimeout(id));
+    activeBotTimersRef.current.clear();
     hasPlayedApplauseForSeriesRef.current = "";
     setBotScoresMap({});
     setIsPodiumVisible(false);
@@ -1020,7 +1025,6 @@ export default function TvQuizPage() {
     return null;
   }, [activeQuestionIndex, hasDirtyNonQuizState, quizState, questions]);
 
-  // Synchronise la série régénérée et la question active vers Supabase pour le panneau admin
   useEffect(() => {
     if (!supabase || !session?.id || isFinishedOrLobbyStatus) return;
     if (questions.length === 0) return;
@@ -1300,50 +1304,64 @@ export default function TvQuizPage() {
     );
   }, [currentQuestion]);
 
-  // Simulation isolée des réponses des bots pendant la question active
   useEffect(() => {
-    if (
-      !supabase ||
-      !session?.id ||
-      isFinishedOrLobbyStatus ||
-      isPaused ||
-      isRevealed ||
-      activeQuestionIndex === null ||
-      !currentQuestion
-    ) {
+    botContextRef.current = {
+      sessionId: session?.id ?? "",
+      correctLetter,
+    };
+  }, [session?.id, correctLetter]);
+
+  // Planification stable des réponses des bots (ne se réinitialise pas au simple refresh de session)
+  useEffect(() => {
+    const canBotsPlay =
+      Boolean(supabase) &&
+      Boolean(session?.id) &&
+      !isFinishedOrLobbyStatus &&
+      !isPaused &&
+      !isRevealed &&
+      activeQuestionIndex !== null &&
+      Boolean(currentQuestion);
+
+    if (!canBotsPlay) {
+      activeBotTimersRef.current.forEach((id) => window.clearTimeout(id));
+      activeBotTimersRef.current.clear();
       return;
     }
 
     const activeBots = allParticipants.filter((p) => Boolean(p.isBot));
-    if (activeBots.length === 0) return;
+    const activeBotIds = new Set(activeBots.map((b) => String(b.id)));
 
-    const timers: number[] = [];
+    for (const [key, timerId] of activeBotTimersRef.current.entries()) {
+      const botPart = key.split("::")[1] ?? "";
+      if (!key.startsWith(`s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}::`) || !activeBotIds.has(botPart)) {
+        window.clearTimeout(timerId);
+        activeBotTimersRef.current.delete(key);
+      }
+    }
 
     for (const bot of activeBots) {
       const botIdStr = String(bot.id);
       if (normalizeAnswerLetter(answersMap[botIdStr])) continue;
 
-      const scheduleKey = `${session.id}-s${seriesNumber}-${seriesSeed}-${regenerationNonce}-q${activeQuestionIndex}-${botIdStr}`;
-      if (scheduledBotAnswersRef.current.has(scheduleKey)) continue;
-      scheduledBotAnswersRef.current.add(scheduleKey);
+      const timerKey = `s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}::${botIdStr}`;
+      if (activeBotTimersRef.current.has(timerKey)) continue;
 
       const delayMs = getBotDelayMs(bot.botLevel);
       const timerId = window.setTimeout(() => {
-        const chosen = pickBotAnswer(bot.botLevel, correctLetter);
+        activeBotTimersRef.current.delete(timerKey);
+        const { sessionId: targetId, correctLetter: targetCorrect } =
+          botContextRef.current;
+        if (!supabase || !targetId) return;
+
+        const chosen = pickBotAnswer(bot.botLevel, targetCorrect);
         void (async () => {
           const { data: latestRow } = await supabase
             .from("game_sessions")
             .select("game_state")
-            .eq("id", session.id)
+            .eq("id", targetId)
             .maybeSingle<{ game_state?: Record<string, unknown> | null }>();
 
-          const baseState = cleanQuizState(
-            latestRow?.game_state ??
-              ((session.game_state ||
-                session.quiz_state ||
-                session.state ||
-                {}) as Record<string, unknown>)
-          );
+          const baseState = cleanQuizState(latestRow?.game_state ?? {});
           const nextAnswers = {
             ...(baseState.answers ?? {}),
             [botIdStr]: chosen,
@@ -1356,11 +1374,11 @@ export default function TvQuizPage() {
           const { error } = await supabase
             .from("game_sessions")
             .update({ game_state: nextGameState })
-            .eq("id", session.id);
+            .eq("id", targetId);
 
           if (!error) {
             setSession((prev) =>
-              prev && prev.id === session.id
+              prev && prev.id === targetId
                 ? { ...prev, game_state: nextGameState }
                 : prev
             );
@@ -1368,15 +1386,11 @@ export default function TvQuizPage() {
         })();
       }, delayMs);
 
-      timers.push(timerId);
+      activeBotTimersRef.current.set(timerKey, timerId);
     }
-
-    return () => {
-      timers.forEach((id) => window.clearTimeout(id));
-    };
   }, [
     supabase,
-    session,
+    session?.id,
     isFinishedOrLobbyStatus,
     isPaused,
     isRevealed,
@@ -1386,8 +1400,6 @@ export default function TvQuizPage() {
     answersMap,
     seriesNumber,
     seriesSeed,
-    regenerationNonce,
-    correctLetter,
   ]);
 
   useEffect(() => {
