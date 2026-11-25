@@ -75,17 +75,92 @@ type BotLevel = "cool" | "normal" | "expert";
 type BotPlayerItem = PlayerSession & {
   isBot?: boolean;
   botLevel?: BotLevel;
+  score?: number;
 };
 
-function extractBotsForState(list: BotPlayerItem[]) {
+function extractBotsForState(
+  list: BotPlayerItem[],
+  scoresList: PlayerScore[] = []
+) {
   return list
     .filter((p) => Boolean(p.isBot))
-    .map((b) => ({
-      id: b.id,
-      nickname: b.nickname,
-      avatar: b.avatar ?? "🤖",
-      botLevel: b.botLevel ?? "normal",
-    }));
+    .map((b) => {
+      const scoreMatch = scoresList.find((s) => s.player_id === b.id) as
+        | { total_score?: number; score?: number }
+        | undefined;
+      const resolvedScore =
+        typeof scoreMatch?.total_score === "number"
+          ? scoreMatch.total_score
+          : typeof scoreMatch?.score === "number"
+          ? scoreMatch.score
+          : typeof b.score === "number"
+          ? b.score
+          : 0;
+
+      return {
+        id: b.id,
+        nickname: b.nickname,
+        avatar: b.avatar ?? "🤖",
+        botLevel: b.botLevel ?? "normal",
+        score: resolvedScore,
+      };
+    });
+}
+
+function toFiniteScoreNumber(raw: unknown): number | null {
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function extractScoresMapFromGameState(
+  rawGameState: unknown
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  if (!rawGameState || typeof rawGameState !== "object") return result;
+
+  const stateObj = rawGameState as {
+    scores?: Record<string, unknown>;
+    points?: Record<string, unknown>;
+    pointsMap?: Record<string, unknown>;
+    playerScores?: Record<string, unknown>;
+    player_scores?: Record<string, unknown>;
+    bots?: Array<{ id?: unknown; score?: unknown }>;
+  };
+
+  const maps = [
+    stateObj.scores,
+    stateObj.points,
+    stateObj.pointsMap,
+    stateObj.playerScores,
+    stateObj.player_scores,
+  ];
+
+  for (const m of maps) {
+    if (!m || typeof m !== "object") continue;
+    for (const [k, v] of Object.entries(m)) {
+      const num = toFiniteScoreNumber(v);
+      if (num !== null && k) {
+        result[String(k)] = num;
+      }
+    }
+  }
+
+  if (Array.isArray(stateObj.bots)) {
+    for (const b of stateObj.bots) {
+      if (b && b.id !== undefined && b.id !== null) {
+        const num = toFiniteScoreNumber(b.score);
+        if (num !== null) {
+          result[String(b.id)] = num;
+        }
+      }
+    }
+  }
+
+  return result;
 }
 
 const GRID_COLUMNS = 12;
@@ -689,6 +764,43 @@ export default function AdminConsolePage() {
     return nextAnswers;
   };
 
+  const syncScoresFromGameState = (
+    rawGameState: unknown,
+    currentSessionId: string
+  ) => {
+    const stateScoresMap = extractScoresMapFromGameState(rawGameState);
+    const entries = Object.entries(stateScoresMap);
+    if (entries.length === 0) return;
+
+    setScores((prev) => {
+      const byPlayerId = new Map<string, PlayerScore>();
+      for (const item of prev) {
+        byPlayerId.set(String(item.player_id), item);
+      }
+
+      for (const [playerId, val] of entries) {
+        const existing = byPlayerId.get(playerId);
+        if (existing) {
+          byPlayerId.set(playerId, {
+            ...existing,
+            total_score: val,
+            score: val,
+          } as PlayerScore);
+        } else {
+          byPlayerId.set(playerId, {
+            id: `score-${playerId}`,
+            session_id: currentSessionId,
+            player_id: playerId,
+            total_score: val,
+            score: val,
+          } as unknown as PlayerScore);
+        }
+      }
+
+      return Array.from(byPlayerId.values());
+    });
+  };
+
   const syncQuestionStateFromGameState = (rawGameState: unknown) => {
     if (!rawGameState || typeof rawGameState !== "object") return;
     const stateObj = rawGameState as {
@@ -782,6 +894,7 @@ export default function AdminConsolePage() {
         }
         return { ...fromDb, ...keptBotAnswers };
       });
+      syncScoresFromGameState(gs, targetSessionId);
       syncQuestionStateFromGameState(gs);
     }
   };
@@ -839,14 +952,21 @@ export default function AdminConsolePage() {
             setPlayerAnswersById(
               extractAnswersFromGameState(nextRow.game_state, isJusteChiffre)
             );
+            syncScoresFromGameState(nextRow.game_state, sessionId);
             syncQuestionStateFromGameState(nextRow.game_state);
           }
         }
       )
       .subscribe();
 
+    const pollInterval = window.setInterval(() => {
+      if (!active) return;
+      void refresh();
+    }, 1500);
+
     return () => {
       active = false;
+      window.clearInterval(pollInterval);
       void supabase.removeChannel(channel);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -926,7 +1046,7 @@ export default function AdminConsolePage() {
     const hasQuestionStarted = effectiveQuestionIndex >= 0;
     const isPaused = params.nextStatus === "paused";
     const shouldResetAnswers = params.resetAnswers !== false;
-    const botsForState = extractBotsForState(players);
+    const botsForState = extractBotsForState(players, scores);
 
     const activeQuestionForState = hasQuestionStarted
       ? numericGameMode
@@ -1375,22 +1495,24 @@ export default function AdminConsolePage() {
       is_connected: true,
       isBot: true,
       botLevel: selectedBotLevel,
+      score: 0,
     } as BotPlayerItem;
 
     const nextPlayers = [...players, newBot];
-    setPlayers(nextPlayers);
-    setScores((prev) => [
-      ...prev,
+    const nextScores = [
+      ...scores,
       {
         id: `score-${botId}`,
         session_id: sessionId ?? sessionCode,
         player_id: botId,
         total_score: 0,
       } as unknown as PlayerScore,
-    ]);
+    ];
+    setPlayers(nextPlayers);
+    setScores(nextScores);
 
     if (supabase && sessionId && isUuid(sessionId)) {
-      const botsList = extractBotsForState(nextPlayers);
+      const botsList = extractBotsForState(nextPlayers, nextScores);
       void supabase
         .from("game_sessions")
         .select("game_state")
@@ -1470,18 +1592,19 @@ export default function AdminConsolePage() {
   };
 
   const getPlayerScoreValue = (playerId: string): number => {
-    const match = scores.find((s) => s.player_id === playerId);
+    const match = scores.find((s) => String(s.player_id) === String(playerId));
     if (!match) return 0;
     const record = match as unknown as {
       total_score?: number;
       score?: number;
     };
-    return record.total_score ?? record.score ?? 0;
+    return toFiniteScoreNumber(record.total_score ?? record.score) ?? 0;
   };
 
   const handleKickPlayer = async (playerId: string) => {
     const target = players.find((p) => p.id === playerId);
-    setPlayers((prev) => prev.filter((p) => p.id !== playerId));
+    const nextPlayers = players.filter((p) => p.id !== playerId);
+    setPlayers(nextPlayers);
     setScores((prev) => prev.filter((s) => s.player_id !== playerId));
     setPlayerAnswersById((prev) => {
       const copy = { ...prev };
@@ -1489,7 +1612,38 @@ export default function AdminConsolePage() {
       return copy;
     });
 
-    if (target?.isBot || !supabase || !sessionId || !isUuid(sessionId)) return;
+    if (target?.isBot) {
+      if (supabase && sessionId && isUuid(sessionId)) {
+        const botsList = extractBotsForState(nextPlayers, scores);
+        void supabase
+          .from("game_sessions")
+          .select("game_state")
+          .eq("id", sessionId)
+          .maybeSingle()
+          .then(({ data }) => {
+            const currentGs =
+              data &&
+              typeof data === "object" &&
+              "game_state" in data &&
+              data.game_state &&
+              typeof data.game_state === "object"
+                ? (data.game_state as Record<string, unknown>)
+                : {};
+            void supabase
+              .from("game_sessions")
+              .update({
+                game_state: {
+                  ...currentGs,
+                  bots: botsList,
+                },
+              })
+              .eq("id", sessionId);
+          });
+      }
+      return;
+    }
+
+    if (!supabase || !sessionId || !isUuid(sessionId)) return;
 
     const [{ error: sErr }, { error: pErr }] = await Promise.all([
       supabase
@@ -1516,10 +1670,10 @@ export default function AdminConsolePage() {
     const nextScore = Math.max(0, current + delta);
 
     setScores((prev) => {
-      const exists = prev.some((s) => s.player_id === playerId);
+      const exists = prev.some((s) => String(s.player_id) === String(playerId));
       if (exists) {
         return prev.map((s) =>
-          s.player_id === playerId
+          String(s.player_id) === String(playerId)
             ? ({ ...s, total_score: nextScore, score: nextScore } as PlayerScore)
             : s
         );
@@ -1536,9 +1690,59 @@ export default function AdminConsolePage() {
       ];
     });
 
-    const targetPlayer = players.find((p) => p.id === playerId);
-    if (targetPlayer?.isBot || !supabase || !sessionId || !isUuid(sessionId))
+    const targetPlayer = players.find((p) => String(p.id) === String(playerId));
+    if (!supabase || !sessionId || !isUuid(sessionId)) return;
+
+    if (targetPlayer?.isBot) {
+      const { data } = await supabase
+        .from("game_sessions")
+        .select("game_state")
+        .eq("id", sessionId)
+        .maybeSingle();
+
+      const currentGs =
+        data &&
+        typeof data === "object" &&
+        "game_state" in data &&
+        data.game_state &&
+        typeof data.game_state === "object"
+          ? (data.game_state as Record<string, unknown>)
+          : {};
+
+      const prevBots = Array.isArray(currentGs.bots)
+        ? (currentGs.bots as Array<Record<string, unknown>>)
+        : [];
+      const nextBots = prevBots.map((b) =>
+        String(b.id) === String(playerId) ? { ...b, score: nextScore } : b
+      );
+
+      await supabase
+        .from("game_sessions")
+        .update({
+          game_state: {
+            ...currentGs,
+            bots: nextBots,
+            scores: {
+              ...((currentGs.scores as Record<string, unknown>) ?? {}),
+              [playerId]: nextScore,
+            },
+            points: {
+              ...((currentGs.points as Record<string, unknown>) ?? {}),
+              [playerId]: nextScore,
+            },
+            playerScores: {
+              ...((currentGs.playerScores as Record<string, unknown>) ?? {}),
+              [playerId]: nextScore,
+            },
+            player_scores: {
+              ...((currentGs.player_scores as Record<string, unknown>) ?? {}),
+              [playerId]: nextScore,
+            },
+          },
+        })
+        .eq("id", sessionId);
       return;
+    }
 
     const { error } = await supabase.from("player_scores").upsert(
       {
