@@ -1686,59 +1686,66 @@ export default function AdminConsolePage() {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  disabled={status !== "playing"}
-                  onClick={() => void handleStatusChange("paused")}
-                  className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed text-amber-300 border border-amber-500/30 font-semibold transition"
-                >
-                  <Pause className="w-4 h-4" />
-                  <span>Pause</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => void handleStatusChange("finished")}
-                  className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-semibold transition"
-                >
-                  <Square className="w-4 h-4" />
-                  <span>Terminer</span>
-                </button>
-
-                {isEndOfSeries ? (
+                {/* Colonne gauche : Pause puis Terminer */}
+                <div className="flex flex-col gap-3">
                   <button
                     type="button"
-                    onClick={() => void handleRestartNewSeries()}
-                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-sky-500 hover:bg-sky-400 text-black font-semibold transition"
+                    disabled={!isGameLaunched || status !== "playing"}
+                    onClick={() => void handleStatusChange("paused")}
+                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed text-amber-300 border border-amber-500/30 font-semibold transition"
                   >
-                    <RotateCcw className="w-4 h-4" />
-                    <span>Relancer</span>
+                    <Pause className="w-4 h-4" />
+                    <span>Pause</span>
                   </button>
-                ) : (
+
                   <button
                     type="button"
-                    disabled={status === "playing"}
-                    onClick={() => void handleStatusChange("playing")}
-                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/25 disabled:text-emerald-200/50 disabled:cursor-not-allowed text-black font-semibold transition"
+                    disabled={!isGameLaunched}
+                    onClick={() => void handleStatusChange("finished")}
+                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 disabled:opacity-40 disabled:cursor-not-allowed text-rose-300 border border-rose-500/30 font-semibold transition"
                   >
-                    <Play className="w-4 h-4" />
-                    <span>Lancer</span>
+                    <Square className="w-4 h-4" />
+                    <span>Terminer</span>
                   </button>
-                )}
+                </div>
 
-                <button
-                  type="button"
-                  disabled={isEndOfSeries}
-                  onClick={() => void handleNextQuestion()}
-                  className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold transition"
-                >
-                  <SkipForward className="w-4 h-4" />
-                  <span className="truncate">
-                    {questionIndex < 0
-                      ? "Lancer Question 1"
-                      : "Question suivante"}
-                  </span>
-                </button>
+                {/* Colonne droite : Lancer / Relancer puis Question suivante */}
+                <div className="flex flex-col gap-3">
+                  {isEndOfSeries ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleRestartNewSeries()}
+                      className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-sky-500 hover:bg-sky-400 text-black font-semibold transition"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      <span>Relancer</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={status === "playing"}
+                      onClick={() => void handleStatusChange("playing")}
+                      className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/25 disabled:text-emerald-200/50 disabled:cursor-not-allowed text-black font-semibold transition"
+                    >
+                      <Play className="w-4 h-4" />
+                      <span>Lancer</span>
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={!isGameLaunched || isEndOfSeries}
+                    onClick={() => void handleNextQuestion()}
+                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold transition"
+                  >
+                    <SkipForward className="w-4 h-4" />
+                    <span className="truncate">
+                      {questionIndex < 0
+                        ? "Lancer Question 1"
+                        : "Question suivante"}
+                    </span>
+                  </button>
+                </div>
               </div>
             </div>
           )}
