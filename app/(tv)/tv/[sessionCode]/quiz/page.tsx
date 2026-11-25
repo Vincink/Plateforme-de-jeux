@@ -9,6 +9,14 @@ import { QUESTIONS, type QuizQuestion } from "@/lib/questions";
 import type { GameSession, PlayerScore, SessionPlayer } from "@/types/game.types";
 
 type AnswerLetter = "A" | "B" | "C" | "D";
+type BotLevel = "cool" | "normal" | "expert";
+
+interface QuizBotConfig {
+  id: string;
+  nickname: string;
+  avatar?: string;
+  botLevel?: BotLevel;
+}
 
 interface QuizQuestionItem {
   id?: string | number;
@@ -28,6 +36,7 @@ interface QuizQuestionItem {
 
 interface QuizStatePayload {
   mode?: string;
+  bots?: QuizBotConfig[];
   questions?: QuizQuestionItem[];
   quizQuestions?: QuizQuestionItem[];
   seriesQuestions?: QuizQuestionItem[];
@@ -83,6 +92,8 @@ type ExtendedSession = GameSession & {
 };
 
 type ExtendedPlayer = SessionPlayer & {
+  isBot?: boolean;
+  botLevel?: BotLevel;
   score?: number | string | null;
   points?: number | string | null;
   total_score?: number | string | null;
@@ -137,6 +148,37 @@ const LETTERS: readonly AnswerLetter[] = ["A", "B", "C", "D"];
 const QUESTION_DURATION_SECONDS = 12;
 const QUESTIONS_PER_GAME = 15;
 const PODIUM_DELAY_MS = 3000;
+
+const BOT_CONFIG_BY_LEVEL: Record<
+  BotLevel,
+  { accuracy: number; minDelayMs: number; maxDelayMs: number }
+> = {
+  cool: { accuracy: 0.4, minDelayMs: 2800, maxDelayMs: 7500 },
+  normal: { accuracy: 0.65, minDelayMs: 1800, maxDelayMs: 5500 },
+  expert: { accuracy: 0.85, minDelayMs: 1200, maxDelayMs: 4000 },
+};
+
+function pickBotAnswer(
+  level: BotLevel | undefined,
+  correctLetter: AnswerLetter | null
+): AnswerLetter {
+  const cfg = BOT_CONFIG_BY_LEVEL[level ?? "normal"];
+  if (correctLetter && Math.random() < cfg.accuracy) {
+    return correctLetter;
+  }
+  const pool = correctLetter
+    ? LETTERS.filter((l) => l !== correctLetter)
+    : LETTERS;
+  return pool[Math.floor(Math.random() * pool.length)] ?? "A";
+}
+
+function getBotDelayMs(level: BotLevel | undefined): number {
+  const cfg = BOT_CONFIG_BY_LEVEL[level ?? "normal"];
+  return (
+    cfg.minDelayMs +
+    Math.floor(Math.random() * Math.max(400, cfg.maxDelayMs - cfg.minDelayMs))
+  );
+}
 
 const cleanQuizState = (
   rawState: Record<string, unknown> | null | undefined
@@ -442,6 +484,7 @@ export default function TvQuizPage() {
   const [session, setSession] = useState<ExtendedSession | null>(null);
   const [players, setPlayers] = useState<ExtendedPlayer[]>([]);
   const [playerScoresRows, setPlayerScoresRows] = useState<PlayerScore[]>([]);
+  const [botScoresMap, setBotScoresMap] = useState<Record<string, number>>({});
   const [gameTitle, setGameTitle] = useState<string>("Le Grand Quiz");
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
   const [localQuestionStartMs, setLocalQuestionStartMs] = useState<
@@ -467,6 +510,7 @@ export default function TvQuizPage() {
   const hasPlayedApplauseForSeriesRef = useRef<string>("");
   const lastIgnoredDirtyKeyRef = useRef<string>("");
   const lastSyncedAdminStateKeyRef = useRef<string>("");
+  const scheduledBotAnswersRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
@@ -653,6 +697,29 @@ export default function TvQuizPage() {
     return cleanQuizState(raw as Record<string, unknown>);
   }, [session]);
 
+  const allParticipants = useMemo<ExtendedPlayer[]>(() => {
+    const stateBots = Array.isArray(quizState.bots) ? quizState.bots : [];
+    const botPlayers: ExtendedPlayer[] = stateBots
+      .filter((b) => Boolean(b?.id && b?.nickname))
+      .map(
+        (b) =>
+          ({
+            id: String(b.id),
+            session_id: session?.id ?? sessionCode,
+            nickname: String(b.nickname),
+            avatar: b.avatar ?? "🤖",
+            is_host: false,
+            is_connected: true,
+            isBot: true,
+            botLevel: b.botLevel ?? "normal",
+          }) as ExtendedPlayer
+      );
+
+    const existingIds = new Set(players.map((p) => String(p.id)));
+    const uniqueBots = botPlayers.filter((bp) => !existingIds.has(String(bp.id)));
+    return [...players, ...uniqueBots];
+  }, [players, quizState.bots, session?.id, sessionCode]);
+
   const seriesNumber = useMemo<number>(() => {
     return Math.max(1, toFiniteNumber(quizState.seriesNumber) ?? 1);
   }, [quizState]);
@@ -709,7 +776,9 @@ export default function TvQuizPage() {
     lastResetSignatureRef.current = resetTrigger;
     isResettingScoresRef.current = true;
     scoredQuestionsRef.current = new Set();
+    scheduledBotAnswersRef.current = new Set();
     hasPlayedApplauseForSeriesRef.current = "";
+    setBotScoresMap({});
     setIsPodiumVisible(false);
 
     void (async () => {
@@ -1194,13 +1263,17 @@ export default function TvQuizPage() {
       }
     }
 
+    for (const [botId, botScore] of Object.entries(botScoresMap)) {
+      merged[botId] = botScore;
+    }
+
     const normalized: Record<string, number | string> = {};
     for (const [k, v] of Object.entries(merged)) {
       normalized[k] = v;
       normalized[k.trim().toLowerCase()] = v;
     }
     return normalized;
-  }, [session, quizState, playerScoresRows]);
+  }, [session, quizState, playerScoresRows, botScoresMap]);
 
   const isRevealed = Boolean(
     quizState.revealed ||
@@ -1226,6 +1299,96 @@ export default function TvQuizPage() {
         currentQuestion.correct_answer
     );
   }, [currentQuestion]);
+
+  // Simulation isolée des réponses des bots pendant la question active
+  useEffect(() => {
+    if (
+      !supabase ||
+      !session?.id ||
+      isFinishedOrLobbyStatus ||
+      isPaused ||
+      isRevealed ||
+      activeQuestionIndex === null ||
+      !currentQuestion
+    ) {
+      return;
+    }
+
+    const activeBots = allParticipants.filter((p) => Boolean(p.isBot));
+    if (activeBots.length === 0) return;
+
+    const timers: number[] = [];
+
+    for (const bot of activeBots) {
+      const botIdStr = String(bot.id);
+      if (normalizeAnswerLetter(answersMap[botIdStr])) continue;
+
+      const scheduleKey = `${session.id}-s${seriesNumber}-${seriesSeed}-${regenerationNonce}-q${activeQuestionIndex}-${botIdStr}`;
+      if (scheduledBotAnswersRef.current.has(scheduleKey)) continue;
+      scheduledBotAnswersRef.current.add(scheduleKey);
+
+      const delayMs = getBotDelayMs(bot.botLevel);
+      const timerId = window.setTimeout(() => {
+        const chosen = pickBotAnswer(bot.botLevel, correctLetter);
+        void (async () => {
+          const { data: latestRow } = await supabase
+            .from("game_sessions")
+            .select("game_state")
+            .eq("id", session.id)
+            .maybeSingle<{ game_state?: Record<string, unknown> | null }>();
+
+          const baseState = cleanQuizState(
+            latestRow?.game_state ??
+              ((session.game_state ||
+                session.quiz_state ||
+                session.state ||
+                {}) as Record<string, unknown>)
+          );
+          const nextAnswers = {
+            ...(baseState.answers ?? {}),
+            [botIdStr]: chosen,
+          };
+          const nextGameState: QuizStatePayload = {
+            ...baseState,
+            answers: nextAnswers,
+          };
+
+          const { error } = await supabase
+            .from("game_sessions")
+            .update({ game_state: nextGameState })
+            .eq("id", session.id);
+
+          if (!error) {
+            setSession((prev) =>
+              prev && prev.id === session.id
+                ? { ...prev, game_state: nextGameState }
+                : prev
+            );
+          }
+        })();
+      }, delayMs);
+
+      timers.push(timerId);
+    }
+
+    return () => {
+      timers.forEach((id) => window.clearTimeout(id));
+    };
+  }, [
+    supabase,
+    session,
+    isFinishedOrLobbyStatus,
+    isPaused,
+    isRevealed,
+    activeQuestionIndex,
+    currentQuestion,
+    allParticipants,
+    answersMap,
+    seriesNumber,
+    seriesSeed,
+    regenerationNonce,
+    correctLetter,
+  ]);
 
   useEffect(() => {
     if (
@@ -1270,15 +1433,18 @@ export default function TvQuizPage() {
           nickname: string;
           avatarId: string;
           nextScore: number;
+          isBot: boolean;
         }> = [];
 
-        for (const player of players) {
+        for (const player of allParticipants) {
           const playerIdStr = String(player.id);
           const chosen = normalizeAnswerLetter(answersMap[playerIdStr]);
           if (!chosen) continue;
 
           const delta = chosen === correctLetter ? 3 : -1;
-          const prevScore = currentScoreByPlayerId.get(playerIdStr) ?? 0;
+          const prevScore = player.isBot
+            ? botScoresMap[playerIdStr] ?? 0
+            : currentScoreByPlayerId.get(playerIdStr) ?? 0;
           const nextScore = Math.max(0, prevScore + delta);
 
           updates.push({
@@ -1286,12 +1452,25 @@ export default function TvQuizPage() {
             nickname: player.nickname,
             avatarId: player.avatar_id ?? player.avatarId ?? "gamepad",
             nextScore,
+            isBot: Boolean(player.isBot),
           });
         }
 
         if (updates.length === 0) return;
 
-        for (const u of updates) {
+        const botUpdates = updates.filter((u) => u.isBot);
+        if (botUpdates.length > 0) {
+          setBotScoresMap((prev) => {
+            const copy = { ...prev };
+            for (const bu of botUpdates) {
+              copy[bu.playerId] = bu.nextScore;
+            }
+            return copy;
+          });
+        }
+
+        const humanUpdates = updates.filter((u) => !u.isBot);
+        for (const u of humanUpdates) {
           const { data: existing } = await supabase
             .from("player_scores")
             .select("id")
@@ -1322,13 +1501,15 @@ export default function TvQuizPage() {
           }
         }
 
-        const { data: refreshedScores } = await supabase
-          .from("player_scores")
-          .select("*")
-          .eq("session_id", session.id);
+        if (humanUpdates.length > 0) {
+          const { data: refreshedScores } = await supabase
+            .from("player_scores")
+            .select("*")
+            .eq("session_id", session.id);
 
-        if (refreshedScores) {
-          setPlayerScoresRows(refreshedScores as PlayerScore[]);
+          if (refreshedScores) {
+            setPlayerScoresRows(refreshedScores as PlayerScore[]);
+          }
         }
       } finally {
         isScoringRef.current = false;
@@ -1344,13 +1525,14 @@ export default function TvQuizPage() {
     seriesNumber,
     seriesSeed,
     regenerationNonce,
-    players,
+    allParticipants,
     playerScoresRows,
+    botScoresMap,
     answersMap,
   ]);
 
   const rankedPlayers = useMemo(() => {
-    return [...players]
+    return [...allParticipants]
       .map((player) => {
         const candidateKeys = [
           player.id !== undefined && player.id !== null ? String(player.id) : "",
@@ -1392,7 +1574,7 @@ export default function TvQuizPage() {
         };
       })
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
-  }, [players, scoresMap, answersMap]);
+  }, [allParticipants, scoresMap, answersMap]);
 
   const totalQuestions = questions.length;
   const isLastQuestionCompleted =
@@ -1584,7 +1766,7 @@ export default function TvQuizPage() {
               <span>Classement</span>
             </div>
             <span className="text-lg font-bold text-neutral-300">
-              {players.length} joueur{players.length > 1 ? "s" : ""}
+              {allParticipants.length} joueur{allParticipants.length > 1 ? "s" : ""}
             </span>
           </div>
 
@@ -1595,7 +1777,7 @@ export default function TvQuizPage() {
           ) : (
             <div className="flex-1 min-h-0 flex flex-col gap-3.5 overflow-hidden">
               {rankedPlayers.map(({ player, score, chosenLetter }, idx) => {
-                const pColor = getUniquePlayerColor(player.id, players);
+                const pColor = getUniquePlayerColor(player.id, allParticipants);
                 const rank = idx + 1;
                 const hasAnswered = chosenLetter !== null;
                 const answerStyle = chosenLetter
@@ -1682,15 +1864,15 @@ export default function TvQuizPage() {
                         style={{
                           backgroundColor: getUniquePlayerColor(
                             podiumSlots.second.player.id,
-                            players
+                            allParticipants
                           ).bgHex,
                           borderColor: getUniquePlayerColor(
                             podiumSlots.second.player.id,
-                            players
+                            allParticipants
                           ).borderHex,
                           color: getUniquePlayerColor(
                             podiumSlots.second.player.id,
-                            players
+                            allParticipants
                           ).textHex,
                         }}
                         className="flex-1 min-w-0 rounded-2xl border-2 px-4 py-3 font-black text-2xl xl:text-3xl truncate shadow-lg"
@@ -1728,15 +1910,15 @@ export default function TvQuizPage() {
                         style={{
                           backgroundColor: getUniquePlayerColor(
                             podiumSlots.first.player.id,
-                            players
+                            allParticipants
                           ).bgHex,
                           borderColor: getUniquePlayerColor(
                             podiumSlots.first.player.id,
-                            players
+                            allParticipants
                           ).borderHex,
                           color: getUniquePlayerColor(
                             podiumSlots.first.player.id,
-                            players
+                            allParticipants
                           ).textHex,
                         }}
                         className="flex-1 min-w-0 rounded-2xl border-2 px-5 py-3.5 font-black text-2xl xl:text-4xl truncate shadow-xl"
@@ -1774,15 +1956,15 @@ export default function TvQuizPage() {
                         style={{
                           backgroundColor: getUniquePlayerColor(
                             podiumSlots.third.player.id,
-                            players
+                            allParticipants
                           ).bgHex,
                           borderColor: getUniquePlayerColor(
                             podiumSlots.third.player.id,
-                            players
+                            allParticipants
                           ).borderHex,
                           color: getUniquePlayerColor(
                             podiumSlots.third.player.id,
-                            players
+                            allParticipants
                           ).textHex,
                         }}
                         className="flex-1 min-w-0 rounded-2xl border-2 px-4 py-3 font-black text-2xl xl:text-3xl truncate shadow-lg"
