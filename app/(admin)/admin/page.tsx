@@ -64,7 +64,7 @@ const BOT_NAMES = [
   "Zoe",
   "Milo",
   "Nina",
-  " Enzo",
+  "Enzo",
   "Lina",
   "Sam",
   "Ruby",
@@ -76,6 +76,17 @@ type BotPlayerItem = PlayerSession & {
   isBot?: boolean;
   botLevel?: BotLevel;
 };
+
+function extractBotsForState(list: BotPlayerItem[]) {
+  return list
+    .filter((p) => Boolean(p.isBot))
+    .map((b) => ({
+      id: b.id,
+      nickname: b.nickname,
+      avatar: b.avatar ?? "🤖",
+      botLevel: b.botLevel ?? "normal",
+    }));
+}
 
 const GRID_COLUMNS = 12;
 const ROW_UNIT_PX = 44;
@@ -915,6 +926,7 @@ export default function AdminConsolePage() {
     const hasQuestionStarted = effectiveQuestionIndex >= 0;
     const isPaused = params.nextStatus === "paused";
     const shouldResetAnswers = params.resetAnswers !== false;
+    const botsForState = extractBotsForState(players);
 
     const activeQuestionForState = hasQuestionStarted
       ? numericGameMode
@@ -947,6 +959,7 @@ export default function AdminConsolePage() {
       if (numericGameMode) {
         basePayload.game_state = {
           mode: "juste-chiffre",
+          bots: botsForState,
           minValue: JUSTE_CHIFFRE_MIN,
           maxValue: JUSTE_CHIFFRE_MAX,
           questionStarted: hasQuestionStarted,
@@ -969,6 +982,7 @@ export default function AdminConsolePage() {
         };
       } else if (isQuizGame) {
         basePayload.game_state = {
+          bots: botsForState,
           questionStarted: hasQuestionStarted,
           roundTriggered: hasQuestionStarted,
           questionIndex: effectiveQuestionIndex,
@@ -1339,7 +1353,7 @@ export default function AdminConsolePage() {
     });
   };
 
-    const handleAddBot = () => {
+  const handleAddBot = () => {
     const usedNames = new Set(
       players.map((p) => p.nickname.replace(/^Bot\s+/i, "").trim().toLowerCase())
     );
@@ -1376,15 +1390,7 @@ export default function AdminConsolePage() {
     ]);
 
     if (supabase && sessionId && isUuid(sessionId)) {
-      const botsList = nextPlayers
-        .filter((p) => Boolean(p.isBot))
-        .map((b) => ({
-          id: b.id,
-          nickname: b.nickname,
-          avatar: b.avatar ?? "🤖",
-          botLevel: b.botLevel ?? "normal",
-        }));
-
+      const botsList = extractBotsForState(nextPlayers);
       void supabase
         .from("game_sessions")
         .select("game_state")
@@ -1411,7 +1417,6 @@ export default function AdminConsolePage() {
         });
     }
   };
-
 
   const handleSelectGame = async (gameId: string) => {
     if (isGameLaunched) return;
