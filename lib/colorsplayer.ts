@@ -19,7 +19,7 @@ const FALLBACK_COLOR: PlayerColorTheme = {
 };
 
 export const PLAYER_COLORS: readonly PlayerColorTheme[] = [
-  FALLBACK_COLOR,
+  FALLBACK_COLOR, // 0: Rouge vif
   {
     id: "cobalt",
     name: "Bleu cobalt",
@@ -28,7 +28,7 @@ export const PLAYER_COLORS: readonly PlayerColorTheme[] = [
     textHex: "#ffffff",
     badgeBgHex: "rgba(0, 0, 0, 0.24)",
     scoreHex: "#fde047",
-  },
+  }, // 1: Bleu cobalt
   {
     id: "emerald",
     name: "Vert émeraude",
@@ -37,88 +37,7 @@ export const PLAYER_COLORS: readonly PlayerColorTheme[] = [
     textHex: "#ffffff",
     badgeBgHex: "rgba(0, 0, 0, 0.24)",
     scoreHex: "#fef08a",
-  },
-  {
-    id: "amber",
-    name: "Ambre doré",
-    bgHex: "#d97706",
-    borderHex: "#fde68a",
-    textHex: "#09090b",
-    badgeBgHex: "rgba(255, 255, 255, 0.28)",
-    scoreHex: "#09090b",
-  },
-  {
-    id: "violet",
-    name: "Violet intense",
-    bgHex: "#7c3aed",
-    borderHex: "#c4b5fd",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fde047",
-  },
-  {
-    id: "orange",
-    name: "Orange mandarine",
-    bgHex: "#ea580c",
-    borderHex: "#fdba74",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fef08a",
-  },
-  {
-    id: "cyan",
-    name: "Cyan électrique",
-    bgHex: "#0891b2",
-    borderHex: "#67e8f9",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fef08a",
-  },
-  {
-    id: "fuchsia",
-    name: "Fuchsia néon",
-    bgHex: "#c026d3",
-    borderHex: "#f0abfc",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fef08a",
-  },
-  {
-    id: "lime",
-    name: "Citron vert",
-    bgHex: "#65a30d",
-    borderHex: "#bef264",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fef08a",
-  },
-  {
-    id: "indigo",
-    name: "Indigo profond",
-    bgHex: "#4f46e5",
-    borderHex: "#a5b4fc",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fde047",
-  },
-  {
-    id: "rose",
-    name: "Rose corail",
-    bgHex: "#db2777",
-    borderHex: "#f9a8d4",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fef08a",
-  },
-  {
-    id: "teal",
-    name: "Bleu canard",
-    bgHex: "#0d9488",
-    borderHex: "#5eead4",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fef08a",
-  },
+  }, // 2: Vert émeraude
   {
     id: "yellow",
     name: "Jaune soleil",
@@ -127,7 +46,88 @@ export const PLAYER_COLORS: readonly PlayerColorTheme[] = [
     textHex: "#09090b",
     badgeBgHex: "rgba(0, 0, 0, 0.14)",
     scoreHex: "#09090b",
-  },
+  }, // 3: Jaune soleil
+  {
+    id: "violet",
+    name: "Violet intense",
+    bgHex: "#7c3aed",
+    borderHex: "#c4b5fd",
+    textHex: "#ffffff",
+    badgeBgHex: "rgba(0, 0, 0, 0.24)",
+    scoreHex: "#fde047",
+  }, // 4: Violet intense
+  {
+    id: "orange",
+    name: "Orange mandarine",
+    bgHex: "#ea580c",
+    borderHex: "#fdba74",
+    textHex: "#ffffff",
+    badgeBgHex: "rgba(0, 0, 0, 0.24)",
+    scoreHex: "#fef08a",
+  }, // 5: Orange mandarine
+  {
+    id: "cyan",
+    name: "Cyan électrique",
+    bgHex: "#0891b2",
+    borderHex: "#67e8f9",
+    textHex: "#ffffff",
+    badgeBgHex: "rgba(0, 0, 0, 0.24)",
+    scoreHex: "#fef08a",
+  }, // 6: Cyan électrique
+  {
+    id: "fuchsia",
+    name: "Fuchsia néon",
+    bgHex: "#c026d3",
+    borderHex: "#f0abfc",
+    textHex: "#ffffff",
+    badgeBgHex: "rgba(0, 0, 0, 0.24)",
+    scoreHex: "#fef08a",
+  }, // 7: Fuchsia néon
+  {
+    id: "lime",
+    name: "Citron vert",
+    bgHex: "#65a30d",
+    borderHex: "#bef264",
+    textHex: "#ffffff",
+    badgeBgHex: "rgba(0, 0, 0, 0.24)",
+    scoreHex: "#fef08a",
+  }, // 8: Citron vert
+  {
+    id: "indigo",
+    name: "Indigo profond",
+    bgHex: "#3730a3",
+    borderHex: "#a5b4fc",
+    textHex: "#ffffff",
+    badgeBgHex: "rgba(0, 0, 0, 0.28)",
+    scoreHex: "#fde047",
+  }, // 9: Indigo profond
+  {
+    id: "rose",
+    name: "Rose bonbon",
+    bgHex: "#f43f5e",
+    borderHex: "#fecdd3",
+    textHex: "#09090b",
+    badgeBgHex: "rgba(0, 0, 0, 0.14)",
+    scoreHex: "#09090b",
+  }, // 10: Rose bonbon
+  {
+    id: "teal",
+    name: "Bleu canard",
+    bgHex: "#0f766e",
+    borderHex: "#5eead4",
+    textHex: "#ffffff",
+    badgeBgHex: "rgba(0, 0, 0, 0.24)",
+    scoreHex: "#fef08a",
+  }, // 11: Bleu canard
+  {
+    id: "amber",
+    name: "Ambre clair",
+    bgHex: "#f59e0b",
+    borderHex: "#fef3c7",
+    textHex: "#09090b",
+    badgeBgHex: "rgba(0, 0, 0, 0.14)",
+    scoreHex: "#09090b",
+  }, // 12: Ambre clair
   {
     id: "sky",
     name: "Bleu ciel vif",
@@ -136,16 +136,7 @@ export const PLAYER_COLORS: readonly PlayerColorTheme[] = [
     textHex: "#ffffff",
     badgeBgHex: "rgba(0, 0, 0, 0.24)",
     scoreHex: "#fef08a",
-  },
-  {
-    id: "red",
-    name: "Écarlate",
-    bgHex: "#dc2626",
-    borderHex: "#fca5a5",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fef08a",
-  },
+  }, // 13: Bleu ciel vif
   {
     id: "purple",
     name: "Pourpre royal",
@@ -154,43 +145,16 @@ export const PLAYER_COLORS: readonly PlayerColorTheme[] = [
     textHex: "#ffffff",
     badgeBgHex: "rgba(0, 0, 0, 0.24)",
     scoreHex: "#fde047",
-  },
-  {
-    id: "green",
-    name: "Vert pelouse",
-    bgHex: "#16a34a",
-    borderHex: "#86efac",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fef08a",
-  },
+  }, // 14: Pourpre royal
   {
     id: "bronze",
-    name: "Cuivre chaud",
-    bgHex: "#b45309",
+    name: "Cuivre foncé",
+    bgHex: "#92400e",
     borderHex: "#fcd34d",
     textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
+    badgeBgHex: "rgba(0, 0, 0, 0.28)",
     scoreHex: "#fef08a",
-  },
-  {
-    id: "cerulean",
-    name: "Azur franc",
-    bgHex: "#1d4ed8",
-    borderHex: "#60a5fa",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fde047",
-  },
-  {
-    id: "magenta",
-    name: "Framboise",
-    bgHex: "#be185d",
-    borderHex: "#f472b6",
-    textHex: "#ffffff",
-    badgeBgHex: "rgba(0, 0, 0, 0.24)",
-    scoreHex: "#fef08a",
-  },
+  }, // 15: Cuivre foncé
 ] as const;
 
 function hashString(input: string): number {
@@ -202,9 +166,13 @@ function hashString(input: string): number {
   return hash >>> 0;
 }
 
-export function getPlayerColorBySlot(slotIndex: number): PlayerColorTheme {
+function normalizeSlotIndex(index: number): number {
   const count = PLAYER_COLORS.length;
-  const safeIndex = ((slotIndex % count) + count) % count;
+  return ((index % count) + count) % count;
+}
+
+export function getPlayerColorBySlot(slotIndex: number): PlayerColorTheme {
+  const safeIndex = normalizeSlotIndex(slotIndex);
   return PLAYER_COLORS.at(safeIndex) ?? FALLBACK_COLOR;
 }
 
@@ -214,7 +182,7 @@ export function getNextAvailableColorIndex(
   const used = new Set<number>();
   for (const p of existingPlayers) {
     if (typeof p.color_index === "number" && Number.isFinite(p.color_index)) {
-      used.add(((p.color_index % PLAYER_COLORS.length) + PLAYER_COLORS.length) % PLAYER_COLORS.length);
+      used.add(normalizeSlotIndex(p.color_index));
     }
   }
   for (let i = 0; i < PLAYER_COLORS.length; i++) {
@@ -248,6 +216,65 @@ export function getUniquePlayerColor(
   roster: ReadonlyArray<{ id: string; color_index?: number | null }> = []
 ): PlayerColorTheme {
   const matched = playerId ? roster.find((p) => p.id === playerId) : undefined;
+
+  if (
+    typeof matched?.color_index === "number" &&
+    Number.isFinite(matched.color_index)
+  ) {
+    return getPlayerColorBySlot(matched.color_index);
+  }
+
+  if (!playerId || roster.length === 0) {
+    return resolvePlayerColor(matched, playerId);
+  }
+
+  const usedIndices = new Set<number>();
+  for (const member of roster) {
+    if (
+      typeof member.color_index === "number" &&
+      Number.isFinite(member.color_index)
+    ) {
+      usedIndices.add(normalizeSlotIndex(member.color_index));
+    }
+  }
+
+  const assignedById = new Map<string, number>();
+  for (const member of roster) {
+    if (
+      typeof member.color_index === "number" &&
+      Number.isFinite(member.color_index)
+    ) {
+      assignedById.set(String(member.id), normalizeSlotIndex(member.color_index));
+      continue;
+    }
+
+    const preferred =
+      member.id && member.id.trim().length > 0
+        ? hashString(member.id.trim()) % PLAYER_COLORS.length
+        : 0;
+
+    if (!usedIndices.has(preferred)) {
+      usedIndices.add(preferred);
+      assignedById.set(String(member.id), preferred);
+    } else {
+      let chosen = preferred;
+      for (let offset = 1; offset < PLAYER_COLORS.length; offset++) {
+        const candidate = (preferred + offset) % PLAYER_COLORS.length;
+        if (!usedIndices.has(candidate)) {
+          chosen = candidate;
+          break;
+        }
+      }
+      usedIndices.add(chosen);
+      assignedById.set(String(member.id), chosen);
+    }
+  }
+
+  const finalIndex = assignedById.get(String(playerId));
+  if (finalIndex !== undefined) {
+    return getPlayerColorBySlot(finalIndex);
+  }
+
   return resolvePlayerColor(matched, playerId);
 }
 
