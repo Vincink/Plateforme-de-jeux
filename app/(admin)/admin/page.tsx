@@ -26,6 +26,8 @@ import {
   Unlock,
   Maximize2,
   Target,
+  Bot,
+  UserPlus,
 } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
@@ -53,12 +55,34 @@ const JUSTE_CHIFFRE_MIN = 1;
 const JUSTE_CHIFFRE_MAX = 1000;
 const JUSTE_CHIFFRE_DURATION_SECONDS = 20;
 
+const BOT_NAMES = [
+  "Léo",
+  "Mia",
+  "Nino",
+  "Sora",
+  "Max",
+  "Zoe",
+  "Milo",
+  "Nina",
+  " Enzo",
+  "Lina",
+  "Sam",
+  "Ruby",
+];
+
+type BotLevel = "cool" | "normal" | "expert";
+
+type BotPlayerItem = PlayerSession & {
+  isBot?: boolean;
+  botLevel?: BotLevel;
+};
+
 const GRID_COLUMNS = 12;
 const ROW_UNIT_PX = 44;
 const ROW_GAP_PX = 20;
 const LAYOUT_STORAGE_KEY = "admin_console_grid_layout_v1";
 
-type WidgetId = "controls" | "qr" | "catalog" | "players";
+type WidgetId = "controls" | "bots" | "catalog" | "players";
 
 interface GridWidgetItem {
   id: WidgetId;
@@ -80,8 +104,8 @@ const DEFAULT_GRID_LAYOUT: Record<WidgetId, GridWidgetItem> = {
     minColSpan: 3,
     minRowSpan: 5,
   },
-  qr: {
-    id: "qr",
+  bots: {
+    id: "bots",
     col: 5,
     colSpan: 3,
     row: 0,
@@ -134,17 +158,18 @@ function loadSavedGridLayout(): Record<WidgetId, GridWidgetItem> {
   try {
     const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
     if (!raw) return DEFAULT_GRID_LAYOUT;
-    const parsed = JSON.parse(raw) as Partial<Record<WidgetId, Partial<GridWidgetItem>>>;
+    const parsed = JSON.parse(raw) as Record<string, Partial<GridWidgetItem>>;
+    const rawBots = parsed.bots ?? parsed.qr;
     return {
       controls: clampLayoutItem({
         ...DEFAULT_GRID_LAYOUT.controls,
         ...parsed.controls,
         id: "controls",
       }),
-      qr: clampLayoutItem({
-        ...DEFAULT_GRID_LAYOUT.qr,
-        ...parsed.qr,
-        id: "qr",
+      bots: clampLayoutItem({
+        ...DEFAULT_GRID_LAYOUT.bots,
+        ...rawBots,
+        id: "bots",
       }),
       catalog: clampLayoutItem({
         ...DEFAULT_GRID_LAYOUT.catalog,
@@ -438,8 +463,9 @@ export default function AdminConsolePage() {
   const [isSavingSession, setIsSavingSession] = useState<boolean>(false);
   const [dbError, setDbError] = useState<string | null>(null);
 
-  const [players, setPlayers] = useState<PlayerSession[]>([]);
+  const [players, setPlayers] = useState<BotPlayerItem[]>([]);
   const [scores, setScores] = useState<PlayerScore[]>([]);
+  const [selectedBotLevel, setSelectedBotLevel] = useState<BotLevel>("normal");
 
   const [isEditLayoutMode, setIsEditLayoutMode] = useState<boolean>(false);
   const [layout, setLayout] = useState<Record<WidgetId, GridWidgetItem>>(() =>
@@ -708,18 +734,43 @@ export default function AdminConsolePage() {
     if (pErr) {
       setDbError(`Lecture joueurs impossible : ${pErr.message}`);
     } else if (playersData) {
-      setPlayers(playersData as PlayerSession[]);
+      setPlayers((prev) => {
+        const localBots = prev.filter((p) => p.isBot);
+        const dbPlayers = (playersData as BotPlayerItem[]).filter(
+          (p) => !localBots.some((b) => b.id === p.id)
+        );
+        return [...dbPlayers, ...localBots];
+      });
     }
 
     if (sErr) {
       setDbError(`Lecture scores impossible : ${sErr.message}`);
     } else if (scoresData) {
-      setScores(scoresData as PlayerScore[]);
+      setScores((prev) => {
+        const localBotIds = new Set(
+          players.filter((p) => p.isBot).map((p) => p.id)
+        );
+        const keptLocalBotScores = prev.filter((s) =>
+          localBotIds.has(s.player_id)
+        );
+        const dbScores = (scoresData as PlayerScore[]).filter(
+          (s) => !localBotIds.has(s.player_id)
+        );
+        return [...dbScores, ...keptLocalBotScores];
+      });
     }
 
     if (sessionRow) {
       const gs = (sessionRow as { game_state?: unknown }).game_state;
-      setPlayerAnswersById(extractAnswersFromGameState(gs, isJusteChiffre));
+      setPlayerAnswersById((prev) => {
+        const fromDb = extractAnswersFromGameState(gs, isJusteChiffre);
+        const botIds = new Set(players.filter((p) => p.isBot).map((p) => p.id));
+        const keptBotAnswers: Record<string, string> = {};
+        for (const [id, val] of Object.entries(prev)) {
+          if (botIds.has(id)) keptBotAnswers[id] = val;
+        }
+        return { ...fromDb, ...keptBotAnswers };
+      });
       syncQuestionStateFromGameState(gs);
     }
   };
@@ -1288,6 +1339,42 @@ export default function AdminConsolePage() {
     });
   };
 
+  const handleAddBot = () => {
+    const usedNames = new Set(
+      players.map((p) => p.nickname.replace(/^Bot\s+/i, "").trim().toLowerCase())
+    );
+    const availableNames = BOT_NAMES.map((n) => n.trim()).filter(
+      (n) => !usedNames.has(n.toLowerCase())
+    );
+    const baseName =
+      availableNames.length > 0
+        ? availableNames[Math.floor(Math.random() * availableNames.length)]
+        : `Bot ${players.filter((p) => p.isBot).length + 1}`;
+
+    const botId = `bot-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const newBot: BotPlayerItem = {
+      id: botId,
+      session_id: sessionId ?? sessionCode,
+      nickname: `Bot ${baseName}`,
+      avatar: "🤖",
+      is_host: false,
+      is_connected: true,
+      isBot: true,
+      botLevel: selectedBotLevel,
+    } as BotPlayerItem;
+
+    setPlayers((prev) => [...prev, newBot]);
+    setScores((prev) => [
+      ...prev,
+      {
+        id: `score-${botId}`,
+        session_id: sessionId ?? sessionCode,
+        player_id: botId,
+        total_score: 0,
+      } as unknown as PlayerScore,
+    ]);
+  };
+
   const handleSelectGame = async (gameId: string) => {
     if (isGameLaunched) return;
     const targetGame = games.find((g) => g.id === gameId) ?? null;
@@ -1350,6 +1437,7 @@ export default function AdminConsolePage() {
   };
 
   const handleKickPlayer = async (playerId: string) => {
+    const target = players.find((p) => p.id === playerId);
     setPlayers((prev) => prev.filter((p) => p.id !== playerId));
     setScores((prev) => prev.filter((s) => s.player_id !== playerId));
     setPlayerAnswersById((prev) => {
@@ -1358,7 +1446,7 @@ export default function AdminConsolePage() {
       return copy;
     });
 
-    if (!supabase || !sessionId || !isUuid(sessionId)) return;
+    if (target?.isBot || !supabase || !sessionId || !isUuid(sessionId)) return;
 
     const [{ error: sErr }, { error: pErr }] = await Promise.all([
       supabase
@@ -1405,9 +1493,10 @@ export default function AdminConsolePage() {
       ];
     });
 
-    if (!supabase || !sessionId || !isUuid(sessionId)) return;
-
     const targetPlayer = players.find((p) => p.id === playerId);
+    if (targetPlayer?.isBot || !supabase || !sessionId || !isUuid(sessionId))
+      return;
+
     const { error } = await supabase.from("player_scores").upsert(
       {
         session_id: sessionId,
@@ -1511,6 +1600,8 @@ export default function AdminConsolePage() {
     );
   };
 
+  const botCount = players.filter((p) => p.isBot).length;
+
   return (
     <div className="min-h-screen bg-neutral-950 text-white p-4 md:p-8">
       <div className="max-w-7xl mx-auto space-y-6">
@@ -1559,6 +1650,24 @@ export default function AdminConsolePage() {
                 <span>Réinitialiser</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={() => void handleToggleQr()}
+              className="flex items-center gap-2 px-3.5 py-2.5 rounded-2xl bg-white/5 hover:bg-white/10 text-neutral-200 border border-white/15 text-sm font-semibold transition"
+            >
+              {showQrOnTv ? (
+                <>
+                  <EyeOff className="w-4 h-4 text-amber-400" />
+                  <span>Masquer QR</span>
+                </>
+              ) : (
+                <>
+                  <Eye className="w-4 h-4 text-emerald-400" />
+                  <span>Afficher QR</span>
+                </>
+              )}
+            </button>
 
             <div className="flex items-center gap-3 bg-white/5 border border-white/10 rounded-2xl px-4 py-2.5">
               <span className="text-xs text-neutral-400 uppercase tracking-wider">
@@ -1686,7 +1795,6 @@ export default function AdminConsolePage() {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
-                {/* Colonne gauche : Pause puis Terminer */}
                 <div className="flex flex-col gap-3">
                   <button
                     type="button"
@@ -1709,7 +1817,6 @@ export default function AdminConsolePage() {
                   </button>
                 </div>
 
-                {/* Colonne droite : Lancer / Relancer puis Question suivante */}
                 <div className="flex flex-col gap-3">
                   {isEndOfSeries ? (
                     <button
@@ -1751,30 +1858,39 @@ export default function AdminConsolePage() {
           )}
 
           {renderWidgetFrame(
-            "qr",
-            "Écran TV",
-            <Eye className="w-5 h-5 text-sky-400 shrink-0" />,
-            <div className="flex-1 flex flex-col justify-between gap-4">
-              <p className="text-sm text-neutral-400">
-                QR code de connexion sur la télévision.
-              </p>
+            "bots",
+            `Bots (${botCount})`,
+            <Bot className="w-5 h-5 text-sky-400 shrink-0" />,
+            <div className="flex-1 flex flex-col justify-between gap-3">
+              <div className="space-y-1.5">
+                <label className="text-xs text-neutral-400 block">
+                  Niveau des nouveaux bots
+                </label>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(["cool", "normal", "expert"] as BotLevel[]).map((lvl) => (
+                    <button
+                      key={lvl}
+                      type="button"
+                      onClick={() => setSelectedBotLevel(lvl)}
+                      className={`py-1.5 px-2 rounded-xl text-xs font-semibold capitalize border transition ${
+                        selectedBotLevel === lvl
+                          ? "bg-sky-500/25 text-sky-200 border-sky-400/50"
+                          : "bg-white/5 text-neutral-400 border-white/10 hover:bg-white/10"
+                      }`}
+                    >
+                      {lvl}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
               <button
                 type="button"
-                onClick={() => void handleToggleQr()}
-                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 font-medium transition"
+                onClick={handleAddBot}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-200 border border-sky-500/30 font-semibold transition"
               >
-                {showQrOnTv ? (
-                  <>
-                    <EyeOff className="w-4 h-4 text-amber-400" />
-                    <span>Masquer QR</span>
-                  </>
-                ) : (
-                  <>
-                    <Eye className="w-4 h-4 text-emerald-400" />
-                    <span>Afficher QR</span>
-                  </>
-                )}
+                <UserPlus className="w-4 h-4" />
+                <span>Ajouter un bot</span>
               </button>
             </div>
           )}
@@ -1942,6 +2058,14 @@ export default function AdminConsolePage() {
                                 <span className="truncate">
                                   {player.nickname}
                                 </span>
+                                {player.isBot && player.botLevel && (
+                                  <span
+                                    style={{ backgroundColor: color.badgeBgHex }}
+                                    className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded-full shrink-0"
+                                  >
+                                    {player.botLevel}
+                                  </span>
+                                )}
                                 {player.is_host && (
                                   <span
                                     style={{ backgroundColor: color.badgeBgHex }}
@@ -1952,7 +2076,9 @@ export default function AdminConsolePage() {
                                 )}
                               </div>
                               <span className="text-[11px] opacity-90 block">
-                                {player.is_connected
+                                {player.isBot
+                                  ? "Bot automatique"
+                                  : player.is_connected
                                   ? "Connecté"
                                   : "Déconnecté"}
                               </span>
