@@ -376,39 +376,11 @@ function extractOptionsList(
   return LETTERS.map((letter) => String(rawOptions[letter] ?? ""));
 }
 
-function findMatchingQuestionInPool(
-  candidate: QuizQuestionItem | null,
-  pool: QuizQuestionItem[]
-): QuizQuestionItem | null {
-  if (!candidate || !Array.isArray(pool) || pool.length === 0) return null;
-
-  const withOptions = pool.filter((item) =>
-    hasValidOptionsList(item?.options || item?.choices || item?.answers)
-  );
-  const searchPool = withOptions.length > 0 ? withOptions : pool;
-
-  if (candidate.id !== undefined && candidate.id !== null) {
-    const byId = searchPool.find(
-      (item) => item.id !== undefined && String(item.id) === String(candidate.id)
-    );
-    if (byId) return byId;
-  }
-
-  const candidateNorm = normalizeQuestionText(getQuestionText(candidate));
-  if (!candidateNorm) return null;
-
-  const exactNorm = searchPool.find(
-    (item) => normalizeQuestionText(getQuestionText(item)) === candidateNorm
-  );
-  if (exactNorm) return exactNorm;
-
-  const partialMatch = searchPool.find((item) => {
-    const itemNorm = normalizeQuestionText(getQuestionText(item));
-    if (!itemNorm) return false;
-    return itemNorm.includes(candidateNorm) || candidateNorm.includes(itemNorm);
-  });
-
-  return partialMatch ?? null;
+function isValidQuizQuestionItem(q: QuizQuestionItem | null | undefined): boolean {
+  if (!q) return false;
+  const text = getQuestionText(q).trim();
+  const rawOpts = q.options || q.choices || q.answers;
+  return Boolean(text) && hasValidOptionsList(rawOpts);
 }
 
 function getOptionFontSize(text: string): string {
@@ -451,6 +423,7 @@ export default function TvQuizPage() {
     number | null
   >(null);
   const [isPodiumVisible, setIsPodiumVisible] = useState<boolean>(false);
+  const [regenerationNonce, setRegenerationNonce] = useState<number>(0);
 
   const usedQuestionKeysRef = useRef<Set<string>>(new Set());
   const lastRecordedSeriesKeyRef = useRef<string>("");
@@ -464,6 +437,7 @@ export default function TvQuizPage() {
   const lastResetSignatureRef = useRef<string>("");
   const isResettingScoresRef = useRef<boolean>(false);
   const hasPlayedApplauseForSeriesRef = useRef<string>("");
+  const lastIgnoredDirtyKeyRef = useRef<string>("");
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
@@ -756,7 +730,49 @@ export default function TvQuizPage() {
     }
   }, [session, sessionCode, quizState, isFinishedOrLobbyStatus, router]);
 
+  const hasDirtyNonQuizState = useMemo<boolean>(() => {
+    const payloadQuestion =
+      quizState.currentQuestion || quizState.activeQuestion || null;
+    if (payloadQuestion && !isValidQuizQuestionItem(payloadQuestion)) {
+      return true;
+    }
+
+    const candidates: unknown[] = [
+      quizState.seriesQuestions,
+      quizState.shuffledQuestions,
+      quizState.questions,
+      quizState.quizQuestions,
+      quizState.items,
+      session?.questions,
+    ];
+
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate) && candidate.length > 0) {
+        const list = candidate as QuizQuestionItem[];
+        const anyInvalid = list.some((item) => !isValidQuizQuestionItem(item));
+        if (anyInvalid) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }, [quizState, session]);
+
+  useEffect(() => {
+    if (!hasDirtyNonQuizState) return;
+    const dirtyKey = `${session?.id ?? ""}-${seriesNumber}-${seriesSeed}-${getQuestionText(
+      quizState.currentQuestion || quizState.activeQuestion
+    )}`;
+    if (lastIgnoredDirtyKeyRef.current === dirtyKey) return;
+    lastIgnoredDirtyKeyRef.current = dirtyKey;
+    cachedSeriesRef.current = null;
+    setRegenerationNonce((n) => n + 1);
+  }, [hasDirtyNonQuizState, session?.id, seriesNumber, seriesSeed, quizState]);
+
   const syncedSeriesQuestions = useMemo<QuizQuestionItem[] | null>(() => {
+    if (hasDirtyNonQuizState) return null;
+
     const candidates: unknown[] = [
       quizState.seriesQuestions,
       quizState.shuffledQuestions,
@@ -770,25 +786,26 @@ export default function TvQuizPage() {
       if (!Array.isArray(candidate) || candidate.length === 0) continue;
 
       const typedList = candidate as QuizQuestionItem[];
-      const hasValidOptions = typedList.some((item) => {
-        const rawOpts = item?.options || item?.choices || item?.answers;
-        return hasValidOptionsList(rawOpts);
-      });
+      const allValid = typedList.every((item) => isValidQuizQuestionItem(item));
 
-      if (hasValidOptions) {
+      if (allValid) {
         return typedList;
       }
     }
 
     return null;
-  }, [quizState, session]);
+  }, [hasDirtyNonQuizState, quizState, session]);
 
   const questions = useMemo<QuizQuestionItem[]>(() => {
     if (syncedSeriesQuestions) {
       return syncedSeriesQuestions;
     }
 
-    const signature = `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}`;
+    const validLocalPool = (QUESTIONS as QuizQuestionItem[]).filter((item) =>
+      isValidQuizQuestionItem(item)
+    );
+
+    const signature = `${session?.id ?? ""}-${sessionCode}-${seriesNumber}-${seriesSeed}-r${regenerationNonce}`;
     if (
       cachedSeriesRef.current &&
       cachedSeriesRef.current.signature === signature
@@ -801,16 +818,16 @@ export default function TvQuizPage() {
     }
 
     const picked = pickRandomQuestionsSeries(
-      QUESTIONS as QuizQuestion[],
+      validLocalPool,
       QUESTIONS_PER_GAME,
       signature,
       usedQuestionKeysRef.current
     );
 
-    if ((QUESTIONS as QuizQuestion[]).length > QUESTIONS_PER_GAME) {
+    if (validLocalPool.length > QUESTIONS_PER_GAME) {
       if (
         usedQuestionKeysRef.current.size + picked.length >=
-        (QUESTIONS as QuizQuestion[]).length
+        validLocalPool.length
       ) {
         usedQuestionKeysRef.current = new Set();
       }
@@ -821,7 +838,14 @@ export default function TvQuizPage() {
 
     cachedSeriesRef.current = { signature, items: picked };
     return picked;
-  }, [syncedSeriesQuestions, session?.id, sessionCode, seriesNumber, seriesSeed]);
+  }, [
+    syncedSeriesQuestions,
+    session?.id,
+    sessionCode,
+    seriesNumber,
+    seriesSeed,
+    regenerationNonce,
+  ]);
 
   const activeQuestionIndex = useMemo<number | null>(() => {
     const rawIndex =
@@ -864,79 +888,24 @@ export default function TvQuizPage() {
   const currentQuestion = useMemo<QuizQuestionItem | null>(() => {
     if (activeQuestionIndex === null) return null;
 
-    const payloadQuestion =
-      quizState.currentQuestion || quizState.activeQuestion || null;
-    const localPool = QUESTIONS as QuizQuestionItem[];
-
-    if (payloadQuestion) {
-      const rawPayloadOpts =
-        payloadQuestion.options ||
-        payloadQuestion.choices ||
-        payloadQuestion.answers;
-
-      if (hasValidOptionsList(rawPayloadOpts)) {
+    if (!hasDirtyNonQuizState) {
+      const payloadQuestion =
+        quizState.currentQuestion || quizState.activeQuestion || null;
+      if (isValidQuizQuestionItem(payloadQuestion)) {
         return payloadQuestion;
       }
-
-      const matchedInSeries = findMatchingQuestionInPool(
-        payloadQuestion,
-        questions
-      );
-      const matchedInLocal =
-        matchedInSeries ?? findMatchingQuestionInPool(payloadQuestion, localPool);
-
-      if (matchedInLocal) {
-        return {
-          ...matchedInLocal,
-          ...payloadQuestion,
-          options:
-            matchedInLocal.options ??
-            matchedInLocal.choices ??
-            matchedInLocal.answers,
-          correct:
-            payloadQuestion.correct ??
-            payloadQuestion.correctAnswer ??
-            payloadQuestion.correct_answer ??
-            matchedInLocal.correct ??
-            matchedInLocal.correctAnswer ??
-            matchedInLocal.correct_answer,
-          correctIndex:
-            payloadQuestion.correctIndex ??
-            payloadQuestion.correct_index ??
-            matchedInLocal.correctIndex ??
-            matchedInLocal.correct_index,
-        };
-      }
-
-      return payloadQuestion;
     }
 
     if (questions.length > 0) {
       const safeIndex = Math.min(activeQuestionIndex, questions.length - 1);
       const fromSeries = questions[safeIndex] ?? null;
-      if (fromSeries) {
-        const rawSeriesOpts =
-          fromSeries.options || fromSeries.choices || fromSeries.answers;
-        if (hasValidOptionsList(rawSeriesOpts)) {
-          return fromSeries;
-        }
-        const matchedLocal = findMatchingQuestionInPool(fromSeries, localPool);
-        if (matchedLocal) {
-          return {
-            ...matchedLocal,
-            ...fromSeries,
-            options:
-              matchedLocal.options ??
-              matchedLocal.choices ??
-              matchedLocal.answers,
-          };
-        }
+      if (isValidQuizQuestionItem(fromSeries)) {
         return fromSeries;
       }
     }
 
     return null;
-  }, [activeQuestionIndex, quizState, questions]);
+  }, [activeQuestionIndex, hasDirtyNonQuizState, quizState, questions]);
 
   const isPaused = useMemo<boolean>(() => {
     const status = String(session?.status ?? "").toLowerCase();
@@ -970,7 +939,7 @@ export default function TvQuizPage() {
       return;
     }
 
-    const resetKey = `${seriesNumber}-${seriesSeed}-${activeQuestionIndex}-${remoteStartMs ?? ""}`;
+    const resetKey = `${seriesNumber}-${seriesSeed}-${regenerationNonce}-${activeQuestionIndex}-${remoteStartMs ?? ""}`;
     if (lastTimerResetKeyRef.current === resetKey) {
       return;
     }
@@ -986,6 +955,7 @@ export default function TvQuizPage() {
     remoteStartMs,
     seriesNumber,
     seriesSeed,
+    regenerationNonce,
   ]);
 
   useEffect(() => {
@@ -1148,7 +1118,7 @@ export default function TvQuizPage() {
       return;
     }
 
-    const roundKey = `${session.id}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}`;
+    const roundKey = `${session.id}-s${seriesNumber}-${seriesSeed}-${regenerationNonce}-q${activeQuestionIndex}`;
     if (scoredQuestionsRef.current.has(roundKey) || isScoringRef.current) {
       return;
     }
@@ -1252,6 +1222,7 @@ export default function TvQuizPage() {
     isRevealed,
     seriesNumber,
     seriesSeed,
+    regenerationNonce,
     players,
     playerScoresRows,
     answersMap,
