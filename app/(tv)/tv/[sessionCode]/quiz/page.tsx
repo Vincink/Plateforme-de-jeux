@@ -510,7 +510,7 @@ export default function TvQuizPage() {
   const hasPlayedApplauseForSeriesRef = useRef<string>("");
   const lastIgnoredDirtyKeyRef = useRef<string>("");
   const lastSyncedAdminStateKeyRef = useRef<string>("");
-  const botTimersRef = useRef>(new Map());
+  const botTimersRef = useRef(new Map<string, number>());
   const botContextRef = useRef<{
     sessionId: string;
     correctLetter: AnswerLetter | null;
