@@ -221,6 +221,8 @@ export default function TvJusteChiffrePage() {
 
   const scoredRoundsRef = useRef<Set<string>>(new Set());
   const isScoringRef = useRef<boolean>(false);
+  const lastResetSignatureRef = useRef<string>("");
+  const isResettingScoresRef = useRef<boolean>(false);
   const activeRoundSignatureRef = useRef<string>("");
   const zeroSequenceRoundRef = useRef<string>("");
   const revealAnimRoundRef = useRef<string>("");
@@ -531,6 +533,80 @@ export default function TvJusteChiffrePage() {
     statusLower === "ended" ||
     statusLower === "completed";
 
+  const seriesNumber = Math.max(
+    1,
+    toFiniteNumber(statePayload.seriesNumber) ?? 1
+  );
+  const seriesSeed =
+    typeof statePayload.seriesSeed === "string" && statePayload.seriesSeed.trim()
+      ? statePayload.seriesSeed.trim()
+      : `${session?.id ?? ""}-${sessionCode}-jc-${seriesNumber}`;
+
+  useEffect(() => {
+    if (!session?.id) return;
+
+    const resetTrigger = isLobbyOrFinished
+      ? `${session.id}-status:${statusLower}`
+      : `${session.id}-series:${seriesNumber}:${seriesSeed}`;
+
+    const shouldReset =
+      isLobbyOrFinished ||
+      (lastResetSignatureRef.current !== "" &&
+        !lastResetSignatureRef.current.includes(
+          `series:${seriesNumber}:${seriesSeed}`
+        ) &&
+        resetTrigger.includes("series:"));
+
+    if (lastResetSignatureRef.current === "") {
+      lastResetSignatureRef.current = resetTrigger;
+      if (!isLobbyOrFinished) return;
+    }
+
+    if (!shouldReset && lastResetSignatureRef.current === resetTrigger) {
+      return;
+    }
+
+    if (isResettingScoresRef.current) return;
+
+    lastResetSignatureRef.current = resetTrigger;
+    isResettingScoresRef.current = true;
+    scoredRoundsRef.current = new Set();
+    setLocalScoresByPlayer({});
+    setScoresRows((prev) =>
+      prev.map(
+        (row) =>
+          ({
+            ...row,
+            total_score: 0,
+            score: 0,
+          }) as PlayerScore
+      )
+    );
+
+    if (!supabase) {
+      isResettingScoresRef.current = false;
+      return;
+    }
+
+    void (async () => {
+      try {
+        await supabase
+          .from("player_scores")
+          .update({ total_score: 0 })
+          .eq("session_id", session.id);
+      } finally {
+        isResettingScoresRef.current = false;
+      }
+    })();
+  }, [
+    supabase,
+    session?.id,
+    isLobbyOrFinished,
+    statusLower,
+    seriesNumber,
+    seriesSeed,
+  ]);
+
   useEffect(() => {
     if (!session || !sessionCode) return;
     const replacement = (
@@ -548,15 +624,6 @@ export default function TvJusteChiffrePage() {
       router.replace(`/tv/${sessionCode}`);
     }
   }, [session, sessionCode, statePayload, isLobbyOrFinished, router]);
-
-  const seriesNumber = Math.max(
-    1,
-    toFiniteNumber(statePayload.seriesNumber) ?? 1
-  );
-  const seriesSeed =
-    typeof statePayload.seriesSeed === "string" && statePayload.seriesSeed.trim()
-      ? statePayload.seriesSeed.trim()
-      : `${session?.id ?? ""}-${sessionCode}-jc-${seriesNumber}`;
 
   const questions = useMemo<JusteChiffreQuestion[]>(() => {
     if (
