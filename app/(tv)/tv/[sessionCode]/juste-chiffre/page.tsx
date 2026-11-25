@@ -30,6 +30,7 @@ const POST_FADE_DELAY_MS = 2000;
 const DEFAULT_DURATION_SECONDS = 20;
 const QUESTIONS_PER_GAME = 15;
 const REVEAL_DELAY_AFTER_BARS_MS = 900;
+const FLY_BADGE_ANIMATION_MS = 1200;
 
 type BotLevel = "cool" | "normal" | "expert";
 
@@ -262,6 +263,7 @@ export default function TvJusteChiffrePage() {
     Record<string, boolean>
   >({});
   const [launchFlyBadges, setLaunchFlyBadges] = useState<boolean>(false);
+  const [badgeAnimationDone, setBadgeAnimationDone] = useState<boolean>(false);
   const [laserImpactFlash, setLaserImpactFlash] = useState<boolean>(false);
   const [screenShake, setScreenShake] = useState<boolean>(false);
 
@@ -848,6 +850,7 @@ export default function TvJusteChiffrePage() {
       setRoundPointsByPlayer({});
       setExactPlayersByRound({});
       setLaunchFlyBadges(false);
+      setBadgeAnimationDone(false);
       setLaserImpactFlash(false);
       setScreenShake(false);
       return;
@@ -876,6 +879,7 @@ export default function TvJusteChiffrePage() {
     setRoundPointsByPlayer({});
     setExactPlayersByRound({});
     setLaunchFlyBadges(false);
+    setBadgeAnimationDone(false);
     setLaserImpactFlash(false);
     setScreenShake(false);
   }, [roundSignature, remoteStartMs]);
@@ -1153,7 +1157,7 @@ export default function TvJusteChiffrePage() {
       .map((item) => ({
         ...item,
         isWinner:
-          shouldReveal &&
+          phase === "revealed" &&
           minDiff !== null &&
           item.diff !== null &&
           item.diff === minDiff,
@@ -1167,7 +1171,7 @@ export default function TvJusteChiffrePage() {
     localScoresByPlayer,
     estimatesByPlayerId,
     targetNumber,
-    shouldReveal,
+    phase,
   ]);
 
   const rankedPlayersRef = useRef(rankedPlayers);
@@ -1351,18 +1355,40 @@ export default function TvJusteChiffrePage() {
     if (fxRoundSignatureRef.current === fxKey) return;
     fxRoundSignatureRef.current = fxKey;
 
-    const currentRanked = rankedPlayersRef.current;
+    const currentPlayers = playersRef.current;
+    const currentEstimates = estimatesRef.current;
+
+    const candidates = currentPlayers
+      .map((player) => {
+        const pid = String(player.id);
+        const guess = currentEstimates[pid] ?? null;
+        const diff =
+          guess !== null && targetNumber !== null
+            ? Math.abs(guess - targetNumber)
+            : null;
+        const isExact =
+          guess !== null && targetNumber !== null && guess === targetNumber;
+        return { player, pid, guess, diff, isExact };
+      })
+      .filter((c) => c.guess !== null && c.diff !== null);
+
+    const minDiff =
+      candidates.length > 0
+        ? Math.min(...candidates.map((c) => c.diff as number))
+        : null;
+
     const ptsMap: Record<string, number> = {};
     const exactMap: Record<string, boolean> = {};
     let hasExact = false;
 
-    for (const item of currentRanked) {
-      const pid = String(item.player.id);
+    for (const item of candidates) {
+      const pid = item.pid;
+      const isItemWinner = minDiff !== null && item.diff === minDiff;
       if (item.isExact && item.guess !== null) {
         exactMap[pid] = true;
         hasExact = true;
       }
-      if (item.isWinner && item.guess !== null) {
+      if (isItemWinner && item.guess !== null) {
         ptsMap[pid] = item.isExact ? 5 : 3;
 
         const barEl = barRefs.current[pid];
@@ -1390,6 +1416,7 @@ export default function TvJusteChiffrePage() {
 
     setRoundPointsByPlayer(ptsMap);
     setExactPlayersByRound(exactMap);
+    setBadgeAnimationDone(false);
     setLaunchFlyBadges(true);
 
     if (hasExact) {
@@ -1401,19 +1428,25 @@ export default function TvJusteChiffrePage() {
       window.setTimeout(() => setScreenShake(false), 520);
     }
 
+    const badgeFinishTimer = window.setTimeout(() => {
+      setBadgeAnimationDone(true);
+    }, FLY_BADGE_ANIMATION_MS);
+
     const flyResetTimer = window.setTimeout(() => {
       setLaunchFlyBadges(false);
-    }, 1400);
+    }, FLY_BADGE_ANIMATION_MS + 200);
 
     return () => {
+      window.clearTimeout(badgeFinishTimer);
       window.clearTimeout(flyResetTimer);
     };
   }, [phase, roundSignature, targetNumber, estimatesKey]);
 
-  // Addition cumulative des points à chaque question (joueurs humains + bots + sync admin)
+  // Addition cumulative des points APRÈS l'animation de la pastille (+3 ou +5 si exact)
   useEffect(() => {
     if (
-      !shouldReveal ||
+      phase !== "revealed" ||
+      !badgeAnimationDone ||
       activeQuestionIndex === null ||
       targetNumber === null
     ) {
@@ -1594,7 +1627,8 @@ export default function TvJusteChiffrePage() {
     supabase,
     session?.id,
     sessionCode,
-    shouldReveal,
+    phase,
+    badgeAnimationDone,
     activeQuestionIndex,
     targetNumber,
     seriesNumber,
@@ -1970,7 +2004,7 @@ export default function TvJusteChiffrePage() {
                           {shouldReveal && hasAnswered && (
                             <span
                               className={`relative z-10 px-2 py-0.5 rounded-lg font-mono text-lg xl:text-xl font-black leading-none shadow-md shrink-0 ${
-                                isWinner
+                                isWinner && phase === "revealed"
                                   ? "bg-amber-300 text-black"
                                   : "bg-neutral-900/95 text-white border border-white/25"
                               }`}
