@@ -159,6 +159,48 @@ const BOT_CONFIG_BY_LEVEL: Record<
   expert: { accuracy: 0.85, minDelayMs: 1000, maxDelayMs: 3500 },
 };
 
+function getLeaderboardSizing(playerCount: number) {
+  if (playerCount >= 9) {
+    return {
+      listGap: "gap-1.5",
+      cardPadding: "px-3.5 py-1.5 rounded-2xl gap-2.5",
+      rankSize: "w-8 h-8 xl:w-9 xl:h-9 rounded-xl text-base xl:text-lg",
+      nameSize: "text-base xl:text-lg",
+      scoreBox: "w-20 text-lg xl:text-xl",
+      scoreUnit: "text-xs font-bold",
+      statusBox: "w-9 h-9",
+      statusBadge: "w-8 h-8 xl:w-9 xl:h-9 text-base xl:text-lg",
+      checkIcon: "w-5 h-5 stroke-[3.5]",
+    };
+  }
+
+  if (playerCount >= 7) {
+    return {
+      listGap: "gap-2",
+      cardPadding: "px-4 py-2 rounded-2xl gap-3",
+      rankSize: "w-10 h-10 xl:w-11 xl:h-11 rounded-xl text-lg xl:text-xl",
+      nameSize: "text-lg xl:text-xl",
+      scoreBox: "w-22 text-xl xl:text-2xl",
+      scoreUnit: "text-sm font-bold",
+      statusBox: "w-11 h-11",
+      statusBadge: "w-10 h-10 xl:w-11 xl:h-11 text-lg xl:text-xl",
+      checkIcon: "w-6 h-6 stroke-[3.5]",
+    };
+  }
+
+  return {
+    listGap: "gap-3.5",
+    cardPadding: "px-5 py-3.5 rounded-3xl gap-4",
+    rankSize: "w-12 h-12 xl:w-14 xl:h-14 rounded-2xl text-2xl xl:text-3xl",
+    nameSize: "text-2xl xl:text-3xl",
+    scoreBox: "w-24 text-2xl xl:text-3xl",
+    scoreUnit: "text-lg font-bold",
+    statusBox: "w-14 h-14",
+    statusBadge: "w-12 h-12 xl:w-14 xl:h-14 text-2xl xl:text-3xl",
+    checkIcon: "w-8 h-8 stroke-[3.5]",
+  };
+}
+
 function pickBotAnswer(
   level: BotLevel | undefined,
   correctLetter: AnswerLetter | null
@@ -1713,6 +1755,11 @@ export default function TvQuizPage() {
       .sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   }, [allParticipants, scoresMap, answersMap]);
 
+  const leaderboardSizing = useMemo(
+    () => getLeaderboardSizing(rankedPlayers.length),
+    [rankedPlayers.length]
+  );
+
   const totalQuestions = questions.length;
   const isLastQuestionCompleted =
     !isFinishedOrLobbyStatus &&
@@ -1896,7 +1943,7 @@ export default function TvQuizPage() {
           </div>
         </section>
 
-        <aside className="col-span-5 bg-white/[0.06] border border-white/15 rounded-[2rem] p-6 flex flex-col gap-4 min-h-0">
+        <aside className="col-span-5 bg-white/[0.06] border border-white/15 rounded-[2rem] p-6 flex flex-col gap-3 min-h-0">
           <div className="flex items-center justify-between shrink-0 pb-1">
             <div className="flex items-center gap-3 text-2xl xl:text-3xl font-black">
               <Trophy className="w-8 h-8 text-amber-400" />
@@ -1912,7 +1959,9 @@ export default function TvQuizPage() {
               Aucun joueur dans la partie
             </div>
           ) : (
-            <div className="flex-1 min-h-0 flex flex-col gap-3.5 overflow-hidden">
+            <div
+              className={`flex-1 min-h-0 flex flex-col ${leaderboardSizing.listGap} overflow-hidden`}
+            >
               {rankedPlayers.map(({ player, score, chosenLetter }, idx) => {
                 const pColor = getUniquePlayerColor(player.id, allParticipants);
                 const rank = idx + 1;
@@ -1929,31 +1978,38 @@ export default function TvQuizPage() {
                       borderColor: pColor.borderHex,
                       color: pColor.textHex,
                     }}
-                    className="rounded-3xl border-2 px-5 py-3.5 flex items-center gap-4 shadow-lg shrink-0"
+                    className={`border-2 flex items-center shadow-lg shrink-0 ${leaderboardSizing.cardPadding}`}
                   >
                     <div
                       style={{ backgroundColor: pColor.badgeBgHex }}
-                      className="w-12 h-12 xl:w-14 xl:h-14 rounded-2xl flex items-center justify-center font-black text-2xl xl:text-3xl shrink-0"
+                      className={`flex items-center justify-center font-black shrink-0 ${leaderboardSizing.rankSize}`}
                     >
                       {rank}
                     </div>
 
-                    <div className="flex-1 min-w-0 font-black text-2xl xl:text-3xl truncate">
+                    <div
+                      className={`flex-1 min-w-0 font-black truncate ${leaderboardSizing.nameSize}`}
+                    >
                       {player.nickname}
                     </div>
 
-                    <div className="w-24 text-right font-mono font-black text-2xl xl:text-3xl shrink-0">
-                      {score} <span className="text-lg font-bold">pts</span>
+                    <div
+                      className={`text-right font-mono font-black shrink-0 ${leaderboardSizing.scoreBox}`}
+                    >
+                      {score}{" "}
+                      <span className={leaderboardSizing.scoreUnit}>pts</span>
                     </div>
 
-                    <div className="w-14 h-14 flex items-center justify-center shrink-0">
+                    <div
+                      className={`flex items-center justify-center shrink-0 ${leaderboardSizing.statusBox}`}
+                    >
                       {hasAnswered && !isRevealed && (
                         <div
                           title="A répondu"
-                          className="w-12 h-12 xl:w-14 xl:h-14 rounded-full bg-emerald-200 border-2 border-emerald-500 flex items-center justify-center shadow-md"
+                          className={`rounded-full bg-emerald-200 border-2 border-emerald-500 flex items-center justify-center shadow-md ${leaderboardSizing.statusBadge}`}
                         >
                           <Check
-                            className="w-8 h-8 text-emerald-700 stroke-[3.5]"
+                            className={`text-emerald-700 ${leaderboardSizing.checkIcon}`}
                             aria-label="V"
                           />
                         </div>
@@ -1965,7 +2021,7 @@ export default function TvQuizPage() {
                             backgroundColor: answerStyle.circleBg,
                             color: answerStyle.circleText,
                           }}
-                          className="w-12 h-12 xl:w-14 xl:h-14 rounded-full border-2 border-white flex items-center justify-center font-black text-2xl xl:text-3xl shadow-md"
+                          className={`rounded-full border-2 border-white flex items-center justify-center font-black shadow-md ${leaderboardSizing.statusBadge}`}
                         >
                           {chosenLetter}
                         </div>
