@@ -383,6 +383,34 @@ function isValidQuizQuestionItem(q: QuizQuestionItem | null | undefined): boolea
   return Boolean(text) && hasValidOptionsList(rawOpts);
 }
 
+function normalizeQuestionForAdminSync(q: QuizQuestionItem): QuizQuestionItem {
+  const optionsList = extractOptionsList(q.options || q.choices || q.answers);
+  const rawIdx =
+    typeof q.correctIndex === "number"
+      ? q.correctIndex
+      : typeof q.correct_index === "number"
+      ? q.correct_index
+      : null;
+  const letter =
+    rawIdx !== null
+      ? LETTERS[rawIdx] ?? null
+      : normalizeAnswerLetter(q.correct ?? q.correctAnswer ?? q.correct_answer);
+  const resolvedIndex =
+    rawIdx !== null ? rawIdx : letter ? LETTERS.indexOf(letter) : 0;
+  const resolvedLetter = letter ?? LETTERS[resolvedIndex] ?? "A";
+
+  return {
+    ...q,
+    question: getQuestionText(q),
+    options: optionsList,
+    correct: resolvedLetter,
+    correctAnswer: resolvedLetter,
+    correct_answer: resolvedLetter,
+    correctIndex: resolvedIndex,
+    correct_index: resolvedIndex,
+  };
+}
+
 function getOptionFontSize(text: string): string {
   const trimmed = text.trim();
   const longestWordLen = trimmed
@@ -438,6 +466,7 @@ export default function TvQuizPage() {
   const isResettingScoresRef = useRef<boolean>(false);
   const hasPlayedApplauseForSeriesRef = useRef<string>("");
   const lastIgnoredDirtyKeyRef = useRef<string>("");
+  const lastSyncedAdminStateKeyRef = useRef<string>("");
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
@@ -731,6 +760,21 @@ export default function TvQuizPage() {
   }, [session, sessionCode, quizState, isFinishedOrLobbyStatus, router]);
 
   const hasDirtyNonQuizState = useMemo<boolean>(() => {
+    const rawState = (session?.game_state ||
+      session?.quiz_state ||
+      session?.state ||
+      {}) as Record<string, unknown>;
+
+    if (
+      "targetNumber" in rawState ||
+      "estimates" in rawState ||
+      "guesses" in rawState ||
+      "minValue" in rawState ||
+      "maxValue" in rawState
+    ) {
+      return true;
+    }
+
     const payloadQuestion =
       quizState.currentQuestion || quizState.activeQuestion || null;
     if (payloadQuestion && !isValidQuizQuestionItem(payloadQuestion)) {
@@ -906,6 +950,83 @@ export default function TvQuizPage() {
 
     return null;
   }, [activeQuestionIndex, hasDirtyNonQuizState, quizState, questions]);
+
+  // Synchronise la série régénérée et la question active vers Supabase pour le panneau admin
+  useEffect(() => {
+    if (!supabase || !session?.id || isFinishedOrLobbyStatus) return;
+    if (questions.length === 0) return;
+
+    const normalizedSeries = questions.map(normalizeQuestionForAdminSync);
+    const normalizedCurrent = currentQuestion
+      ? normalizeQuestionForAdminSync(currentQuestion)
+      : null;
+
+    const remoteCurrentText = getQuestionText(
+      quizState.currentQuestion || quizState.activeQuestion
+    );
+    const localCurrentText = normalizedCurrent
+      ? getQuestionText(normalizedCurrent)
+      : "";
+
+    const needsSync =
+      hasDirtyNonQuizState ||
+      !syncedSeriesQuestions ||
+      (normalizedCurrent !== null && remoteCurrentText !== localCurrentText);
+
+    if (!needsSync) return;
+
+    const syncKey = `${session.id}-s${seriesNumber}-${seriesSeed}-r${regenerationNonce}-q${
+      activeQuestionIndex ?? "none"
+    }-${localCurrentText}`;
+
+    if (lastSyncedAdminStateKeyRef.current === syncKey) return;
+    lastSyncedAdminStateKeyRef.current = syncKey;
+
+    const nextGameState: QuizStatePayload = {
+      ...cleanQuizState(
+        (session.game_state || session.quiz_state || session.state || {}) as Record<
+          string,
+          unknown
+        >
+      ),
+      mode: "quiz",
+      seriesQuestions: normalizedSeries,
+      questions: normalizedSeries,
+      quizQuestions: normalizedSeries,
+      currentQuestion: normalizedCurrent,
+      activeQuestion: normalizedCurrent,
+    };
+
+    void (async () => {
+      const { error } = await supabase
+        .from("game_sessions")
+        .update({ game_state: nextGameState })
+        .eq("id", session.id);
+
+      if (!error) {
+        setSession((prev) =>
+          prev && prev.id === session.id
+            ? { ...prev, game_state: nextGameState }
+            : prev
+        );
+      } else {
+        lastSyncedAdminStateKeyRef.current = "";
+      }
+    })();
+  }, [
+    supabase,
+    session,
+    isFinishedOrLobbyStatus,
+    questions,
+    currentQuestion,
+    quizState,
+    hasDirtyNonQuizState,
+    syncedSeriesQuestions,
+    seriesNumber,
+    seriesSeed,
+    regenerationNonce,
+    activeQuestionIndex,
+  ]);
 
   const isPaused = useMemo<boolean>(() => {
     const status = String(session?.status ?? "").toLowerCase();
