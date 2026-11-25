@@ -510,7 +510,7 @@ export default function TvQuizPage() {
   const hasPlayedApplauseForSeriesRef = useRef<string>("");
   const lastIgnoredDirtyKeyRef = useRef<string>("");
   const lastSyncedAdminStateKeyRef = useRef<string>("");
-  const activeBotTimersRef = useRef>(new Map());
+  const botTimersMapRef = useRef>(new Map());
   const botContextRef = useRef<{
     sessionId: string;
     correctLetter: AnswerLetter | null;
@@ -780,8 +780,8 @@ export default function TvQuizPage() {
     lastResetSignatureRef.current = resetTrigger;
     isResettingScoresRef.current = true;
     scoredQuestionsRef.current = new Set();
-    activeBotTimersRef.current.forEach((id) => window.clearTimeout(id));
-    activeBotTimersRef.current.clear();
+    botTimersMapRef.current.forEach((timerId) => window.clearTimeout(timerId));
+    botTimersMapRef.current.clear();
     hasPlayedApplauseForSeriesRef.current = "";
     setBotScoresMap({});
     setIsPodiumVisible(false);
@@ -1311,7 +1311,7 @@ export default function TvQuizPage() {
     };
   }, [session?.id, correctLetter]);
 
-  // Planification stable des réponses des bots (ne se réinitialise pas au simple refresh de session)
+  // Planification stable des réponses des bots
   useEffect(() => {
     const canBotsPlay =
       Boolean(supabase) &&
@@ -1323,19 +1323,20 @@ export default function TvQuizPage() {
       Boolean(currentQuestion);
 
     if (!canBotsPlay) {
-      activeBotTimersRef.current.forEach((id) => window.clearTimeout(id));
-      activeBotTimersRef.current.clear();
+      botTimersMapRef.current.forEach((timerId) => window.clearTimeout(timerId));
+      botTimersMapRef.current.clear();
       return;
     }
 
     const activeBots = allParticipants.filter((p) => Boolean(p.isBot));
     const activeBotIds = new Set(activeBots.map((b) => String(b.id)));
+    const roundPrefix = `s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}::`;
 
-    for (const [key, timerId] of activeBotTimersRef.current.entries()) {
+    for (const [key, timerId] of botTimersMapRef.current.entries()) {
       const botPart = key.split("::")[1] ?? "";
-      if (!key.startsWith(`s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}::`) || !activeBotIds.has(botPart)) {
+      if (!key.startsWith(roundPrefix) || !activeBotIds.has(botPart)) {
         window.clearTimeout(timerId);
-        activeBotTimersRef.current.delete(key);
+        botTimersMapRef.current.delete(key);
       }
     }
 
@@ -1343,12 +1344,12 @@ export default function TvQuizPage() {
       const botIdStr = String(bot.id);
       if (normalizeAnswerLetter(answersMap[botIdStr])) continue;
 
-      const timerKey = `s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}::${botIdStr}`;
-      if (activeBotTimersRef.current.has(timerKey)) continue;
+      const timerKey = `${roundPrefix}${botIdStr}`;
+      if (botTimersMapRef.current.has(timerKey)) continue;
 
       const delayMs = getBotDelayMs(bot.botLevel);
       const timerId = window.setTimeout(() => {
-        activeBotTimersRef.current.delete(timerKey);
+        botTimersMapRef.current.delete(timerKey);
         const { sessionId: targetId, correctLetter: targetCorrect } =
           botContextRef.current;
         if (!supabase || !targetId) return;
@@ -1386,7 +1387,7 @@ export default function TvQuizPage() {
         })();
       }, delayMs);
 
-      activeBotTimersRef.current.set(timerKey, timerId);
+      botTimersMapRef.current.set(timerKey, timerId);
     }
   }, [
     supabase,
