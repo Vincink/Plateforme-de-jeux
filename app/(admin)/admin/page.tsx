@@ -562,6 +562,7 @@ export default function AdminConsolePage() {
   const selectedGame =
     games.find((g) => g.id === selectedGameId) ?? games[0];
 
+  const isGameLaunched = status === "playing" || status === "paused";
   const isJusteChiffre = isJusteChiffreGame(selectedGame);
   const activeDurationSeconds = isJusteChiffre
     ? JUSTE_CHIFFRE_DURATION_SECONDS
@@ -1288,6 +1289,7 @@ export default function AdminConsolePage() {
   };
 
   const handleSelectGame = async (gameId: string) => {
+    if (isGameLaunched) return;
     const targetGame = games.find((g) => g.id === gameId) ?? null;
     const nextSeed = generateSeriesSeed();
     const nextJcPicked = pickSeriesQuestions(
@@ -1684,6 +1686,25 @@ export default function AdminConsolePage() {
               </div>
 
               <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  disabled={status !== "playing"}
+                  onClick={() => void handleStatusChange("paused")}
+                  className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed text-amber-300 border border-amber-500/30 font-semibold transition"
+                >
+                  <Pause className="w-4 h-4" />
+                  <span>Pause</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => void handleStatusChange("finished")}
+                  className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-semibold transition"
+                >
+                  <Square className="w-4 h-4" />
+                  <span>Terminer</span>
+                </button>
+
                 {isEndOfSeries ? (
                   <button
                     type="button"
@@ -1707,16 +1728,6 @@ export default function AdminConsolePage() {
 
                 <button
                   type="button"
-                  disabled={status !== "playing"}
-                  onClick={() => void handleStatusChange("paused")}
-                  className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed text-amber-300 border border-amber-500/30 font-semibold transition"
-                >
-                  <Pause className="w-4 h-4" />
-                  <span>Pause</span>
-                </button>
-
-                <button
-                  type="button"
                   disabled={isEndOfSeries}
                   onClick={() => void handleNextQuestion()}
                   className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold transition"
@@ -1727,15 +1738,6 @@ export default function AdminConsolePage() {
                       ? "Lancer Question 1"
                       : "Question suivante"}
                   </span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => void handleStatusChange("finished")}
-                  className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/30 font-semibold transition"
-                >
-                  <Square className="w-4 h-4" />
-                  <span>Terminer</span>
                 </button>
               </div>
             </div>
@@ -1775,7 +1777,14 @@ export default function AdminConsolePage() {
             "Catalogue des jeux",
             <Gamepad2 className="w-5 h-5 text-purple-400 shrink-0" />,
             <div className="flex-1 flex flex-col gap-3">
-              <div className="flex items-center justify-end">
+              <div className="flex items-center justify-between gap-2">
+                {isGameLaunched ? (
+                  <span className="text-xs text-amber-300/90">
+                    Partie en cours : sélection verrouillée
+                  </span>
+                ) : (
+                  <span />
+                )}
                 <span className="text-xs text-neutral-400">
                   {games.filter((g) => g.is_active).length} / {games.length}{" "}
                   actifs
@@ -1785,14 +1794,23 @@ export default function AdminConsolePage() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {games.map((game) => {
                   const isSelected = game.id === selectedGame?.id;
+                  const isDisabledByGameRunning = isGameLaunched && !isSelected;
+
                   return (
                     <div
                       key={game.id}
-                      onClick={() => void handleSelectGame(game.id)}
-                      className={`cursor-pointer rounded-2xl p-4 border transition flex flex-col justify-between gap-4 ${
+                      onClick={() => {
+                        if (!isDisabledByGameRunning) {
+                          void handleSelectGame(game.id);
+                        }
+                      }}
+                      aria-disabled={isDisabledByGameRunning}
+                      className={`rounded-2xl p-4 border transition flex flex-col justify-between gap-4 ${
                         isSelected
-                          ? "bg-white/15 border-white/40"
-                          : "bg-black/30 border-white/10 hover:border-white/25"
+                          ? "bg-white/15 border-white/40 cursor-pointer"
+                          : isDisabledByGameRunning
+                          ? "bg-black/20 border-white/5 opacity-45 cursor-not-allowed pointer-events-none"
+                          : "bg-black/30 border-white/10 hover:border-white/25 cursor-pointer"
                       }`}
                     >
                       <div>
@@ -1802,11 +1820,14 @@ export default function AdminConsolePage() {
                           </h3>
                           <button
                             type="button"
+                            disabled={isDisabledByGameRunning}
                             onClick={(e) => {
                               e.stopPropagation();
-                              handleToggleGameActive(game.id);
+                              if (!isDisabledByGameRunning) {
+                                handleToggleGameActive(game.id);
+                              }
                             }}
-                            className="text-xs flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15"
+                            className="text-xs flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
                             {game.is_active ? (
                               <>
