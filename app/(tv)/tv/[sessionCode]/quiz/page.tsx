@@ -153,6 +153,21 @@ const cleanQuizState = (
   };
 };
 
+function normalizeQuestionText(raw: string): string {
+  return raw
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getQuestionText(q: QuizQuestionItem | null | undefined): string {
+  if (!q) return "";
+  return String(q.question || q.prompt || q.title || q.text || "");
+}
+
 function playApplauseSound(): () => void {
   if (typeof window === "undefined") return () => {};
   const AudioCtx =
@@ -258,8 +273,8 @@ function shuffleWithSeed<T>(items: T[], seedKey: string): T[] {
 
 function getQuestionUniqueKey(q: QuizQuestionItem, fallbackIdx: number): string {
   if (q.id !== undefined && q.id !== null) return `id:${String(q.id)}`;
-  const label = q.question || q.prompt || q.title || q.text || "";
-  return label ? `txt:${label.trim().toLowerCase()}` : `idx:${fallbackIdx}`;
+  const label = getQuestionText(q);
+  return label ? `txt:${normalizeQuestionText(label)}` : `idx:${fallbackIdx}`;
 }
 
 function pickRandomQuestionsSeries(
@@ -361,42 +376,39 @@ function extractOptionsList(
   return LETTERS.map((letter) => String(rawOptions[letter] ?? ""));
 }
 
-function findMatchingLocalQuestion(
+function findMatchingQuestionInPool(
   candidate: QuizQuestionItem | null,
-  fallbackIndex: number
+  pool: QuizQuestionItem[]
 ): QuizQuestionItem | null {
-  const localSource = QUESTIONS as QuizQuestionItem[];
-  if (!Array.isArray(localSource) || localSource.length === 0) return null;
+  if (!candidate || !Array.isArray(pool) || pool.length === 0) return null;
 
-  if (candidate) {
-    if (candidate.id !== undefined && candidate.id !== null) {
-      const byId = localSource.find(
-        (item) => item.id !== undefined && String(item.id) === String(candidate.id)
-      );
-      if (byId) return byId;
-    }
+  const withOptions = pool.filter((item) =>
+    hasValidOptionsList(item?.options || item?.choices || item?.answers)
+  );
+  const searchPool = withOptions.length > 0 ? withOptions : pool;
 
-    const candidateText = String(
-      candidate.question || candidate.prompt || candidate.title || candidate.text || ""
-    )
-      .trim()
-      .toLowerCase();
-
-    if (candidateText) {
-      const byText = localSource.find((item) => {
-        const itemText = String(
-          item.question || item.prompt || item.title || item.text || ""
-        )
-          .trim()
-          .toLowerCase();
-        return itemText === candidateText;
-      });
-      if (byText) return byText;
-    }
+  if (candidate.id !== undefined && candidate.id !== null) {
+    const byId = searchPool.find(
+      (item) => item.id !== undefined && String(item.id) === String(candidate.id)
+    );
+    if (byId) return byId;
   }
 
-  const safeIdx = Math.max(0, Math.min(fallbackIndex, localSource.length - 1));
-  return localSource[safeIdx] ?? null;
+  const candidateNorm = normalizeQuestionText(getQuestionText(candidate));
+  if (!candidateNorm) return null;
+
+  const exactNorm = searchPool.find(
+    (item) => normalizeQuestionText(getQuestionText(item)) === candidateNorm
+  );
+  if (exactNorm) return exactNorm;
+
+  const partialMatch = searchPool.find((item) => {
+    const itemNorm = normalizeQuestionText(getQuestionText(item));
+    if (!itemNorm) return false;
+    return itemNorm.includes(candidateNorm) || candidateNorm.includes(itemNorm);
+  });
+
+  return partialMatch ?? null;
 }
 
 function getOptionFontSize(text: string): string {
@@ -854,6 +866,7 @@ export default function TvQuizPage() {
 
     const payloadQuestion =
       quizState.currentQuestion || quizState.activeQuestion || null;
+    const localPool = QUESTIONS as QuizQuestionItem[];
 
     if (payloadQuestion) {
       const rawPayloadOpts =
@@ -865,18 +878,37 @@ export default function TvQuizPage() {
         return payloadQuestion;
       }
 
-      const matchedLocal = findMatchingLocalQuestion(
+      const matchedInSeries = findMatchingQuestionInPool(
         payloadQuestion,
-        activeQuestionIndex
+        questions
       );
-      if (matchedLocal) {
+      const matchedInLocal =
+        matchedInSeries ?? findMatchingQuestionInPool(payloadQuestion, localPool);
+
+      if (matchedInLocal) {
         return {
-          ...matchedLocal,
+          ...matchedInLocal,
           ...payloadQuestion,
           options:
-            matchedLocal.options ?? matchedLocal.choices ?? matchedLocal.answers,
+            matchedInLocal.options ??
+            matchedInLocal.choices ??
+            matchedInLocal.answers,
+          correct:
+            payloadQuestion.correct ??
+            payloadQuestion.correctAnswer ??
+            payloadQuestion.correct_answer ??
+            matchedInLocal.correct ??
+            matchedInLocal.correctAnswer ??
+            matchedInLocal.correct_answer,
+          correctIndex:
+            payloadQuestion.correctIndex ??
+            payloadQuestion.correct_index ??
+            matchedInLocal.correctIndex ??
+            matchedInLocal.correct_index,
         };
       }
+
+      return payloadQuestion;
     }
 
     if (questions.length > 0) {
@@ -888,10 +920,7 @@ export default function TvQuizPage() {
         if (hasValidOptionsList(rawSeriesOpts)) {
           return fromSeries;
         }
-        const matchedLocal = findMatchingLocalQuestion(
-          fromSeries,
-          activeQuestionIndex
-        );
+        const matchedLocal = findMatchingQuestionInPool(fromSeries, localPool);
         if (matchedLocal) {
           return {
             ...matchedLocal,
@@ -902,10 +931,11 @@ export default function TvQuizPage() {
               matchedLocal.answers,
           };
         }
+        return fromSeries;
       }
     }
 
-    return findMatchingLocalQuestion(payloadQuestion, activeQuestionIndex);
+    return null;
   }, [activeQuestionIndex, quizState, questions]);
 
   const isPaused = useMemo<boolean>(() => {
@@ -1036,13 +1066,7 @@ export default function TvQuizPage() {
 
   const questionLabel = useMemo<string>(() => {
     if (!currentQuestion) return "";
-    return (
-      currentQuestion.question ||
-      currentQuestion.prompt ||
-      currentQuestion.title ||
-      currentQuestion.text ||
-      ""
-    );
+    return getQuestionText(currentQuestion);
   }, [currentQuestion]);
 
   const options = useMemo<string[]>(() => {
