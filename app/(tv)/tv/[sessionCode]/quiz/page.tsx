@@ -16,6 +16,7 @@ interface QuizBotConfig {
   nickname: string;
   avatar?: string;
   botLevel?: BotLevel;
+  score?: number;
 }
 
 interface QuizQuestionItem {
@@ -716,6 +717,7 @@ export default function TvQuizPage() {
             is_connected: true,
             isBot: true,
             botLevel: b.botLevel ?? "normal",
+            score: typeof b.score === "number" ? b.score : undefined,
           }) as ExtendedPlayer
       );
 
@@ -801,6 +803,32 @@ export default function TvQuizPage() {
             total_score: 0,
           }))
         );
+
+        const { data: latestRow } = await supabase
+          .from("game_sessions")
+          .select("game_state")
+          .eq("id", session.id)
+          .maybeSingle<{ game_state?: Record<string, unknown> | null }>();
+
+        if (latestRow) {
+          const baseState = cleanQuizState(latestRow.game_state ?? {});
+          const resetBots = Array.isArray(baseState.bots)
+            ? baseState.bots.map((b) => ({ ...b, score: 0 }))
+            : undefined;
+          const nextState: QuizStatePayload = {
+            ...baseState,
+            scores: {},
+            points: {},
+            pointsMap: {},
+            playerScores: {},
+            player_scores: {},
+            ...(resetBots ? { bots: resetBots } : {}),
+          };
+          await supabase
+            .from("game_sessions")
+            .update({ game_state: nextState })
+            .eq("id", session.id);
+        }
       } finally {
         isResettingScoresRef.current = false;
       }
@@ -1257,6 +1285,14 @@ export default function TvQuizPage() {
       ...(quizState.scores ?? {}),
     };
 
+    if (Array.isArray(quizState.bots)) {
+      for (const b of quizState.bots) {
+        if (b?.id && typeof b.score === "number" && Number.isFinite(b.score)) {
+          merged[String(b.id)] = b.score;
+        }
+      }
+    }
+
     for (const row of playerScoresRows) {
       const scoreRecord = row as unknown as {
         player_id?: string | null;
@@ -1313,7 +1349,6 @@ export default function TvQuizPage() {
     };
   }, [session?.id, correctLetter]);
 
-  // Planification stable des réponses des bots
   useEffect(() => {
     const canBotsPlay =
       Boolean(supabase) &&
@@ -1463,7 +1498,9 @@ export default function TvQuizPage() {
 
           const delta = chosen === correctLetter ? 3 : -1;
           const prevScore = player.isBot
-            ? botScoresMap[playerIdStr] ?? 0
+            ? botScoresMap[playerIdStr] ??
+              toFiniteNumber(player.score) ??
+              0
             : currentScoreByPlayerId.get(playerIdStr) ?? 0;
           const nextScore = Math.max(0, prevScore + delta);
 
@@ -1521,15 +1558,95 @@ export default function TvQuizPage() {
           }
         }
 
-        if (humanUpdates.length > 0) {
-          const { data: refreshedScores } = await supabase
-            .from("player_scores")
-            .select("*")
-            .eq("session_id", session.id);
+        const refreshedScoresResult =
+          humanUpdates.length > 0
+            ? await supabase
+                .from("player_scores")
+                .select("*")
+                .eq("session_id", session.id)
+            : { data: null };
 
-          if (refreshedScores) {
-            setPlayerScoresRows(refreshedScores as PlayerScore[]);
+        if (refreshedScoresResult.data) {
+          setPlayerScoresRows(refreshedScoresResult.data as PlayerScore[]);
+        }
+
+        const { data: latestSessionRow } = await supabase
+          .from("game_sessions")
+          .select("game_state")
+          .eq("id", session.id)
+          .maybeSingle<{ game_state?: Record<string, unknown> | null }>();
+
+        const baseState = cleanQuizState(latestSessionRow?.game_state ?? {});
+        const nextScoresObj: Record<string, number> = {};
+
+        for (const row of (refreshedScoresResult.data as PlayerScore[] | null) ??
+          playerScoresRows) {
+          const rec = row as unknown as {
+            player_id?: string | null;
+            total_score?: number | null;
+            score?: number | null;
+          };
+          const val = rec.total_score ?? rec.score;
+          if (rec.player_id && typeof val === "number" && Number.isFinite(val)) {
+            nextScoresObj[String(rec.player_id)] = val;
           }
+        }
+
+        for (const u of updates) {
+          nextScoresObj[u.playerId] = u.nextScore;
+        }
+
+        const botScoreById = new Map<string, number>();
+        for (const bu of botUpdates) {
+          botScoreById.set(bu.playerId, bu.nextScore);
+        }
+
+        const nextBots = Array.isArray(baseState.bots)
+          ? baseState.bots.map((b) => {
+              const bId = String(b.id);
+              const updatedBotScore = botScoreById.get(bId);
+              return updatedBotScore !== undefined
+                ? { ...b, score: updatedBotScore }
+                : b;
+            })
+          : undefined;
+
+        const nextGameState: QuizStatePayload = {
+          ...baseState,
+          scores: {
+            ...(baseState.scores ?? {}),
+            ...nextScoresObj,
+          },
+          points: {
+            ...(baseState.points ?? {}),
+            ...nextScoresObj,
+          },
+          pointsMap: {
+            ...(baseState.pointsMap ?? {}),
+            ...nextScoresObj,
+          },
+          playerScores: {
+            ...(baseState.playerScores ?? {}),
+            ...nextScoresObj,
+          },
+          player_scores: {
+            ...(baseState.player_scores ?? {}),
+            ...nextScoresObj,
+          },
+          ...(nextBots ? { bots: nextBots } : {}),
+        };
+
+        const { error: stateUpdateError } = await supabase
+          .from("game_sessions")
+          .update({ game_state: nextGameState })
+          .eq("id", session.id);
+
+        if (!stateUpdateError) {
+          setSession((prev) =>
+            prev && prev.id === session.id
+              ? { ...prev, game_state: nextGameState }
+              : prev
+          );
         }
       } finally {
         isScoringRef.current = false;
