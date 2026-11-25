@@ -1339,7 +1339,7 @@ export default function AdminConsolePage() {
     });
   };
 
-  const handleAddBot = () => {
+    const handleAddBot = () => {
     const usedNames = new Set(
       players.map((p) => p.nickname.replace(/^Bot\s+/i, "").trim().toLowerCase())
     );
@@ -1363,7 +1363,8 @@ export default function AdminConsolePage() {
       botLevel: selectedBotLevel,
     } as BotPlayerItem;
 
-    setPlayers((prev) => [...prev, newBot]);
+    const nextPlayers = [...players, newBot];
+    setPlayers(nextPlayers);
     setScores((prev) => [
       ...prev,
       {
@@ -1373,7 +1374,44 @@ export default function AdminConsolePage() {
         total_score: 0,
       } as unknown as PlayerScore,
     ]);
+
+    if (supabase && sessionId && isUuid(sessionId)) {
+      const botsList = nextPlayers
+        .filter((p) => Boolean(p.isBot))
+        .map((b) => ({
+          id: b.id,
+          nickname: b.nickname,
+          avatar: b.avatar ?? "🤖",
+          botLevel: b.botLevel ?? "normal",
+        }));
+
+      void supabase
+        .from("game_sessions")
+        .select("game_state")
+        .eq("id", sessionId)
+        .maybeSingle()
+        .then(({ data }) => {
+          const currentGs =
+            data &&
+            typeof data === "object" &&
+            "game_state" in data &&
+            data.game_state &&
+            typeof data.game_state === "object"
+              ? (data.game_state as Record<string, unknown>)
+              : {};
+          void supabase
+            .from("game_sessions")
+            .update({
+              game_state: {
+                ...currentGs,
+                bots: botsList,
+              },
+            })
+            .eq("id", sessionId);
+        });
+    }
   };
+
 
   const handleSelectGame = async (gameId: string) => {
     if (isGameLaunched) return;
