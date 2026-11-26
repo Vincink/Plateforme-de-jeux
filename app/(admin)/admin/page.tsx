@@ -522,7 +522,7 @@ function getAnswerBadgeStyle(letter: string): {
     case "A":
       return { bg: "#EF4444", border: "#FCA5A5", text: "#FFFFFF" };
     case "B":
-      return { bg: "#3B82F6", border: "#93C5FD", text: "#FFFFFF" };
+      return { bg: "#3B2F6", border: "#93C5FD", text: "#FFFFFF" };
     case "C":
       return { bg: "#EAB308", border: "#FDE047", text: "#111827" };
     case "D":
@@ -1496,6 +1496,14 @@ export default function AdminConsolePage() {
         nextPausedRemaining: null,
         resetAnswers: false,
       });
+
+      if (isTargetBlitzGame(currentGame) && typeof window !== "undefined") {
+        window.open(
+          `/tv/${sessionCode}/target`,
+          "_blank",
+          "noopener,noreferrer"
+        );
+      }
     }
   };
 
@@ -1899,7 +1907,7 @@ export default function AdminConsolePage() {
             type="button"
             aria-label={`Redimensionner ${title}`}
             onPointerDown={(e) => startResizeWidget(e, widgetId)}
-            style={{ touchAction: "none" }}
+            style={{ touchAction: isEditLayoutMode ? "none" : "auto" }}
             className="absolute bottom-1.5 right-1.5 z-40 h-7 w-7 rounded-xl bg-amber-400 text-black flex items-center justify-center shadow-lg cursor-nwse-resize hover:bg-amber-300"
             title="Glisser pour redimensionner"
           >
@@ -2001,7 +2009,11 @@ export default function AdminConsolePage() {
             </div>
 
             <Link
-              href={`/tv/${sessionCode}`}
+              href={
+                isTargetBlitz
+                  ? `/tv/${sessionCode}/target`
+                  : `/tv/${sessionCode}`
+              }
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 font-semibold text-sm transition"
