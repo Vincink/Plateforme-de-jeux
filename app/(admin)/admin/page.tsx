@@ -757,7 +757,7 @@ export default function AdminConsolePage() {
 
   const resolveValidGameUuid = (
     candidateGame?: CatalogGame | null
-  ): string | null => {
+  ): string => {
     if (isUuid(candidateGame?.id)) {
       return candidateGame.id;
     }
@@ -768,7 +768,7 @@ export default function AdminConsolePage() {
       return matchedBySlug.id;
     }
     const firstDbUuidGame = games.find((g) => isUuid(g.id));
-    return firstDbUuidGame?.id ?? null;
+    return firstDbUuidGame?.id ?? GRAND_QUIZ_UUID;
   };
 
   const extractAnswersFromGameState = (
@@ -1077,12 +1077,6 @@ export default function AdminConsolePage() {
 
     const activeTargetGame = params.game ?? selectedGameRef.current ?? selectedGame;
     const validGameUuid = resolveValidGameUuid(activeTargetGame);
-    if (!validGameUuid) {
-      setDbError(
-        "Aucun UUID de jeu trouvé dans la table 'games' Supabase. Vérifie les permissions SELECT sur 'games'."
-      );
-      return;
-    }
 
     const effectiveQuestionIndex =
       params.nextQuestionIndex !== undefined
@@ -1124,12 +1118,7 @@ export default function AdminConsolePage() {
 
     const blitzGameMode = isTargetBlitzGame(activeTargetGame);
     const numericGameMode = !blitzGameMode && isJusteChiffreGame(activeTargetGame);
-    const isQuizGame =
-      !blitzGameMode &&
-      !numericGameMode &&
-      (validGameUuid === GRAND_QUIZ_UUID ||
-        activeTargetGame?.slug === "quiz" ||
-        activeTargetGame?.title?.toLowerCase().includes("quiz"));
+    const isQuizGame = !blitzGameMode && !numericGameMode;
 
     const hasQuestionStarted = effectiveQuestionIndex >= 0;
     const isPaused = params.nextStatus === "paused";
@@ -1304,14 +1293,10 @@ export default function AdminConsolePage() {
         return;
       }
 
-      const { data: dbGames, error: gamesError } = await supabase
+      const { data: dbGames } = await supabase
         .from("games")
         .select("id, slug, title, tagline, min_players, max_players, is_active")
         .order("title", { ascending: true });
-
-      if (gamesError && !cancelled) {
-        setDbError(`Lecture table 'games' impossible : ${gamesError.message}`);
-      }
 
       const rows = Array.isArray(dbGames) ? (dbGames as CatalogGame[]) : [];
       const validRows = rows.filter((g) => isUuid(g.id));
