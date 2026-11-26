@@ -331,7 +331,6 @@ export default function PlayerControllerPage() {
     string | null
   >(null);
 
-  // États dédiés au pavé numérique Le Juste Chiffre
   const [digitsInput, setDigitsInput] = useState<string>("");
   const [submittedEstimate, setSubmittedEstimate] = useState<number | null>(
     null
@@ -340,7 +339,6 @@ export default function PlayerControllerPage() {
   const [isSubmittingEstimate, setIsSubmittingEstimate] =
     useState<boolean>(false);
 
-  // États dédiés au trackpad Target Blitz
   const cursorRef = useRef({ x: 50, y: 50 });
   const [cursorPos, setCursorPos] = useState({ x: 50, y: 50 });
   const [isFiring, setIsFiring] = useState<boolean>(false);
@@ -376,6 +374,7 @@ export default function PlayerControllerPage() {
   const sessionRef = useRef<ExtendedGameSession | null>(null);
   const scoresRef = useRef<PlayerScore[]>([]);
   const lastResetKeyRef = useRef<string>("");
+  const lockedBlitzGameIdRef = useRef<string | null>(null);
 
   identityRef.current = identity;
   sessionRef.current = session;
@@ -552,11 +551,40 @@ export default function PlayerControllerPage() {
   const seriesSeed =
     typeof quizState.seriesSeed === "string" ? quizState.seriesSeed : "";
 
-  const isTargetBlitzMode = useMemo(
-    () =>
-      isTargetBlitzGameState(quizState, gameMeta?.title, gameMeta?.slug),
-    [quizState, gameMeta?.title, gameMeta?.slug]
+  const detectedBlitz = isTargetBlitzGameState(
+    quizState,
+    gameMeta?.title,
+    gameMeta?.slug
   );
+
+  useEffect(() => {
+    if (statusLower === "lobby" || statusLower === "finished") {
+      lockedBlitzGameIdRef.current = null;
+      return;
+    }
+    if (detectedBlitz) {
+      lockedBlitzGameIdRef.current = activeGameId ?? "__blitz_active__";
+    } else if (
+      activeGameId &&
+      lockedBlitzGameIdRef.current &&
+      lockedBlitzGameIdRef.current !== "__blitz_active__" &&
+      activeGameId !== lockedBlitzGameIdRef.current
+    ) {
+      lockedBlitzGameIdRef.current = null;
+    }
+  }, [detectedBlitz, activeGameId, statusLower]);
+
+  const isTargetBlitzMode = useMemo(() => {
+    if (detectedBlitz) return true;
+    const isSessionActive =
+      statusLower !== "lobby" &&
+      statusLower !== "finished" &&
+      statusLower !== "ended" &&
+      statusLower !== "completed";
+    if (!isSessionActive || !lockedBlitzGameIdRef.current) return false;
+    if (lockedBlitzGameIdRef.current === "__blitz_active__") return true;
+    return activeGameId === lockedBlitzGameIdRef.current;
+  }, [detectedBlitz, statusLower, activeGameId]);
 
   const isJusteChiffreMode = useMemo(
     () =>
@@ -847,7 +875,6 @@ export default function PlayerControllerPage() {
     questionDuration,
   ]);
 
-  // Restauration de l'estimation existante si le joueur recharge ou se synchronise
   useEffect(() => {
     if (!isJusteChiffreMode || !identity?.playerId) return;
     const rawMap =
@@ -1134,7 +1161,6 @@ export default function PlayerControllerPage() {
     [currentPlayerRecord?.id, identity?.playerId, players]
   );
 
-  // --- Canal Realtime Broadcast & Handlers Target Blitz ---
   const stateStunnedUntil = useMemo(() => {
     if (!identity?.playerId) return 0;
     const raw = quizState.stunnedUntil?.[String(identity.playerId)];
@@ -1537,7 +1563,6 @@ export default function PlayerControllerPage() {
     );
   };
 
-  // --- Handlers pavé numérique Le Juste Chiffre ---
   const isKeypadLocked =
     submittedEstimate !== null || !isPlaying || isSubmittingEstimate;
 
@@ -1671,7 +1696,6 @@ export default function PlayerControllerPage() {
       }`}
     >
       <div className="max-w-md w-full mx-auto flex-1 flex flex-col space-y-4">
-        {/* Top Bar */}
         <header className="flex items-center justify-between border-b border-white/10 pb-3.5 shrink-0">
           <div>
             <div className="text-[11px] uppercase tracking-widest text-neutral-400">
@@ -1705,7 +1729,6 @@ export default function PlayerControllerPage() {
           </div>
         </header>
 
-        {/* Join Form or Controller */}
         {!identity ? (
           <form
             onSubmit={handleJoinGame}
@@ -1737,7 +1760,6 @@ export default function PlayerControllerPage() {
           </form>
         ) : (
           <main className="flex-1 flex flex-col space-y-4">
-            {/* Player Status Card */}
             <div
               style={{
                 backgroundColor: myColor.bgHex,
@@ -1774,7 +1796,6 @@ export default function PlayerControllerPage() {
               )}
             </div>
 
-            {/* Active Question / Action Zone */}
             <div className="flex-1 flex flex-col justify-between bg-white/5 border border-white/10 rounded-3xl p-4 sm:p-5 space-y-4">
               {roundStatus !== "playing" ? (
                 <div className="my-auto py-8 text-center space-y-1">
@@ -1794,7 +1815,6 @@ export default function PlayerControllerPage() {
                   </p>
                 </div>
               ) : isTargetBlitzMode ? (
-                /* ================= MANETTE TRACKPAD TARGET BLITZ ================= */
                 <div className="flex-1 flex flex-col justify-between gap-3">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
@@ -1822,7 +1842,6 @@ export default function PlayerControllerPage() {
                         : "border-cyan-400/45 bg-black/40 active:border-cyan-300"
                     }`}
                   >
-                    {/* Repère visuel du viseur */}
                     <div
                       className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 transition-transform duration-75"
                       style={{
@@ -1879,7 +1898,6 @@ export default function PlayerControllerPage() {
                   </button>
                 </div>
               ) : isJusteChiffreMode ? (
-                /* ================= PAVÉ NUMÉRIQUE LE JUSTE CHIFFRE (1 - 1000) ================= */
                 <div className="flex-1 flex flex-col justify-between gap-3">
                   <div className="rounded-2xl bg-black/40 border border-white/10 p-3 flex flex-col items-center gap-1.5">
                     <div className="w-full flex items-center justify-between text-[11px] font-bold text-neutral-400">
@@ -1978,7 +1996,6 @@ export default function PlayerControllerPage() {
                   </button>
                 </div>
               ) : (
-                /* ================= 4 BOUTONS QUIZ (A / B / C / D) ================= */
                 <div className="flex-1 grid grid-cols-2 grid-rows-2 gap-4 min-h-[300px]">
                   {qcmChoices.map((choice) => {
                     const isHighlighted =
