@@ -830,6 +830,44 @@ export default function AdminConsolePage() {
     }
   };
 
+  const persistBotsListToSession = async (
+    targetSessionId: string,
+    nextPlayersList: BotPlayerItem[],
+    nextScoresList: PlayerScore[]
+  ) => {
+    if (!supabase || !isUuid(targetSessionId)) return;
+    const botsList = extractBotsForState(nextPlayersList, nextScoresList);
+    const { data } = await supabase
+      .from("game_sessions")
+      .select("game_state")
+      .eq("id", targetSessionId)
+      .maybeSingle();
+
+    const currentGs =
+      data &&
+      typeof data === "object" &&
+      "game_state" in data &&
+      data.game_state &&
+      typeof data.game_state === "object"
+        ? (data.game_state as Record<string, unknown>)
+        : {};
+
+    const { error } = await supabase
+      .from("game_sessions")
+      .update({
+        game_state: {
+          ...currentGs,
+          bots: botsList,
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", targetSessionId);
+
+    if (error) {
+      setDbError(`Synchronisation bots impossible : ${error.message}`);
+    }
+  };
+
   const loadPlayersAndScoresForSession = async (targetSessionId: string) => {
     if (!supabase || !isUuid(targetSessionId)) return;
 
@@ -1074,6 +1112,7 @@ export default function AdminConsolePage() {
         game_id: validGameUuid,
         status: params.nextStatus,
         show_qr: params.qrVisible,
+        updated_at: new Date().toISOString(),
       };
 
       if (numericGameMode) {
@@ -1473,7 +1512,7 @@ export default function AdminConsolePage() {
     });
   };
 
-  const handleAddBot = () => {
+  const handleAddBot = async () => {
     const usedNames = new Set(
       players.map((p) => p.nickname.replace(/^Bot\s+/i, "").trim().toLowerCase())
     );
@@ -1511,32 +1550,8 @@ export default function AdminConsolePage() {
     setPlayers(nextPlayers);
     setScores(nextScores);
 
-    if (supabase && sessionId && isUuid(sessionId)) {
-      const botsList = extractBotsForState(nextPlayers, nextScores);
-      void supabase
-        .from("game_sessions")
-        .select("game_state")
-        .eq("id", sessionId)
-        .maybeSingle()
-        .then(({ data }) => {
-          const currentGs =
-            data &&
-            typeof data === "object" &&
-            "game_state" in data &&
-            data.game_state &&
-            typeof data.game_state === "object"
-              ? (data.game_state as Record<string, unknown>)
-              : {};
-          void supabase
-            .from("game_sessions")
-            .update({
-              game_state: {
-                ...currentGs,
-                bots: botsList,
-              },
-            })
-            .eq("id", sessionId);
-        });
+    if (sessionId && isUuid(sessionId)) {
+      await persistBotsListToSession(sessionId, nextPlayers, nextScores);
     }
   };
 
@@ -1604,8 +1619,9 @@ export default function AdminConsolePage() {
   const handleKickPlayer = async (playerId: string) => {
     const target = players.find((p) => p.id === playerId);
     const nextPlayers = players.filter((p) => p.id !== playerId);
+    const nextScores = scores.filter((s) => s.player_id !== playerId);
     setPlayers(nextPlayers);
-    setScores((prev) => prev.filter((s) => s.player_id !== playerId));
+    setScores(nextScores);
     setPlayerAnswersById((prev) => {
       const copy = { ...prev };
       delete copy[playerId];
@@ -1613,32 +1629,8 @@ export default function AdminConsolePage() {
     });
 
     if (target?.isBot) {
-      if (supabase && sessionId && isUuid(sessionId)) {
-        const botsList = extractBotsForState(nextPlayers, scores);
-        void supabase
-          .from("game_sessions")
-          .select("game_state")
-          .eq("id", sessionId)
-          .maybeSingle()
-          .then(({ data }) => {
-            const currentGs =
-              data &&
-              typeof data === "object" &&
-              "game_state" in data &&
-              data.game_state &&
-              typeof data.game_state === "object"
-                ? (data.game_state as Record<string, unknown>)
-                : {};
-            void supabase
-              .from("game_sessions")
-              .update({
-                game_state: {
-                  ...currentGs,
-                  bots: botsList,
-                },
-              })
-              .eq("id", sessionId);
-          });
+      if (sessionId && isUuid(sessionId)) {
+        await persistBotsListToSession(sessionId, nextPlayers, nextScores);
       }
       return;
     }
@@ -1739,6 +1731,7 @@ export default function AdminConsolePage() {
               [playerId]: nextScore,
             },
           },
+          updated_at: new Date().toISOString(),
         })
         .eq("id", sessionId);
       return;
@@ -2133,7 +2126,7 @@ export default function AdminConsolePage() {
 
               <button
                 type="button"
-                onClick={handleAddBot}
+                onClick={() => void handleAddBot()}
                 className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-200 border border-sky-500/30 font-semibold transition"
               >
                 <UserPlus className="w-4 h-4" />
