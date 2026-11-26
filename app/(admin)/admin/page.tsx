@@ -522,7 +522,7 @@ function getAnswerBadgeStyle(letter: string): {
     case "A":
       return { bg: "#EF4444", border: "#FCA5A5", text: "#FFFFFF" };
     case "B":
-      return { bg: "#3B2F6", border: "#93C5FD", text: "#FFFFFF" };
+      return { bg: "#3B82F6", border: "#93C5FD", text: "#FFFFFF" };
     case "C":
       return { bg: "#EAB308", border: "#FDE047", text: "#111827" };
     case "D":
@@ -551,6 +551,7 @@ export default function AdminConsolePage() {
   );
   const [status, setStatus] = useState<SessionStatus>("lobby");
   const [questionIndex, setQuestionIndex] = useState<number>(-1);
+  const [blitzRoundNumber, setBlitzRoundNumber] = useState<number>(0);
   const [questionStartedAt, setQuestionStartedAt] = useState<string | null>(
     null
   );
@@ -1058,6 +1059,7 @@ export default function AdminConsolePage() {
     nextStatus: SessionStatus;
     qrVisible: boolean;
     nextQuestionIndex?: number;
+    nextBlitzRoundNumber?: number;
     nextQuestionStartedAt?: string | null;
     nextPausedRemaining?: number | null;
     nextSeriesNumber?: number;
@@ -1086,6 +1088,11 @@ export default function AdminConsolePage() {
       params.nextQuestionIndex !== undefined
         ? params.nextQuestionIndex
         : questionIndex;
+
+    const effectiveBlitzRound =
+      params.nextBlitzRoundNumber !== undefined
+        ? params.nextBlitzRoundNumber
+        : blitzRoundNumber;
 
     const effectiveStartedAt =
       params.nextQuestionStartedAt !== undefined
@@ -1159,18 +1166,20 @@ export default function AdminConsolePage() {
       };
 
       if (blitzGameMode) {
+        const roundActive =
+          params.nextStatus === "playing" && effectiveBlitzRound > 0;
         basePayload.game_state = {
           mode: "target-blitz",
           gameSlug: "target-blitz",
           bots: botsForState,
-          questionStarted: params.nextStatus === "playing",
-          roundTriggered: params.nextStatus === "playing",
-          questionIndex: 0,
-          currentQuestionIndex: 0,
-          questionStartedAt:
-            params.nextStatus === "playing"
-              ? effectiveStartedAt ?? new Date().toISOString()
-              : null,
+          roundNumber: effectiveBlitzRound,
+          questionStarted: roundActive,
+          roundTriggered: roundActive,
+          questionIndex: Math.max(0, effectiveBlitzRound - 1),
+          currentQuestionIndex: Math.max(0, effectiveBlitzRound - 1),
+          questionStartedAt: roundActive
+            ? effectiveStartedAt ?? new Date().toISOString()
+            : null,
           durationSeconds: TARGET_BLITZ_DURATION_SECONDS,
           isPaused,
           pausedRemainingSeconds: isPaused ? effectivePausedRemaining : null,
@@ -1337,6 +1346,7 @@ export default function AdminConsolePage() {
             nextStatus: status,
             qrVisible: showQrOnTv,
             nextQuestionIndex: -1,
+            nextBlitzRoundNumber: 0,
             nextQuestionStartedAt: null,
             nextPausedRemaining: null,
             nextSeriesNumber: 1,
@@ -1387,6 +1397,7 @@ export default function AdminConsolePage() {
     setSessionCode(newCode);
     setStatus("lobby");
     setQuestionIndex(-1);
+    setBlitzRoundNumber(0);
     setQuestionStartedAt(null);
     setPausedRemainingSeconds(null);
     setSeriesNumber(1);
@@ -1405,6 +1416,7 @@ export default function AdminConsolePage() {
       nextStatus: "lobby",
       qrVisible: showQrOnTv,
       nextQuestionIndex: -1,
+      nextBlitzRoundNumber: 0,
       nextQuestionStartedAt: null,
       nextPausedRemaining: null,
       nextSeriesNumber: 1,
@@ -1423,6 +1435,7 @@ export default function AdminConsolePage() {
     if (shouldResetQuestions) {
       setStatus(nextStatus);
       setQuestionIndex(-1);
+      setBlitzRoundNumber(0);
       setQuestionStartedAt(null);
       setPausedRemainingSeconds(null);
       setRemoteCurrentQuestion(null);
@@ -1435,6 +1448,7 @@ export default function AdminConsolePage() {
         nextStatus,
         qrVisible: showQrOnTv,
         nextQuestionIndex: -1,
+        nextBlitzRoundNumber: 0,
         nextQuestionStartedAt: null,
         nextPausedRemaining: null,
         resetAnswers: true,
@@ -1478,8 +1492,6 @@ export default function AdminConsolePage() {
         resumedStartedAt = new Date(
           nowMs - elapsedBeforePause * 1000
         ).toISOString();
-      } else if (isTargetBlitzGame(currentGame) && !resumedStartedAt) {
-        resumedStartedAt = new Date(nowMs).toISOString();
       }
 
       setStatus("playing");
@@ -1496,14 +1508,37 @@ export default function AdminConsolePage() {
         nextPausedRemaining: null,
         resetAnswers: false,
       });
+    }
+  };
 
-      if (isTargetBlitzGame(currentGame) && typeof window !== "undefined") {
-        window.open(
-          `/tv/${sessionCode}/target`,
-          "_blank",
-          "noopener,noreferrer"
-        );
-      }
+  const handleLaunchBlitzRound = async () => {
+    const nextRound = blitzRoundNumber < 1 ? 1 : blitzRoundNumber + 1;
+    const startedIso = new Date().toISOString();
+    const currentGame = selectedGameRef.current ?? selectedGame;
+
+    setStatus("playing");
+    setBlitzRoundNumber(nextRound);
+    setQuestionStartedAt(startedIso);
+    setPausedRemainingSeconds(null);
+
+    await syncSessionToDb({
+      id: sessionId,
+      code: sessionCode,
+      game: currentGame,
+      nextStatus: "playing",
+      qrVisible: showQrOnTv,
+      nextBlitzRoundNumber: nextRound,
+      nextQuestionStartedAt: startedIso,
+      nextPausedRemaining: null,
+      resetAnswers: false,
+    });
+
+    if (typeof window !== "undefined") {
+      window.open(
+        `/tv/${sessionCode}/target`,
+        "_blank",
+        "noopener,noreferrer"
+      );
     }
   };
 
@@ -1647,6 +1682,7 @@ export default function AdminConsolePage() {
     setSeriesSeed(nextSeed);
     setJusteChiffreQuestions(nextJcPicked);
     setQuestionIndex(-1);
+    setBlitzRoundNumber(0);
     setQuestionStartedAt(null);
     setPausedRemainingSeconds(null);
     setRemoteCurrentQuestion(null);
@@ -1658,6 +1694,7 @@ export default function AdminConsolePage() {
       nextStatus: status,
       qrVisible: showQrOnTv,
       nextQuestionIndex: -1,
+      nextBlitzRoundNumber: 0,
       nextQuestionStartedAt: null,
       nextPausedRemaining: null,
       nextSeriesSeed: nextSeed,
@@ -2009,11 +2046,7 @@ export default function AdminConsolePage() {
             </div>
 
             <Link
-              href={
-                isTargetBlitz
-                  ? `/tv/${sessionCode}/target`
-                  : `/tv/${sessionCode}`
-              }
+              href={`/tv/${sessionCode}`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/30 font-semibold text-sm transition"
@@ -2060,7 +2093,9 @@ export default function AdminConsolePage() {
                   <span className="text-white font-medium">
                     {selectedGame?.title ?? "Aucun"}
                   </span>
-                  {!isTargetBlitz && questionIndex >= 0
+                  {isTargetBlitz && blitzRoundNumber > 0
+                    ? ` • Manche ${blitzRoundNumber}`
+                    : !isTargetBlitz && questionIndex >= 0
                     ? ` • Question ${questionIndex + 1} / ${totalQuestions}`
                     : ""}
                 </p>
@@ -2161,19 +2196,34 @@ export default function AdminConsolePage() {
                     </button>
                   )}
 
-                  <button
-                    type="button"
-                    disabled={isTargetBlitz || !isGameLaunched || isEndOfSeries}
-                    onClick={() => void handleNextQuestion()}
-                    className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold transition"
-                  >
-                    <SkipForward className="w-4 h-4" />
-                    <span className="truncate">
-                      {questionIndex < 0
-                        ? "Lancer Question 1"
-                        : "Question suivante"}
-                    </span>
-                  </button>
+                  {isTargetBlitz ? (
+                    <button
+                      type="button"
+                      onClick={() => void handleLaunchBlitzRound()}
+                      className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-fuchsia-500/25 hover:bg-fuchsia-500/35 text-fuchsia-200 border border-fuchsia-400/40 font-semibold transition"
+                    >
+                      <SkipForward className="w-4 h-4" />
+                      <span className="truncate">
+                        {blitzRoundNumber < 1
+                          ? "Lancer la manche 1"
+                          : `Lancer la manche ${blitzRoundNumber + 1}`}
+                      </span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={!isGameLaunched || isEndOfSeries}
+                      onClick={() => void handleNextQuestion()}
+                      className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold transition"
+                    >
+                      <SkipForward className="w-4 h-4" />
+                      <span className="truncate">
+                        {questionIndex < 0
+                          ? "Lancer Question 1"
+                          : "Question suivante"}
+                      </span>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
