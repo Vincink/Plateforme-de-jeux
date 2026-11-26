@@ -43,6 +43,19 @@ type ExtendedPlayer = SessionPlayer & {
   botLevel?: BotLevel;
 };
 
+function normalizeGameState(rawState: unknown): SalonGameState {
+  if (!rawState) return {};
+  if (typeof rawState === "string") {
+    try {
+      const parsed = JSON.parse(rawState);
+      return parsed && typeof parsed === "object" ? (parsed as SalonGameState) : {};
+    } catch {
+      return {};
+    }
+  }
+  return typeof rawState === "object" ? (rawState as SalonGameState) : {};
+}
+
 function isJusteChiffreTarget(
   state: SalonGameState | null | undefined,
   meta: GameMeta | null | undefined
@@ -82,16 +95,21 @@ export default function TvSalonPage() {
   const [gameMeta, setGameMeta] = useState<GameMeta | null>(null);
   const [joinUrl, setJoinUrl] = useState<string>("");
 
+  const parsedState = useMemo(
+    () => normalizeGameState(session?.game_state),
+    [session?.game_state]
+  );
+
   const activeCode = useMemo(() => {
     const replacement = (
-      session?.game_state?.nextSessionCode ||
-      session?.game_state?.replacedByCode ||
+      parsedState.nextSessionCode ||
+      parsedState.replacedByCode ||
       ""
     )
       .trim()
       .toUpperCase();
     return replacement || (session?.code ?? routeCode).toUpperCase();
-  }, [session, routeCode]);
+  }, [parsedState, session?.code, routeCode]);
 
   const gameTitle = useMemo(
     () => gameMeta?.title || "Grand Quiz tvOS",
@@ -99,8 +117,7 @@ export default function TvSalonPage() {
   );
 
   const players = useMemo<ExtendedPlayer[]>(() => {
-    const rawBots = session?.game_state?.bots;
-    const stateBots = Array.isArray(rawBots) ? rawBots : [];
+    const stateBots = Array.isArray(parsedState.bots) ? parsedState.bots : [];
 
     const botPlayers: ExtendedPlayer[] = stateBots
       .filter((b) => Boolean(b?.id))
@@ -123,7 +140,7 @@ export default function TvSalonPage() {
     const existingIds = new Set(humanPlayers.map((p) => String(p.id)));
     const uniqueBots = botPlayers.filter((bp) => !existingIds.has(String(bp.id)));
     return [...humanPlayers, ...uniqueBots];
-  }, [humanPlayers, session?.game_state?.bots, session?.id, activeCode]);
+  }, [humanPlayers, parsedState.bots, session?.id, activeCode]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !activeCode) return;
@@ -136,6 +153,16 @@ export default function TvSalonPage() {
     let isMounted = true;
     let activeSessionId: string | null = null;
     let playersChannel: ReturnType<typeof supabase.channel> | null = null;
+
+    const applySessionRow = (row: ExtendedSession) => {
+      const cleanState = normalizeGameState(row.game_state);
+      const nextRow: ExtendedSession = {
+        ...row,
+        game_state: cleanState,
+      };
+      setSession(nextRow);
+      return nextRow;
+    };
 
     const loadGameMeta = async (gameId: string | null | undefined) => {
       if (!gameId) return;
@@ -219,9 +246,10 @@ export default function TvSalonPage() {
 
       if (!isMounted || !currentRow) return;
 
+      const currentState = normalizeGameState(currentRow.game_state);
       const replacementCode = (
-        currentRow.game_state?.nextSessionCode ||
-        currentRow.game_state?.replacedByCode ||
+        currentState.nextSessionCode ||
+        currentState.replacedByCode ||
         ""
       )
         .trim()
@@ -241,21 +269,14 @@ export default function TvSalonPage() {
 
         if (!isMounted) return;
         if (replacementSession) {
-          setSession(replacementSession);
-          bindSession(replacementSession);
+          const applied = applySessionRow(replacementSession);
+          bindSession(applied);
           return;
         }
       }
 
-      setSession((prev) => {
-        if (!prev || prev.id !== currentRow!.id) return currentRow;
-        return {
-          ...prev,
-          ...currentRow,
-          game_state: currentRow!.game_state ?? prev.game_state,
-        };
-      });
-      bindSession(currentRow);
+      const applied = applySessionRow(currentRow);
+      bindSession(applied);
     };
 
     void refreshSession();
@@ -274,12 +295,8 @@ export default function TvSalonPage() {
           if (!isMounted) return;
           const nextRow = payload.new as ExtendedSession | null;
           if (nextRow && nextRow.id) {
-            setSession((prev) => ({
-              ...(prev ?? nextRow),
-              ...nextRow,
-              game_state: nextRow.game_state ?? prev?.game_state ?? null,
-            }));
-            bindSession(nextRow);
+            const applied = applySessionRow(nextRow);
+            bindSession(applied);
           } else {
             void refreshSession();
           }
@@ -309,12 +326,12 @@ export default function TvSalonPage() {
     if (!session || !activeCode) return;
     const status = String(session.status ?? "").toLowerCase();
     if (status === "playing" || status === "paused") {
-      const targetRoute = isJusteChiffreTarget(session.game_state, gameMeta)
+      const targetRoute = isJusteChiffreTarget(parsedState, gameMeta)
         ? `/tv/${activeCode}/juste-chiffre`
         : `/tv/${activeCode}/quiz`;
       router.replace(targetRoute);
     }
-  }, [session, activeCode, gameMeta, router]);
+  }, [session, activeCode, parsedState, gameMeta, router]);
 
   const displayStatus = useMemo(() => {
     const raw = String(session?.status ?? "lobby").toLowerCase();
