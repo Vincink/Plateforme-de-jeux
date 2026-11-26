@@ -327,7 +327,6 @@ export default function TargetBlitzGamePage() {
     [persistScoreToDb, spawnBurst, spawnFloatingLabel]
   );
 
-  // Boucle de rendu HTML5 Canvas à 60 FPS
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -464,7 +463,6 @@ export default function TargetBlitzGamePage() {
       ctx.strokeStyle = "#f43f5e";
       ctx.stroke();
 
-      // Mèche et étincelle
       const fuseX = cx + radiusPx * 0.55;
       const fuseY = cy - radiusPx * 0.75;
       ctx.beginPath();
@@ -506,13 +504,15 @@ export default function TargetBlitzGamePage() {
       ctx.fill();
 
       const tickLen = 9;
-      const dirs = [
+      const dirs: Array<[number, number]> = [
         [0, -1],
         [0, 1],
         [-1, 0],
         [1, 0],
       ];
-      for (const [dx, dy] of dirs) {
+      for (const dir of dirs) {
+        const dx = dir[0];
+        const dy = dir[1];
         ctx.beginPath();
         ctx.moveTo(cx + dx * (r - 4), cy + dy * (r - 4));
         ctx.lineTo(cx + dx * (r + tickLen), cy + dy * (r + tickLen));
@@ -550,7 +550,6 @@ export default function TargetBlitzGamePage() {
       const width = rect.width;
       const height = rect.height;
 
-      // 1. Fond spatial néon
       const bgGrad = ctx.createRadialGradient(
         width * 0.5,
         height * 0.45,
@@ -565,7 +564,6 @@ export default function TargetBlitzGamePage() {
       ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, width, height);
 
-      // Étoiles animées
       for (const star of starsRef.current) {
         star.y += star.speed * dt;
         if (star.y > 102) {
@@ -587,7 +585,6 @@ export default function TargetBlitzGamePage() {
       const canMove =
         roundStatusRef.current === "playing" && !isPausedRef.current;
 
-      // 2. Mise à jour et dessin des cibles / bonus / bombes
       for (const t of targetsRef.current) {
         if (canMove) {
           t.x += t.vx * dt;
@@ -618,7 +615,6 @@ export default function TargetBlitzGamePage() {
         }
       }
 
-      // 3. Particules d'impact
       const aliveParticles: Particle[] = [];
       for (const p of particlesRef.current) {
         p.life += dt;
@@ -648,7 +644,6 @@ export default function TargetBlitzGamePage() {
       }
       particlesRef.current = aliveParticles;
 
-      // 4. Scores flottants (+10 / -5)
       const aliveTexts: FloatingScoreText[] = [];
       for (const ft of floatingTextsRef.current) {
         ft.life += dt;
@@ -675,7 +670,6 @@ export default function TargetBlitzGamePage() {
       }
       floatingTextsRef.current = aliveTexts;
 
-      // 5. Viseurs des joueurs
       for (const c of Object.values(cursorsRef.current)) {
         const playerObj = playersRef.current.find((p) => p.id === c.playerId);
         const color =
@@ -702,7 +696,6 @@ export default function TargetBlitzGamePage() {
     };
   }, []);
 
-  // Synchronisation du chrono de la manche
   useEffect(() => {
     if (blitzState.isPaused && typeof blitzState.pausedRemainingSeconds === "number") {
       setRemainingSeconds(Math.max(0, blitzState.pausedRemainingSeconds));
@@ -740,7 +733,6 @@ export default function TargetBlitzGamePage() {
     durationSeconds,
   ]);
 
-  // Connexion Supabase (session, joueurs, scores, canal broadcast Target Blitz)
   useEffect(() => {
     if (!supabase || !sessionCode) return;
 
@@ -868,9 +860,7 @@ export default function TargetBlitzGamePage() {
     >
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block" />
 
-      {/* HUD supérieur : Classement + Chrono + Salle */}
       <div className="relative z-10 pointer-events-none flex items-start justify-between gap-4 p-4 md:p-6">
-        {/* Classement en direct */}
         <div className="w-64 sm:w-72 rounded-2xl border border-cyan-400/40 bg-slate-950/75 backdrop-blur-md p-3 shadow-[0_0_25px_rgba(34,211,238,0.2)]">
           <div className="flex items-center justify-between border-b border-white/10 pb-1.5 mb-2">
             <span className="text-[11px] font-black uppercase tracking-widest text-cyan-300 flex items-center gap-1.5">
@@ -908,7 +898,6 @@ export default function TargetBlitzGamePage() {
           )}
         </div>
 
-        {/* Chrono central */}
         <div className="flex flex-col items-center">
           <div className="rounded-2xl border-2 border-fuchsia-400/60 bg-slate-950/80 backdrop-blur-md px-6 py-2.5 shadow-[0_0_30px_rgba(217,70,239,0.3)] flex items-center gap-3">
             <Timer className="w-6 h-6 text-amber-400" />
@@ -921,19 +910,22 @@ export default function TargetBlitzGamePage() {
           </span>
         </div>
 
-        {/* Badge titre / légende */}
         <div className="hidden md:block rounded-2xl border border-amber-400/35 bg-slate-950/75 backdrop-blur-md px-4 py-3 text-right shadow-[0_0_25px_rgba(251,191,36,0.18)]">
           <div className="text-xs font-black uppercase tracking-widest text-amber-300">
             Multiplayer Target Blitz
           </div>
           <div className="text-[11px] text-neutral-300 mt-1 space-y-0.5">
-            <div>Cible : <span className="text-emerald-300 font-bold">+5</span> • Bonus : <span className="text-amber-300 font-bold">+10</span></div>
-            <div>Bombe : <span className="text-rose-400 font-bold">-5</span></div>
+            <div>
+              Cible : <span className="text-emerald-300 font-bold">+5</span> •
+              Bonus : <span className="text-amber-300 font-bold">+10</span>
+            </div>
+            <div>
+              Bombe : <span className="text-rose-400 font-bold">-5</span>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Overlay d'état si pas en cours */}
       {roundStatus !== "playing" && (
         <div className="absolute inset-0 z-20 bg-black/55 backdrop-blur-xs flex flex-col items-center justify-center text-center p-6">
           <div className="rounded-3xl border border-white/15 bg-slate-950/85 px-8 py-6 shadow-2xl space-y-2">
