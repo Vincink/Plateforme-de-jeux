@@ -1,12 +1,15 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   CheckCircle2,
+  Crosshair,
   Delete,
+  Flame,
   Gamepad2,
   Lock,
+  RotateCcw,
   Sparkles,
   Target,
   Trash2,
@@ -77,6 +80,7 @@ interface QuizGameState {
   estimates?: Record<string, unknown>;
   guesses?: Record<string, unknown>;
   answers?: Record<string, unknown>;
+  stunnedUntil?: Record<string, number>;
   revealed?: boolean;
   [key: string]: unknown;
 }
@@ -147,6 +151,25 @@ function isJusteChiffreGameState(
     slug.includes("estimation") ||
     title.includes("juste chiffre") ||
     title.includes("estimation")
+  );
+}
+
+function isTargetBlitzGameState(
+  state: QuizGameState | null | undefined,
+  gameTitle?: string | null,
+  gameSlug?: string | null
+): boolean {
+  const mode = String(state?.mode ?? "").toLowerCase();
+  const title = String(gameTitle ?? "").toLowerCase();
+  const slug = String(gameSlug ?? "").toLowerCase();
+  return (
+    mode.includes("target-blitz") ||
+    mode.includes("target_blitz") ||
+    mode.includes("targetblitz") ||
+    slug.includes("target-blitz") ||
+    slug.includes("target_blitz") ||
+    slug.includes("targetblitz") ||
+    title.includes("target blitz")
   );
 }
 
@@ -316,6 +339,24 @@ export default function PlayerControllerPage() {
   const [estimateFeedback, setEstimateFeedback] = useState<string | null>(null);
   const [isSubmittingEstimate, setIsSubmittingEstimate] =
     useState<boolean>(false);
+
+  // États dédiés au trackpad Target Blitz
+  const cursorRef = useRef({ x: 50, y: 50 });
+  const [cursorPos, setCursorPos] = useState({ x: 50, y: 50 });
+  const [isFiring, setIsFiring] = useState<boolean>(false);
+  const [stunnedUntilMs, setStunnedUntilMs] = useState<number>(0);
+  const [nowTickMs, setNowTickMs] = useState<number>(() => Date.now());
+  const trackpadRef = useRef<HTMLDivElement | null>(null);
+  const lastTouchRef = useRef<{ x: number; y: number; time: number } | null>(
+    null
+  );
+  const touchStartRef = useRef<{ x: number; y: number; time: number } | null>(
+    null
+  );
+  const lastBroadcastRef = useRef<number>(0);
+  const blitzChannelRef = useRef<ReturnType<
+    NonNullable<typeof supabase>["channel"]
+  > | null>(null);
 
   const [remainingSeconds, setRemainingSeconds] = useState<number>(
     DEFAULT_QUESTION_DURATION_SECONDS
@@ -511,10 +552,17 @@ export default function PlayerControllerPage() {
   const seriesSeed =
     typeof quizState.seriesSeed === "string" ? quizState.seriesSeed : "";
 
+  const isTargetBlitzMode = useMemo(
+    () =>
+      isTargetBlitzGameState(quizState, gameMeta?.title, gameMeta?.slug),
+    [quizState, gameMeta?.title, gameMeta?.slug]
+  );
+
   const isJusteChiffreMode = useMemo(
     () =>
+      !isTargetBlitzMode &&
       isJusteChiffreGameState(quizState, gameMeta?.title, gameMeta?.slug),
-    [quizState, gameMeta?.title, gameMeta?.slug]
+    [isTargetBlitzMode, quizState, gameMeta?.title, gameMeta?.slug]
   );
 
   const minEstimate = useMemo(() => {
@@ -573,6 +621,7 @@ export default function PlayerControllerPage() {
     setDigitsInput("");
     setSubmittedEstimate(null);
     setEstimateFeedback(null);
+    setStunnedUntilMs(0);
     setScores((prev) => {
       const updated = prev.map((row) => ({
         ...row,
@@ -735,7 +784,14 @@ export default function PlayerControllerPage() {
   };
 
   useEffect(() => {
-    if (isJusteChiffreMode || !currentQuestionKey || !activeQuestion) return;
+    if (
+      isTargetBlitzMode ||
+      isJusteChiffreMode ||
+      !currentQuestionKey ||
+      !activeQuestion
+    ) {
+      return;
+    }
 
     const existing = snapshotByKeyRef.current[currentQuestionKey];
     const chosen =
@@ -750,6 +806,7 @@ export default function PlayerControllerPage() {
       chosenLetter: chosen,
     };
   }, [
+    isTargetBlitzMode,
     isJusteChiffreMode,
     currentQuestionKey,
     activeQuestion,
@@ -760,7 +817,12 @@ export default function PlayerControllerPage() {
 
   useEffect(() => {
     const previousKey = prevQuestionKeyRef.current;
-    if (!isJusteChiffreMode && previousKey && previousKey !== currentQuestionKey) {
+    if (
+      !isTargetBlitzMode &&
+      !isJusteChiffreMode &&
+      previousKey &&
+      previousKey !== currentQuestionKey
+    ) {
       const prevSnap = snapshotByKeyRef.current[previousKey] ?? null;
       settleSnapshot(prevSnap, false);
     }
@@ -778,6 +840,7 @@ export default function PlayerControllerPage() {
     setStatusMessage("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
+    isTargetBlitzMode,
     isJusteChiffreMode,
     activeGameId,
     currentQuestionKey,
@@ -811,6 +874,7 @@ export default function PlayerControllerPage() {
 
   useEffect(() => {
     if (
+      isTargetBlitzMode ||
       currentQuestionKey === null ||
       roundStatus !== "playing" ||
       quizState.revealed ||
@@ -831,6 +895,7 @@ export default function PlayerControllerPage() {
     const intervalId = window.setInterval(tick, 200);
     return () => window.clearInterval(intervalId);
   }, [
+    isTargetBlitzMode,
     currentQuestionKey,
     roundStatus,
     quizState.revealed,
@@ -842,6 +907,7 @@ export default function PlayerControllerPage() {
     currentQuestionKey !== null &&
     submittedQuestionKey === currentQuestionKey;
   const isTimerExpired =
+    !isTargetBlitzMode &&
     currentQuestionKey !== null &&
     roundStatus === "playing" &&
     !quizState.isPaused &&
@@ -849,11 +915,24 @@ export default function PlayerControllerPage() {
   const isPlaying = roundStatus === "playing" && !isTimerExpired;
 
   useEffect(() => {
-    if (isJusteChiffreMode || !isTimerExpired || !currentQuestionKey) return;
+    if (
+      isTargetBlitzMode ||
+      isJusteChiffreMode ||
+      !isTimerExpired ||
+      !currentQuestionKey
+    ) {
+      return;
+    }
     const snap = snapshotByKeyRef.current[currentQuestionKey] ?? null;
     settleSnapshot(snap, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isJusteChiffreMode, isTimerExpired, currentQuestionKey, identity?.playerId]);
+  }, [
+    isTargetBlitzMode,
+    isJusteChiffreMode,
+    isTimerExpired,
+    currentQuestionKey,
+    identity?.playerId,
+  ]);
 
   useEffect(() => {
     if (!supabase || !sessionCode) return;
@@ -1054,6 +1133,197 @@ export default function PlayerControllerPage() {
       ),
     [currentPlayerRecord?.id, identity?.playerId, players]
   );
+
+  // --- Canal Realtime Broadcast & Handlers Target Blitz ---
+  const stateStunnedUntil = useMemo(() => {
+    if (!identity?.playerId) return 0;
+    const raw = quizState.stunnedUntil?.[String(identity.playerId)];
+    return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+  }, [identity?.playerId, quizState.stunnedUntil]);
+
+  const effectiveStunnedUntil = Math.max(stunnedUntilMs, stateStunnedUntil);
+  const isBlitzStunned =
+    isTargetBlitzMode && effectiveStunnedUntil > nowTickMs;
+
+  useEffect(() => {
+    if (!isBlitzStunned) return;
+    const timer = window.setInterval(() => {
+      setNowTickMs(Date.now());
+    }, 150);
+    return () => window.clearInterval(timer);
+  }, [isBlitzStunned]);
+
+  useEffect(() => {
+    if (!supabase || !sessionCode || !identity?.playerId || !isTargetBlitzMode) {
+      return;
+    }
+
+    const channel = supabase.channel(`target-blitz-${sessionCode}`, {
+      config: {
+        broadcast: { self: false },
+      },
+    });
+
+    channel
+      .on("broadcast", { event: "player_stunned" }, (message) => {
+        const payload = message.payload as
+          | { playerId?: string; durationMs?: number }
+          | undefined;
+        if (payload?.playerId === identity.playerId) {
+          const duration =
+            typeof payload.durationMs === "number" && payload.durationMs > 0
+              ? payload.durationMs
+              : 2000;
+          const until = Date.now() + duration;
+          setStunnedUntilMs(until);
+          setNowTickMs(Date.now());
+        }
+      })
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          void channel.send({
+            type: "broadcast",
+            event: "cursor_move",
+            payload: {
+              playerId: identity.playerId,
+              playerName: identity.nickname,
+              color: myColor.bgHex,
+              x: cursorRef.current.x,
+              y: cursorRef.current.y,
+            },
+          });
+        }
+      });
+
+    blitzChannelRef.current = channel;
+
+    return () => {
+      void supabase.removeChannel(channel);
+      blitzChannelRef.current = null;
+    };
+  }, [
+    supabase,
+    sessionCode,
+    identity?.playerId,
+    identity?.nickname,
+    myColor.bgHex,
+    isTargetBlitzMode,
+  ]);
+
+  const broadcastBlitzCursor = useCallback(
+    (x: number, y: number, force = false) => {
+      if (!identity || !blitzChannelRef.current) return;
+      const now = Date.now();
+      if (!force && now - lastBroadcastRef.current < 40) return;
+      lastBroadcastRef.current = now;
+
+      void blitzChannelRef.current.send({
+        type: "broadcast",
+        event: "cursor_move",
+        payload: {
+          playerId: identity.playerId,
+          playerName: identity.nickname,
+          color: myColor.bgHex,
+          x,
+          y,
+        },
+      });
+    },
+    [identity, myColor.bgHex]
+  );
+
+  const triggerBlitzShoot = useCallback(() => {
+    if (!identity || isBlitzStunned || roundStatus !== "playing") return;
+
+    setIsFiring(true);
+    if (typeof navigator !== "undefined" && navigator.vibrate) {
+      navigator.vibrate(25);
+    }
+
+    broadcastBlitzCursor(cursorRef.current.x, cursorRef.current.y, true);
+
+    void blitzChannelRef.current?.send({
+      type: "broadcast",
+      event: "shoot",
+      payload: {
+        playerId: identity.playerId,
+        playerName: identity.nickname,
+        color: myColor.bgHex,
+        x: cursorRef.current.x,
+        y: cursorRef.current.y,
+        timestamp: Date.now(),
+      },
+    });
+
+    window.setTimeout(() => setIsFiring(false), 120);
+  }, [
+    identity,
+    isBlitzStunned,
+    roundStatus,
+    broadcastBlitzCursor,
+    myColor.bgHex,
+  ]);
+
+  const handleRecenterBlitz = () => {
+    cursorRef.current = { x: 50, y: 50 };
+    setCursorPos({ x: 50, y: 50 });
+    broadcastBlitzCursor(50, 50, true);
+  };
+
+  const handleTrackpadTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length === 0) return;
+    const touch = e.touches[0];
+    const now = Date.now();
+    lastTouchRef.current = { x: touch.clientX, y: touch.clientY, time: now };
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: now };
+  };
+
+  const handleTrackpadTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (!lastTouchRef.current || !trackpadRef.current || e.touches.length === 0)
+      return;
+    const touch = e.touches[0];
+    const rect = trackpadRef.current.getBoundingClientRect();
+
+    const sensitivity = 1.35;
+    const deltaX =
+      ((touch.clientX - lastTouchRef.current.x) / rect.width) *
+      100 *
+      sensitivity;
+    const deltaY =
+      ((touch.clientY - lastTouchRef.current.y) / rect.height) *
+      100 *
+      sensitivity;
+
+    const nextX = Math.max(2, Math.min(98, cursorRef.current.x + deltaX));
+    const nextY = Math.max(5, Math.min(95, cursorRef.current.y + deltaY));
+
+    cursorRef.current = { x: nextX, y: nextY };
+    setCursorPos({ x: nextX, y: nextY });
+    lastTouchRef.current = {
+      x: touch.clientX,
+      y: touch.clientY,
+      time: Date.now(),
+    };
+
+    broadcastBlitzCursor(nextX, nextY);
+  };
+
+  const handleTrackpadTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (touchStartRef.current && e.changedTouches.length > 0) {
+      const touch = e.changedTouches[0];
+      const dist = Math.hypot(
+        touch.clientX - touchStartRef.current.x,
+        touch.clientY - touchStartRef.current.y
+      );
+      const elapsed = Date.now() - touchStartRef.current.time;
+
+      if (dist < 12 && elapsed < 220) {
+        triggerBlitzShoot();
+      }
+    }
+    lastTouchRef.current = null;
+    touchStartRef.current = null;
+  };
 
   const handleJoinGame = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1395,7 +1665,12 @@ export default function PlayerControllerPage() {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-white flex flex-col justify-between p-4 sm:p-5 select-none">
+    <div
+      style={isTargetBlitzMode ? { touchAction: "none" } : undefined}
+      className={`min-h-screen bg-neutral-950 text-white flex flex-col justify-between p-4 sm:p-5 select-none ${
+        isTargetBlitzMode ? "fixed inset-0 overflow-hidden" : ""
+      }`}
+    >
       <div className="max-w-md w-full mx-auto flex-1 flex flex-col space-y-4">
         {/* Top Bar */}
         <header className="flex items-center justify-between border-b border-white/10 pb-3.5 shrink-0">
@@ -1482,7 +1757,9 @@ export default function PlayerControllerPage() {
                 <div>
                   <div className="font-black text-lg">{identity.nickname}</div>
                   <div className="text-xs opacity-90 font-semibold">
-                    {activeQuestionIndex !== null
+                    {isTargetBlitzMode
+                      ? "Target Blitz"
+                      : activeQuestionIndex !== null
                       ? `Question ${activeQuestionIndex + 1}`
                       : isJusteChiffreMode
                       ? "Le Juste Chiffre"
@@ -1491,7 +1768,11 @@ export default function PlayerControllerPage() {
                   </div>
                 </div>
               </div>
-              <Gamepad2 className="w-6 h-6 opacity-90" />
+              {isTargetBlitzMode ? (
+                <Crosshair className="w-6 h-6 opacity-90" />
+              ) : (
+                <Gamepad2 className="w-6 h-6 opacity-90" />
+              )}
             </div>
 
             {/* Active Question / Action Zone */}
@@ -1506,10 +1787,97 @@ export default function PlayerControllerPage() {
                       : "Regarde la télé pour la suite..."}
                   </p>
                   <p className="text-xs text-neutral-400">
-                    {activeQuestionIndex !== null
+                    {isTargetBlitzMode
+                      ? "Prépare ton viseur !"
+                      : activeQuestionIndex !== null
                       ? `Question ${activeQuestionIndex + 1}`
                       : "En attente"}
                   </p>
+                </div>
+              ) : isTargetBlitzMode ? (
+                /* ================= MANETTE TRACKPAD TARGET BLITZ ================= */
+                <div className="flex-1 flex flex-col justify-between gap-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+                      <Crosshair className="w-4 h-4" />
+                      Trackpad Viseur
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleRecenterBlitz}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 active:bg-white/25 border border-white/15 text-xs font-bold text-white transition"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      Recentrer
+                    </button>
+                  </div>
+
+                  <div
+                    ref={trackpadRef}
+                    onTouchStart={handleTrackpadTouchStart}
+                    onTouchMove={handleTrackpadTouchMove}
+                    onTouchEnd={handleTrackpadTouchEnd}
+                    className={`relative flex-1 min-h-[210px] rounded-2xl border-2 transition-colors flex items-center justify-center overflow-hidden ${
+                      isBlitzStunned
+                        ? "border-rose-500/80 bg-rose-950/35"
+                        : "border-cyan-400/45 bg-black/40 active:border-cyan-300"
+                    }`}
+                  >
+                    {/* Repère visuel du viseur */}
+                    <div
+                      className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 transition-transform duration-75"
+                      style={{
+                        left: `${cursorPos.x}%`,
+                        top: `${cursorPos.y}%`,
+                      }}
+                    >
+                      <div
+                        className={`w-9 h-9 rounded-full border-2 flex items-center justify-center ${
+                          isFiring ? "scale-150" : "scale-100"
+                        } transition-transform`}
+                        style={{ borderColor: myColor.bgHex }}
+                      >
+                        <div
+                          className="w-2.5 h-2.5 rounded-full"
+                          style={{ backgroundColor: myColor.bgHex }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pointer-events-none text-center px-5 opacity-55">
+                      {isBlitzStunned ? (
+                        <p className="text-rose-300 font-black text-base uppercase tracking-wider">
+                          Bombe touchée ! Patiente...
+                        </p>
+                      ) : (
+                        <>
+                          <p className="text-sm font-extrabold uppercase tracking-widest text-cyan-200">
+                            Glisse pour viser
+                          </p>
+                          <p className="text-xs text-neutral-300 mt-1">
+                            Tape ici ou appuie sur Tirer
+                          </p>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={isBlitzStunned}
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      triggerBlitzShoot();
+                    }}
+                    className={`w-full h-16 rounded-2xl font-black text-xl tracking-widest uppercase shadow-xl flex items-center justify-center gap-2 transition-transform active:scale-95 ${
+                      isBlitzStunned
+                        ? "bg-neutral-800 text-neutral-500 border border-white/10"
+                        : "bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-slate-950 border-2 border-amber-200/70"
+                    }`}
+                  >
+                    <Flame className="w-6 h-6" />
+                    {isBlitzStunned ? "Bloqué" : "TIRER"}
+                  </button>
                 </div>
               ) : isJusteChiffreMode ? (
                 /* ================= PAVÉ NUMÉRIQUE LE JUSTE CHIFFRE (1 - 1000) ================= */
