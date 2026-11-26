@@ -541,6 +541,10 @@ export default function AdminConsolePage() {
   const [selectedGameId, setSelectedGameId] = useState<string>(
     () => ensureCatalogGames(INITIAL_GAMES)[0]?.id ?? ""
   );
+  const selectedGameRef = useRef<CatalogGame | null>(
+    ensureCatalogGames(INITIAL_GAMES)[0] ?? null
+  );
+
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionCode, setSessionCode] = useState<string>(() =>
     generateSessionCode()
@@ -705,6 +709,7 @@ export default function AdminConsolePage() {
 
   const selectedGame =
     games.find((g) => g.id === selectedGameId) ?? games[0];
+  selectedGameRef.current = selectedGame ?? null;
 
   const isGameLaunched = status === "playing" || status === "paused";
   const isTargetBlitz = isTargetBlitzGame(selectedGame);
@@ -1068,7 +1073,7 @@ export default function AdminConsolePage() {
       return;
     }
 
-    const activeTargetGame = params.game ?? selectedGame;
+    const activeTargetGame = params.game ?? selectedGameRef.current ?? selectedGame;
     const validGameUuid = resolveValidGameUuid(activeTargetGame);
     if (!validGameUuid) {
       setDbError(
@@ -1156,6 +1161,7 @@ export default function AdminConsolePage() {
       if (blitzGameMode) {
         basePayload.game_state = {
           mode: "target-blitz",
+          gameSlug: "target-blitz",
           bots: botsForState,
           questionStarted: params.nextStatus === "playing",
           roundTriggered: params.nextStatus === "playing",
@@ -1198,6 +1204,7 @@ export default function AdminConsolePage() {
         };
       } else if (isQuizGame) {
         basePayload.game_state = {
+          mode: "quiz",
           bots: botsForState,
           questionStarted: hasQuestionStarted,
           roundTriggered: hasQuestionStarted,
@@ -1319,6 +1326,7 @@ export default function AdminConsolePage() {
         );
         if (initialGame) {
           setSelectedGameId(initialGame.id);
+          selectedGameRef.current = initialGame;
           setSeriesSeed(initialSeed);
           setSeriesQuestions(initialPicked);
           setJusteChiffreQuestions(initialJcPicked);
@@ -1393,7 +1401,7 @@ export default function AdminConsolePage() {
     await syncSessionToDb({
       id: null,
       code: newCode,
-      game: selectedGame,
+      game: selectedGameRef.current ?? selectedGame,
       nextStatus: "lobby",
       qrVisible: showQrOnTv,
       nextQuestionIndex: -1,
@@ -1408,6 +1416,7 @@ export default function AdminConsolePage() {
 
   const handleStatusChange = async (nextStatus: SessionStatus) => {
     const nowMs = Date.now();
+    const currentGame = selectedGameRef.current ?? selectedGame;
     const shouldResetQuestions =
       nextStatus === "lobby" || nextStatus === "finished";
 
@@ -1422,7 +1431,7 @@ export default function AdminConsolePage() {
       await syncSessionToDb({
         id: sessionId,
         code: sessionCode,
-        game: selectedGame,
+        game: currentGame,
         nextStatus,
         qrVisible: showQrOnTv,
         nextQuestionIndex: -1,
@@ -1448,7 +1457,7 @@ export default function AdminConsolePage() {
       await syncSessionToDb({
         id: sessionId,
         code: sessionCode,
-        game: selectedGame,
+        game: currentGame,
         nextStatus: "paused",
         qrVisible: showQrOnTv,
         nextPausedRemaining: remaining,
@@ -1469,7 +1478,7 @@ export default function AdminConsolePage() {
         resumedStartedAt = new Date(
           nowMs - elapsedBeforePause * 1000
         ).toISOString();
-      } else if (isTargetBlitz && !resumedStartedAt) {
+      } else if (isTargetBlitzGame(currentGame) && !resumedStartedAt) {
         resumedStartedAt = new Date(nowMs).toISOString();
       }
 
@@ -1480,7 +1489,7 @@ export default function AdminConsolePage() {
       await syncSessionToDb({
         id: sessionId,
         code: sessionCode,
-        game: selectedGame,
+        game: currentGame,
         nextStatus: "playing",
         qrVisible: showQrOnTv,
         nextQuestionStartedAt: resumedStartedAt,
@@ -1518,7 +1527,7 @@ export default function AdminConsolePage() {
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
-      game: selectedGame,
+      game: selectedGameRef.current ?? selectedGame,
       nextStatus: "playing",
       qrVisible: showQrOnTv,
       nextQuestionIndex: 0,
@@ -1548,7 +1557,7 @@ export default function AdminConsolePage() {
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
-      game: selectedGame,
+      game: selectedGameRef.current ?? selectedGame,
       nextStatus: "playing",
       qrVisible: showQrOnTv,
       nextQuestionIndex: nextIdx,
@@ -1564,7 +1573,7 @@ export default function AdminConsolePage() {
     await syncSessionToDb({
       id: sessionId,
       code: sessionCode,
-      game: selectedGame,
+      game: selectedGameRef.current ?? selectedGame,
       nextStatus: status,
       qrVisible: nextQr,
       resetAnswers: false,
@@ -1617,6 +1626,8 @@ export default function AdminConsolePage() {
   const handleSelectGame = async (gameId: string) => {
     if (isGameLaunched) return;
     const targetGame = games.find((g) => g.id === gameId) ?? null;
+    selectedGameRef.current = targetGame;
+
     const nextSeed = generateSeriesSeed();
     const nextJcPicked = pickSeriesQuestions(
       JUSTE_CHIFFRE_QUESTIONS,
