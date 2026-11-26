@@ -1,19 +1,25 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { Tv, Users } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import type { GameSession, SessionPlayer } from "@/types/game.types";
 
-// ============================================================================
-// 1. TYPES ET CONSTANTES DU SALON TV
-// ============================================================================
+type BotLevel = "cool" | "normal" | "expert";
+
+interface SalonBotConfig {
+  id: string;
+  nickname: string;
+  avatar?: string;
+  botLevel?: BotLevel;
+}
 
 interface SalonGameState {
   mode?: string;
+  bots?: SalonBotConfig[];
   nextSessionCode?: string;
   replacedByCode?: string;
 }
@@ -26,6 +32,12 @@ interface GameMeta {
 type ExtendedSession = GameSession & {
   game_state?: SalonGameState | null;
   show_qr?: boolean | null;
+};
+
+type ExtendedPlayer = SessionPlayer & {
+  avatar?: string | null;
+  isBot?: boolean;
+  botLevel?: BotLevel;
 };
 
 function isJusteChiffreTarget(
@@ -53,16 +65,17 @@ function isJusteChiffreTarget(
   );
 }
 
-// ============================================================================
-// 2. COMPOSANT PRINCIPAL : SALON TV (/tv/salon)
-// ============================================================================
-
 export default function TvSalonPage() {
+  const params = useParams<{ sessionCode?: string }>();
   const router = useRouter();
   const supabase = getSupabaseBrowserClient();
 
+  const routeCode = (params?.sessionCode ?? "").trim().toUpperCase();
+  const hasExplicitCode =
+    Boolean(routeCode) && routeCode !== "SALON" && routeCode !== "TV";
+
   const [session, setSession] = useState<ExtendedSession | null>(null);
-  const [players, setPlayers] = useState<SessionPlayer[]>([]);
+  const [humanPlayers, setHumanPlayers] = useState<ExtendedPlayer[]>([]);
   const [gameMeta, setGameMeta] = useState<GameMeta | null>(null);
   const [joinUrl, setJoinUrl] = useState<string>("");
 
@@ -74,21 +87,45 @@ export default function TvSalonPage() {
     )
       .trim()
       .toUpperCase();
-    return replacement || (session?.code ?? "").toUpperCase();
-  }, [session]);
+    return replacement || (session?.code ?? routeCode).toUpperCase();
+  }, [session, routeCode]);
 
   const gameTitle = useMemo(
     () => gameMeta?.title || "Grand Quiz tvOS",
     [gameMeta?.title]
   );
 
-  // --- Construction de l'URL de connexion mobile selon le code actif ---
+  const players = useMemo<ExtendedPlayer[]>(() => {
+    const stateBots = Array.isArray(session?.game_state?.bots)
+      ? session.game_state.bots
+      : [];
+
+    const botPlayers: ExtendedPlayer[] = stateBots
+      .filter((b) => Boolean(b?.id && b?.nickname))
+      .map(
+        (b) =>
+          ({
+            id: String(b.id),
+            session_id: session?.id ?? activeCode,
+            nickname: String(b.nickname),
+            avatar: b.avatar ?? "🤖",
+            is_host: false,
+            is_connected: true,
+            isBot: true,
+            botLevel: b.botLevel ?? "normal",
+          }) as ExtendedPlayer
+      );
+
+    const existingIds = new Set(humanPlayers.map((p) => String(p.id)));
+    const uniqueBots = botPlayers.filter((bp) => !existingIds.has(String(bp.id)));
+    return [...humanPlayers, ...uniqueBots];
+  }, [humanPlayers, session?.game_state?.bots, session?.id, activeCode]);
+
   useEffect(() => {
     if (typeof window === "undefined" || !activeCode) return;
     setJoinUrl(`${window.location.origin}/play/${activeCode}`);
   }, [activeCode]);
 
-  // --- Synchronisation temps réel avec la dernière session active dans Supabase ---
   useEffect(() => {
     if (!supabase) return;
 
@@ -117,7 +154,7 @@ export default function TvSalonPage() {
         .order("id", { ascending: true });
 
       if (!isMounted) return;
-      setPlayers((data as SessionPlayer[] | null) ?? []);
+      setHumanPlayers((data as ExtendedPlayer[] | null) ?? []);
     };
 
     const bindSession = (targetSession: ExtendedSession) => {
@@ -152,25 +189,44 @@ export default function TvSalonPage() {
         .subscribe();
     };
 
-    const refreshLatestSession = async () => {
-      const { data } = await supabase
-        .from("game_sessions")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle<ExtendedSession>();
+    const refreshSession = async () => {
+      let currentRow: ExtendedSession | null = null;
 
-      if (!isMounted || !data) return;
+      if (hasExplicitCode) {
+        const { data } = await supabase
+          .from("game_sessions")
+          .select("*")
+          .eq("code", routeCode)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle<ExtendedSession>();
+        currentRow = data ?? null;
+      }
+
+      if (!currentRow) {
+        const { data } = await supabase
+          .from("game_sessions")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle<ExtendedSession>();
+        currentRow = data ?? null;
+      }
+
+      if (!isMounted || !currentRow) return;
 
       const replacementCode = (
-        data.game_state?.nextSessionCode ||
-        data.game_state?.replacedByCode ||
+        currentRow.game_state?.nextSessionCode ||
+        currentRow.game_state?.replacedByCode ||
         ""
       )
         .trim()
         .toUpperCase();
 
-      if (replacementCode && replacementCode !== (data.code ?? "").toUpperCase()) {
+      if (
+        replacementCode &&
+        replacementCode !== (currentRow.code ?? "").toUpperCase()
+      ) {
         const { data: replacementSession } = await supabase
           .from("game_sessions")
           .select("*")
@@ -187,35 +243,42 @@ export default function TvSalonPage() {
         }
       }
 
-      setSession(data);
-      bindSession(data);
+      setSession(currentRow);
+      bindSession(currentRow);
     };
 
-    void refreshLatestSession();
+    void refreshSession();
 
     const sessionsChannel = supabase
-      .channel(`tv-salon-sessions-${Date.now()}`)
+      .channel(`tv-salon-sessions-${routeCode || "latest"}-${Date.now()}`)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "game_sessions",
+          ...(hasExplicitCode ? { filter: `code=eq.${routeCode}` } : {}),
         },
-        () => {
+        (payload) => {
           if (!isMounted) return;
-          void refreshLatestSession();
+          const nextRow = payload.new as ExtendedSession | null;
+          if (nextRow && nextRow.id) {
+            setSession(nextRow);
+            bindSession(nextRow);
+          } else {
+            void refreshSession();
+          }
         }
       )
       .subscribe();
 
     const syncInterval = window.setInterval(() => {
       if (!isMounted) return;
-      void refreshLatestSession();
+      void refreshSession();
       if (activeSessionId) {
         void loadPlayers(activeSessionId);
       }
-    }, 1500);
+    }, 1000);
 
     return () => {
       isMounted = false;
@@ -225,9 +288,8 @@ export default function TvSalonPage() {
         void supabase.removeChannel(playersChannel);
       }
     };
-  }, [supabase]);
+  }, [supabase, routeCode, hasExplicitCode]);
 
-  // --- Redirection vers l'écran du jeu sélectionné quand la partie démarre ---
   useEffect(() => {
     if (!session || !activeCode) return;
     const status = String(session.status ?? "").toLowerCase();
@@ -239,7 +301,6 @@ export default function TvSalonPage() {
     }
   }, [session, activeCode, gameMeta, router]);
 
-  // --- Statut affiché (par défaut LOBBY dès qu'une nouvelle salle est créée) ---
   const displayStatus = useMemo(() => {
     const raw = String(session?.status ?? "lobby").toLowerCase();
     if (!raw || raw === "finished" || raw === "ended" || raw === "completed") {
@@ -250,12 +311,8 @@ export default function TvSalonPage() {
 
   const showQr = session?.show_qr !== false;
 
-  // ==========================================================================
-  // 3. RENDU VISUEL DU SALON TV (JSX)
-  // ==========================================================================
   return (
     <div className="min-h-[100dvh] w-screen overflow-hidden bg-neutral-950 text-white px-8 py-6 flex flex-col justify-between select-none">
-      {/* ================= EN-TÊTE (Titre du jeu, Statut, Code Salle) ================= */}
       <header className="flex items-center justify-between border-b border-white/15 pb-4 shrink-0 gap-6">
         <div className="flex items-center gap-4 min-w-0">
           <div className="w-14 h-14 rounded-2xl bg-amber-400/15 border border-amber-400/35 flex items-center justify-center shrink-0">
@@ -281,9 +338,7 @@ export default function TvSalonPage() {
         </div>
       </header>
 
-      {/* ================= CORPS PRINCIPAL (Joueurs connectés + QR Code) ================= */}
       <main className="flex-1 min-h-0 grid grid-cols-12 gap-7 py-6">
-        {/* Colonne gauche : Joueurs connectés */}
         <section className="col-span-7 bg-white/[0.05] border border-white/15 rounded-[2rem] p-7 flex flex-col gap-5 min-h-0">
           <div className="flex items-center justify-between shrink-0">
             <div className="flex items-center gap-3 text-2xl xl:text-3xl font-black">
@@ -329,7 +384,6 @@ export default function TvSalonPage() {
           )}
         </section>
 
-        {/* Colonne droite : QR Code de connexion */}
         <aside className="col-span-5 bg-white/[0.05] border border-white/15 rounded-[2rem] p-7 flex flex-col items-center justify-center text-center gap-5 min-h-0">
           {showQr && joinUrl && activeCode ? (
             <>
@@ -356,7 +410,6 @@ export default function TvSalonPage() {
         </aside>
       </main>
 
-      {/* ================= PIED DE PAGE ================= */}
       <footer className="flex items-center justify-between text-sm text-neutral-400 border-t border-white/10 pt-3 shrink-0">
         <span>tvOS Party</span>
         <span className="font-mono">Salle {activeCode || "----"}</span>
