@@ -111,24 +111,13 @@ export default function TvSalonPage() {
     return replacement || (session?.code ?? routeCode).toUpperCase();
   }, [parsedState, session?.code, routeCode]);
 
-  const botsSignature = useMemo(() => {
-    const list = Array.isArray(parsedState.bots) ? parsedState.bots : [];
-    return JSON.stringify(list);
-  }, [parsedState.bots]);
-
   const gameTitle = useMemo(
     () => gameMeta?.title || "Grand Quiz tvOS",
     [gameMeta?.title]
   );
 
   const players = useMemo<ExtendedPlayer[]>(() => {
-    let stateBots: SalonBotConfig[] = [];
-    try {
-      const parsed = JSON.parse(botsSignature);
-      if (Array.isArray(parsed)) stateBots = parsed;
-    } catch {
-      stateBots = [];
-    }
+    const stateBots = Array.isArray(parsedState.bots) ? parsedState.bots : [];
 
     const botPlayers: ExtendedPlayer[] = stateBots
       .filter((b) => Boolean(b?.id))
@@ -151,7 +140,7 @@ export default function TvSalonPage() {
     const existingIds = new Set(humanPlayers.map((p) => String(p.id)));
     const uniqueBots = botPlayers.filter((bp) => !existingIds.has(String(bp.id)));
     return [...humanPlayers, ...uniqueBots];
-  }, [humanPlayers, botsSignature, session?.id, activeCode]);
+  }, [humanPlayers, parsedState.bots, session?.id, activeCode]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !activeCode) return;
@@ -164,7 +153,6 @@ export default function TvSalonPage() {
     let isMounted = true;
     let activeSessionId: string | null = null;
     let playersChannel: ReturnType<typeof supabase.channel> | null = null;
-    const targetCode = activeCode || (hasExplicitCode ? routeCode : "");
 
     const applySessionRow = (row: ExtendedSession) => {
       const cleanState = normalizeGameState(row.game_state);
@@ -235,11 +223,11 @@ export default function TvSalonPage() {
     const refreshSession = async () => {
       let currentRow: ExtendedSession | null = null;
 
-      if (targetCode) {
+      if (hasExplicitCode) {
         const { data } = await supabase
           .from("game_sessions")
           .select("*")
-          .eq("code", targetCode)
+          .eq("code", routeCode)
           .order("updated_at", { ascending: false })
           .limit(1)
           .maybeSingle<ExtendedSession>();
@@ -294,19 +282,28 @@ export default function TvSalonPage() {
     void refreshSession();
 
     const sessionsChannel = supabase
-      .channel(`tv-salon-sessions-${targetCode || "latest"}-${Date.now()}`)
+      .channel(`tv-salon-sessions-all-${Date.now()}`)
       .on(
         "postgres_changes",
         {
           event: "*",
           schema: "public",
           table: "game_sessions",
-          ...(targetCode ? { filter: `code=eq.${targetCode}` } : {}),
         },
         (payload) => {
           if (!isMounted) return;
           const nextRow = payload.new as ExtendedSession | null;
-          if (nextRow && nextRow.id) {
+          if (!nextRow || !nextRow.id) {
+            void refreshSession();
+            return;
+          }
+
+          const nextCode = String(nextRow.code ?? "").trim().toUpperCase();
+          const matchesRoute = !hasExplicitCode || nextCode === routeCode;
+          const matchesCurrentId =
+            Boolean(activeSessionId) && nextRow.id === activeSessionId;
+
+          if (matchesRoute || matchesCurrentId) {
             const applied = applySessionRow(nextRow);
             bindSession(applied);
           } else {
@@ -332,7 +329,7 @@ export default function TvSalonPage() {
         void supabase.removeChannel(playersChannel);
       }
     };
-  }, [supabase, routeCode, hasExplicitCode, activeCode]);
+  }, [supabase, routeCode, hasExplicitCode]);
 
   useEffect(() => {
     if (!session || !activeCode) return;
