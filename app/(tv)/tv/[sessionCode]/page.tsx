@@ -12,8 +12,11 @@ type BotLevel = "cool" | "normal" | "expert";
 
 interface SalonBotConfig {
   id: string;
-  nickname: string;
+  nickname?: string;
+  name?: string;
+  pseudo?: string;
   avatar?: string;
+  score?: number;
   botLevel?: BotLevel;
 }
 
@@ -96,25 +99,26 @@ export default function TvSalonPage() {
   );
 
   const players = useMemo<ExtendedPlayer[]>(() => {
-    const stateBots = Array.isArray(session?.game_state?.bots)
-      ? session.game_state.bots
-      : [];
+    const rawBots = session?.game_state?.bots;
+    const stateBots = Array.isArray(rawBots) ? rawBots : [];
 
     const botPlayers: ExtendedPlayer[] = stateBots
-      .filter((b) => Boolean(b?.id && b?.nickname))
-      .map(
-        (b) =>
-          ({
-            id: String(b.id),
-            session_id: session?.id ?? activeCode,
-            nickname: String(b.nickname),
-            avatar: b.avatar ?? "🤖",
-            is_host: false,
-            is_connected: true,
-            isBot: true,
-            botLevel: b.botLevel ?? "normal",
-          }) as ExtendedPlayer
-      );
+      .filter((b) => Boolean(b?.id))
+      .map((b, index) => {
+        const label =
+          String(b.nickname ?? b.name ?? b.pseudo ?? "").trim() ||
+          `Bot ${index + 1}`;
+        return {
+          id: String(b.id),
+          session_id: session?.id ?? activeCode,
+          nickname: label,
+          avatar: b.avatar || "🤖",
+          is_host: false,
+          is_connected: true,
+          isBot: true,
+          botLevel: b.botLevel ?? "normal",
+        } as ExtendedPlayer;
+      });
 
     const existingIds = new Set(humanPlayers.map((p) => String(p.id)));
     const uniqueBots = botPlayers.filter((bp) => !existingIds.has(String(bp.id)));
@@ -243,7 +247,14 @@ export default function TvSalonPage() {
         }
       }
 
-      setSession(currentRow);
+      setSession((prev) => {
+        if (!prev || prev.id !== currentRow!.id) return currentRow;
+        return {
+          ...prev,
+          ...currentRow,
+          game_state: currentRow!.game_state ?? prev.game_state,
+        };
+      });
       bindSession(currentRow);
     };
 
@@ -263,7 +274,11 @@ export default function TvSalonPage() {
           if (!isMounted) return;
           const nextRow = payload.new as ExtendedSession | null;
           if (nextRow && nextRow.id) {
-            setSession(nextRow);
+            setSession((prev) => ({
+              ...(prev ?? nextRow),
+              ...nextRow,
+              game_state: nextRow.game_state ?? prev?.game_state ?? null,
+            }));
             bindSession(nextRow);
           } else {
             void refreshSession();
