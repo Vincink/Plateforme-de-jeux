@@ -49,7 +49,9 @@ function normalizeGameState(rawState: unknown): SalonGameState {
   if (typeof rawState === "string") {
     try {
       const parsed = JSON.parse(rawState);
-      return parsed && typeof parsed === "object" ? (parsed as SalonGameState) : {};
+      return parsed && typeof parsed === "object"
+        ? (parsed as SalonGameState)
+        : {};
     } catch {
       return {};
     }
@@ -122,38 +124,44 @@ export default function TvSalonPage() {
       (p) => !p.isBot && !p.is_bot && !String(p.id).startsWith("bot-")
     );
     const dbBotRows = dbPlayers.filter(
-      (p) => Boolean(p.isBot) || Boolean(p.is_bot) || String(p.id).startsWith("bot-")
+      (p) =>
+        Boolean(p.isBot) ||
+        Boolean(p.is_bot) ||
+        String(p.id).startsWith("bot-")
     );
 
-    const stateBots = Array.isArray(parsedState.bots) ? parsedState.bots : [];
-    const stateBotRows: ExtendedPlayer[] = stateBots
-      .filter((b) => Boolean(b?.id))
-      .map((b, index) => ({
-        id: String(b.id),
-        session_id: session?.id ?? activeCode,
-        nickname:
-          String(b.nickname ?? b.name ?? b.pseudo ?? "").trim() ||
-          `Bot ${index + 1}`,
-        avatar: b.avatar || "🤖",
-        is_host: false,
-        is_connected: true,
-        isBot: true,
-        botLevel: b.botLevel ?? "normal",
-      })) as ExtendedPlayer[];
+    const hasBotsKeyInState =
+      parsedState !== null &&
+      typeof parsedState === "object" &&
+      Object.prototype.hasOwnProperty.call(parsedState, "bots") &&
+      Array.isArray(parsedState.bots);
 
-    const mergedBots = stateBots.length > 0 || parsedState.bots !== undefined
-      ? stateBotRows
+    const stateBotRows: ExtendedPlayer[] = hasBotsKeyInState
+      ? (parsedState.bots ?? [])
+          .filter((b) => Boolean(b?.id))
+          .map((b, index) => ({
+            id: String(b.id),
+            session_id: session?.id ?? activeCode,
+            nickname:
+              String(b.nickname ?? b.name ?? b.pseudo ?? "").trim() ||
+              `Bot ${index + 1}`,
+            avatar: b.avatar || "🤖",
+            is_host: false,
+            is_connected: true,
+            isBot: true,
+            botLevel: b.botLevel ?? "normal",
+          })) as ExtendedPlayer[]
       : dbBotRows;
 
     const mapById = new Map<string, ExtendedPlayer>();
     for (const p of humanRows) {
       mapById.set(String(p.id), p);
     }
-    for (const b of mergedBots) {
+    for (const b of stateBotRows) {
       mapById.set(String(b.id), b);
     }
     return Array.from(mapById.values());
-  }, [dbPlayers, parsedState.bots, session?.id, activeCode]);
+  }, [dbPlayers, parsedState, session?.id, activeCode]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !activeCode) return;
@@ -164,7 +172,7 @@ export default function TvSalonPage() {
     if (!supabase) return;
 
     let isMounted = true;
-    let activeSessionId: string | null = null;
+    let currentSessionId: string | null = null;
     let playersChannel: ReturnType<typeof supabase.channel> | null = null;
 
     const loadGameMeta = async (gameId: string | null | undefined) => {
@@ -195,11 +203,11 @@ export default function TvSalonPage() {
       void loadPlayers(targetSession.id);
       void loadGameMeta(targetSession.game_id);
 
-      if (activeSessionId === targetSession.id && playersChannel) {
+      if (currentSessionId === targetSession.id && playersChannel) {
         return;
       }
 
-      activeSessionId = targetSession.id;
+      currentSessionId = targetSession.id;
 
       if (playersChannel) {
         void supabase.removeChannel(playersChannel);
@@ -226,16 +234,7 @@ export default function TvSalonPage() {
     const refreshSession = async () => {
       let currentRow: ExtendedSession | null = null;
 
-      if (activeSessionId) {
-        const { data } = await supabase
-          .from("game_sessions")
-          .select("*")
-          .eq("id", activeSessionId)
-          .maybeSingle<ExtendedSession>();
-        currentRow = data ?? null;
-      }
-
-      if (!currentRow && hasExplicitCode) {
+      if (hasExplicitCode) {
         const { data } = await supabase
           .from("game_sessions")
           .select("*")
@@ -259,6 +258,38 @@ export default function TvSalonPage() {
       if (!isMounted || !currentRow) return;
 
       const cleanState = normalizeGameState(currentRow.game_state);
+      const replacementCode = (
+        cleanState.nextSessionCode ||
+        cleanState.replacedByCode ||
+        ""
+      )
+        .trim()
+        .toUpperCase();
+
+      if (
+        replacementCode &&
+        replacementCode !== (currentRow.code ?? "").toUpperCase()
+      ) {
+        const { data: replacementSession } = await supabase
+          .from("game_sessions")
+          .select("*")
+          .eq("code", replacementCode)
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle<ExtendedSession>();
+
+        if (!isMounted) return;
+        if (replacementSession) {
+          const appliedReplacement: ExtendedSession = {
+            ...replacementSession,
+            game_state: normalizeGameState(replacementSession.game_state),
+          };
+          setSession(appliedReplacement);
+          bindSession(appliedReplacement);
+          return;
+        }
+      }
+
       const applied: ExtendedSession = {
         ...currentRow,
         game_state: cleanState,
@@ -270,7 +301,7 @@ export default function TvSalonPage() {
     void refreshSession();
 
     const sessionsChannel = supabase
-      .channel(`tv-salon-sessions-all-${Date.now()}`)
+      .channel(`tv-salon-sessions-${Date.now()}`)
       .on(
         "postgres_changes",
         {
@@ -278,27 +309,9 @@ export default function TvSalonPage() {
           schema: "public",
           table: "game_sessions",
         },
-        (payload) => {
+        () => {
           if (!isMounted) return;
-          const nextRow = payload.new as ExtendedSession | null;
-          if (!nextRow || !nextRow.id) {
-            void refreshSession();
-            return;
-          }
-
-          const nextCode = String(nextRow.code ?? "").trim().toUpperCase();
-          const matchesRoute = !hasExplicitCode || nextCode === routeCode;
-          const matchesCurrentId =
-            Boolean(activeSessionId) && nextRow.id === activeSessionId;
-
-          if (matchesRoute || matchesCurrentId) {
-            const applied: ExtendedSession = {
-              ...nextRow,
-              game_state: normalizeGameState(nextRow.game_state),
-            };
-            setSession(applied);
-            bindSession(applied);
-          }
+          void refreshSession();
         }
       )
       .subscribe();
@@ -306,10 +319,10 @@ export default function TvSalonPage() {
     const syncInterval = window.setInterval(() => {
       if (!isMounted) return;
       void refreshSession();
-      if (activeSessionId) {
-        void loadPlayers(activeSessionId);
+      if (currentSessionId) {
+        void loadPlayers(currentSessionId);
       }
-    }, 800);
+    }, 600);
 
     return () => {
       isMounted = false;
