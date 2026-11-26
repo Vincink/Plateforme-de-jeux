@@ -1504,6 +1504,9 @@ export default function AdminConsolePage() {
         game: currentGame,
         nextStatus: "playing",
         qrVisible: showQrOnTv,
+        nextBlitzRoundNumber: isTargetBlitzGame(currentGame)
+          ? 0
+          : blitzRoundNumber,
         nextQuestionStartedAt: resumedStartedAt,
         nextPausedRemaining: null,
         resetAnswers: false,
