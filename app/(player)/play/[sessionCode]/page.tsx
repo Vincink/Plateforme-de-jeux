@@ -1271,17 +1271,16 @@ export default function PlayerControllerPage() {
   };
 
   const handleTrackpadTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (e.touches.length === 0) return;
     const touch = e.touches[0];
+    if (!touch) return;
     const now = Date.now();
     lastTouchRef.current = { x: touch.clientX, y: touch.clientY, time: now };
     touchStartRef.current = { x: touch.clientX, y: touch.clientY, time: now };
   };
 
   const handleTrackpadTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (!lastTouchRef.current || !trackpadRef.current || e.touches.length === 0)
-      return;
     const touch = e.touches[0];
+    if (!lastTouchRef.current || !trackpadRef.current || !touch) return;
     const rect = trackpadRef.current.getBoundingClientRect();
 
     const sensitivity = 1.35;
@@ -1309,8 +1308,8 @@ export default function PlayerControllerPage() {
   };
 
   const handleTrackpadTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
-    if (touchStartRef.current && e.changedTouches.length > 0) {
-      const touch = e.changedTouches[0];
+    const touch = e.changedTouches[0];
+    if (touchStartRef.current && touch) {
       const dist = Math.hypot(
         touch.clientX - touchStartRef.current.x,
         touch.clientY - touchStartRef.current.y
