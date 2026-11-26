@@ -54,6 +54,7 @@ const QUESTIONS_PER_GAME = 15;
 const JUSTE_CHIFFRE_MIN = 1;
 const JUSTE_CHIFFRE_MAX = 1000;
 const JUSTE_CHIFFRE_DURATION_SECONDS = 20;
+const TARGET_BLITZ_DURATION_SECONDS = 45;
 
 const BOT_NAMES = [
   "Léo",
@@ -303,27 +304,58 @@ function isJusteChiffreGame(game?: CatalogGame | null): boolean {
   );
 }
 
-function ensureJusteChiffreCatalog(list: CatalogGame[]): CatalogGame[] {
-  const hasJc = list.some((g) => isJusteChiffreGame(g));
-  if (hasJc) return list;
+function isTargetBlitzGame(game?: CatalogGame | null): boolean {
+  if (!game) return false;
+  const slug = (game.slug ?? "").toLowerCase();
+  const title = (game.title ?? "").toLowerCase();
+  return (
+    slug.includes("target-blitz") ||
+    slug.includes("target_blitz") ||
+    slug.includes("targetblitz") ||
+    title.includes("target blitz")
+  );
+}
 
-  const jcFromInitial = INITIAL_GAMES.find((g) => isJusteChiffreGame(g));
-  if (jcFromInitial) {
-    return [...list, jcFromInitial];
+function ensureCatalogGames(list: CatalogGame[]): CatalogGame[] {
+  let nextList = [...list];
+
+  const hasJc = nextList.some((g) => isJusteChiffreGame(g));
+  if (!hasJc) {
+    const jcFromInitial = INITIAL_GAMES.find((g) => isJusteChiffreGame(g));
+    nextList = [
+      ...nextList,
+      jcFromInitial ??
+        ({
+          id: "juste-chiffre",
+          slug: "juste-chiffre",
+          title: "Le Juste Chiffre",
+          tagline: "Trouvez ou approchez le nombre entre 1 et 1000",
+          min_players: 1,
+          max_players: 12,
+          is_active: true,
+        } as CatalogGame),
+    ];
   }
 
-  return [
-    ...list,
-    {
-      id: "juste-chiffre",
-      slug: "juste-chiffre",
-      title: "Le Juste Chiffre",
-      tagline: "Trouvez ou approchez le nombre entre 1 et 1000",
-      min_players: 1,
-      max_players: 12,
-      is_active: true,
-    } as CatalogGame,
-  ];
+  const hasBlitz = nextList.some((g) => isTargetBlitzGame(g));
+  if (!hasBlitz) {
+    const blitzFromInitial = INITIAL_GAMES.find((g) => isTargetBlitzGame(g));
+    nextList = [
+      ...nextList,
+      blitzFromInitial ??
+        ({
+          id: "target-blitz",
+          slug: "target-blitz",
+          title: "Target Blitz",
+          tagline: "Tir arcade multijoueur avec viseurs, bonus et bombes",
+          min_players: 1,
+          max_players: 12,
+          is_active: true,
+        } as CatalogGame),
+    ];
+  }
+
+  return nextList;
 }
 
 function generateSessionCode(): string {
@@ -504,10 +536,10 @@ export default function AdminConsolePage() {
   const supabase = getSupabaseBrowserClient();
 
   const [games, setGames] = useState<CatalogGame[]>(() =>
-    ensureJusteChiffreCatalog(INITIAL_GAMES)
+    ensureCatalogGames(INITIAL_GAMES)
   );
   const [selectedGameId, setSelectedGameId] = useState<string>(
-    () => ensureJusteChiffreCatalog(INITIAL_GAMES)[0]?.id ?? ""
+    () => ensureCatalogGames(INITIAL_GAMES)[0]?.id ?? ""
   );
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionCode, setSessionCode] = useState<string>(() =>
@@ -675,8 +707,11 @@ export default function AdminConsolePage() {
     games.find((g) => g.id === selectedGameId) ?? games[0];
 
   const isGameLaunched = status === "playing" || status === "paused";
-  const isJusteChiffre = isJusteChiffreGame(selectedGame);
-  const activeDurationSeconds = isJusteChiffre
+  const isTargetBlitz = isTargetBlitzGame(selectedGame);
+  const isJusteChiffre = !isTargetBlitz && isJusteChiffreGame(selectedGame);
+  const activeDurationSeconds = isTargetBlitz
+    ? TARGET_BLITZ_DURATION_SECONDS
+    : isJusteChiffre
     ? JUSTE_CHIFFRE_DURATION_SECONDS
     : QUESTION_DURATION_SECONDS;
 
@@ -685,7 +720,7 @@ export default function AdminConsolePage() {
     : QUESTIONS.length;
   const totalQuestions = Math.min(QUESTIONS_PER_GAME, sourcePoolLength);
   const isEndOfSeries =
-    totalQuestions > 0 && questionIndex >= totalQuestions - 1;
+    !isTargetBlitz && totalQuestions > 0 && questionIndex >= totalQuestions - 1;
 
   const currentJusteChiffreQuestion: JusteChiffreQuestion | null =
     isJusteChiffre && questionIndex >= 0
@@ -698,7 +733,7 @@ export default function AdminConsolePage() {
       : null;
 
   const currentQuestionObj =
-    !isJusteChiffre && questionIndex >= 0
+    !isTargetBlitz && !isJusteChiffre && questionIndex >= 0
       ? remoteCurrentQuestion ??
         seriesQuestions.at(
           Math.min(questionIndex, Math.max(0, seriesQuestions.length - 1))
@@ -706,9 +741,10 @@ export default function AdminConsolePage() {
         null
       : null;
 
-  const currentCorrectLetter = isJusteChiffre
-    ? null
-    : resolveQuestionCorrectLetter(currentQuestionObj);
+  const currentCorrectLetter =
+    isTargetBlitz || isJusteChiffre
+      ? null
+      : resolveQuestionCorrectLetter(currentQuestionObj);
   const currentCorrectBadgeStyle = currentCorrectLetter
     ? getAnswerBadgeStyle(currentCorrectLetter)
     : null;
@@ -1074,8 +1110,10 @@ export default function AdminConsolePage() {
         ? params.nextJusteChiffreQuestions
         : justeChiffreQuestions;
 
-    const numericGameMode = isJusteChiffreGame(activeTargetGame);
+    const blitzGameMode = isTargetBlitzGame(activeTargetGame);
+    const numericGameMode = !blitzGameMode && isJusteChiffreGame(activeTargetGame);
     const isQuizGame =
+      !blitzGameMode &&
       !numericGameMode &&
       (validGameUuid === GRAND_QUIZ_UUID ||
         activeTargetGame?.slug === "quiz" ||
@@ -1115,7 +1153,26 @@ export default function AdminConsolePage() {
         updated_at: new Date().toISOString(),
       };
 
-      if (numericGameMode) {
+      if (blitzGameMode) {
+        basePayload.game_state = {
+          mode: "target-blitz",
+          bots: botsForState,
+          questionStarted: params.nextStatus === "playing",
+          roundTriggered: params.nextStatus === "playing",
+          questionIndex: 0,
+          currentQuestionIndex: 0,
+          questionStartedAt:
+            params.nextStatus === "playing"
+              ? effectiveStartedAt ?? new Date().toISOString()
+              : null,
+          durationSeconds: TARGET_BLITZ_DURATION_SECONDS,
+          isPaused,
+          pausedRemainingSeconds: isPaused ? effectivePausedRemaining : null,
+          seriesNumber: effectiveSeries,
+          seriesSeed: effectiveSeed,
+          stunnedUntil: {},
+        };
+      } else if (numericGameMode) {
         basePayload.game_state = {
           mode: "juste-chiffre",
           bots: botsForState,
@@ -1242,7 +1299,7 @@ export default function AdminConsolePage() {
 
       const rows = Array.isArray(dbGames) ? (dbGames as CatalogGame[]) : [];
       const validRows = rows.filter((g) => isUuid(g.id));
-      const mergedGames = ensureJusteChiffreCatalog(
+      const mergedGames = ensureCatalogGames(
         validRows.length > 0 ? validRows : INITIAL_GAMES
       );
 
@@ -1412,6 +1469,8 @@ export default function AdminConsolePage() {
         resumedStartedAt = new Date(
           nowMs - elapsedBeforePause * 1000
         ).toISOString();
+      } else if (isTargetBlitz && !resumedStartedAt) {
+        resumedStartedAt = new Date(nowMs).toISOString();
       }
 
       setStatus("playing");
@@ -1978,7 +2037,7 @@ export default function AdminConsolePage() {
                   <span className="text-white font-medium">
                     {selectedGame?.title ?? "Aucun"}
                   </span>
-                  {questionIndex >= 0
+                  {!isTargetBlitz && questionIndex >= 0
                     ? ` • Question ${questionIndex + 1} / ${totalQuestions}`
                     : ""}
                 </p>
@@ -2081,7 +2140,7 @@ export default function AdminConsolePage() {
 
                   <button
                     type="button"
-                    disabled={!isGameLaunched || isEndOfSeries}
+                    disabled={isTargetBlitz || !isGameLaunched || isEndOfSeries}
                     onClick={() => void handleNextQuestion()}
                     className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold transition"
                   >
