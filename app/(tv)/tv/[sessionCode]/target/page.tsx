@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { Timer, Trophy } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
@@ -146,6 +146,7 @@ function formatClock(seconds: number): string {
 
 export default function TargetBlitzGamePage() {
   const params = useParams<{ sessionCode?: string; code?: string }>();
+  const router = useRouter();
   const rawCode = params?.sessionCode ?? params?.code ?? "";
   const sessionCode = String(rawCode).toUpperCase();
   const supabase = getSupabaseBrowserClient();
@@ -192,6 +193,20 @@ export default function TargetBlitzGamePage() {
   roundStatusRef.current = roundStatus;
   const isPausedRef = useRef<boolean>(Boolean(blitzState.isPaused));
   isPausedRef.current = Boolean(blitzState.isPaused);
+
+  useEffect(() => {
+    if (!session) return;
+    const normalizedStatus = String(session.status ?? "").toLowerCase();
+    if (
+      normalizedStatus === "finished" ||
+      normalizedStatus === "ended" ||
+      normalizedStatus === "completed" ||
+      normalizedStatus === "lobby"
+    ) {
+      const targetCode = (session.code || sessionCode || "").toUpperCase();
+      router.replace(targetCode ? `/tv/${targetCode}` : "/tv");
+    }
+  }, [session, sessionCode, router]);
 
   const durationSeconds = useMemo(() => {
     const d = Number(blitzState.durationSeconds);
