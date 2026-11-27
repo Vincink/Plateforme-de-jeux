@@ -22,6 +22,8 @@ interface SalonBotConfig {
 
 interface SalonGameState {
   mode?: string;
+  gameType?: string;
+  gameSlug?: string;
   bots?: SalonBotConfig[];
   nextSessionCode?: string;
   replacedByCode?: string;
@@ -59,11 +61,37 @@ function normalizeGameState(rawState: unknown): SalonGameState {
   return typeof rawState === "object" ? (rawState as SalonGameState) : {};
 }
 
+function isTargetBlitzTarget(
+  state: SalonGameState | null | undefined,
+  meta: GameMeta | null | undefined
+): boolean {
+  const mode = String(state?.mode ?? "").toLowerCase();
+  const gameType = String(state?.gameType ?? "").toLowerCase();
+  const gameSlug = String(state?.gameSlug ?? "").toLowerCase();
+  const title = String(meta?.title ?? "").toLowerCase();
+  const slug = String(meta?.slug ?? "").toLowerCase();
+  return (
+    mode.includes("target-blitz") ||
+    mode.includes("target_blitz") ||
+    mode.includes("targetblitz") ||
+    gameType.includes("target-blitz") ||
+    gameType.includes("target_blitz") ||
+    gameSlug.includes("target-blitz") ||
+    gameSlug.includes("target_blitz") ||
+    slug.includes("target-blitz") ||
+    slug.includes("target_blitz") ||
+    slug.includes("targetblitz") ||
+    title.includes("target blitz")
+  );
+}
+
 function isJusteChiffreTarget(
   state: SalonGameState | null | undefined,
   meta: GameMeta | null | undefined
 ): boolean {
   const mode = String(state?.mode ?? "").toLowerCase();
+  const gameType = String(state?.gameType ?? "").toLowerCase();
+  const gameSlug = String(state?.gameSlug ?? "").toLowerCase();
   const title = String(meta?.title ?? "").toLowerCase();
   const slug = String(meta?.slug ?? "").toLowerCase();
   return (
@@ -72,6 +100,8 @@ function isJusteChiffreTarget(
     mode.includes("estimation") ||
     mode.includes("juste-prix") ||
     mode.includes("proche") ||
+    gameType.includes("juste-chiffre") ||
+    gameSlug.includes("juste-chiffre") ||
     slug.includes("juste-chiffre") ||
     slug.includes("juste_chiffre") ||
     slug.includes("estimation") ||
@@ -114,10 +144,12 @@ export default function TvSalonPage() {
     return replacement || (session?.code ?? routeCode).toUpperCase();
   }, [parsedState, session?.code, routeCode]);
 
-  const gameTitle = useMemo(
-    () => gameMeta?.title || "Grand Quiz tvOS",
-    [gameMeta?.title]
-  );
+  const gameTitle = useMemo(() => {
+    if (gameMeta?.title) return gameMeta.title;
+    if (isTargetBlitzTarget(parsedState, gameMeta)) return "Target Blitz";
+    if (isJusteChiffreTarget(parsedState, gameMeta)) return "Le Juste Chiffre";
+    return "Grand Quiz tvOS";
+  }, [gameMeta, parsedState]);
 
   const players = useMemo<ExtendedPlayer[]>(() => {
     const humanRows = dbPlayers.filter(
@@ -176,7 +208,10 @@ export default function TvSalonPage() {
     let playersChannel: ReturnType<typeof supabase.channel> | null = null;
 
     const loadGameMeta = async (gameId: string | null | undefined) => {
-      if (!gameId) return;
+      if (!gameId) {
+        if (isMounted) setGameMeta(null);
+        return;
+      }
       const { data } = await supabase
         .from("games")
         .select("title, slug")
@@ -338,7 +373,9 @@ export default function TvSalonPage() {
     if (!session || !activeCode) return;
     const status = String(session.status ?? "").toLowerCase();
     if (status === "playing" || status === "paused") {
-      const targetRoute = isJusteChiffreTarget(parsedState, gameMeta)
+      const targetRoute = isTargetBlitzTarget(parsedState, gameMeta)
+        ? `/tv/${activeCode}/target`
+        : isJusteChiffreTarget(parsedState, gameMeta)
         ? `/tv/${activeCode}/juste-chiffre`
         : `/tv/${activeCode}/quiz`;
       router.replace(targetRoute);
