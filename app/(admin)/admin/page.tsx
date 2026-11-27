@@ -757,7 +757,7 @@ export default function AdminConsolePage() {
 
   const resolveValidGameUuid = (
     candidateGame?: CatalogGame | null
-  ): string => {
+  ): string | null => {
     if (isUuid(candidateGame?.id)) {
       return candidateGame.id;
     }
@@ -768,7 +768,10 @@ export default function AdminConsolePage() {
       return matchedBySlug.id;
     }
     const firstDbUuidGame = games.find((g) => isUuid(g.id));
-    return firstDbUuidGame?.id ?? GRAND_QUIZ_UUID;
+    if (firstDbUuidGame?.id) {
+      return firstDbUuidGame.id;
+    }
+    return isTargetBlitzGame(candidateGame) ? null : GRAND_QUIZ_UUID;
   };
 
   const extractAnswersFromGameState = (
@@ -1076,6 +1079,8 @@ export default function AdminConsolePage() {
     }
 
     const activeTargetGame = params.game ?? selectedGameRef.current ?? selectedGame;
+    const blitzGameMode = isTargetBlitzGame(activeTargetGame);
+    const numericGameMode = !blitzGameMode && isJusteChiffreGame(activeTargetGame);
     const validGameUuid = resolveValidGameUuid(activeTargetGame);
 
     const effectiveQuestionIndex =
@@ -1116,10 +1121,6 @@ export default function AdminConsolePage() {
         ? params.nextJusteChiffreQuestions
         : justeChiffreQuestions;
 
-    const blitzGameMode = isTargetBlitzGame(activeTargetGame);
-    const numericGameMode = !blitzGameMode && isJusteChiffreGame(activeTargetGame);
-    const isQuizGame = !blitzGameMode && !numericGameMode;
-
     const hasQuestionStarted = effectiveQuestionIndex >= 0;
     const isPaused = params.nextStatus === "paused";
     const shouldResetAnswers = params.resetAnswers !== false;
@@ -1148,24 +1149,26 @@ export default function AdminConsolePage() {
     try {
       const basePayload: Record<string, unknown> = {
         code: params.code,
-        game_id: validGameUuid,
         status: params.nextStatus,
         show_qr: params.qrVisible,
         updated_at: new Date().toISOString(),
       };
 
       if (blitzGameMode) {
+        if (validGameUuid) {
+          basePayload.game_id = validGameUuid;
+        }
         const roundActive =
           params.nextStatus === "playing" && effectiveBlitzRound > 0;
         basePayload.game_state = {
           mode: "target-blitz",
           gameSlug: "target-blitz",
-          bots: botsForState,
+          roundStarted: roundActive,
           roundNumber: effectiveBlitzRound,
-          questionStarted: roundActive,
+          questionStarted: false,
           roundTriggered: roundActive,
-          questionIndex: Math.max(0, effectiveBlitzRound - 1),
-          currentQuestionIndex: Math.max(0, effectiveBlitzRound - 1),
+          questionIndex: -1,
+          currentQuestionIndex: -1,
           questionStartedAt: roundActive
             ? effectiveStartedAt ?? new Date().toISOString()
             : null,
@@ -1174,9 +1177,13 @@ export default function AdminConsolePage() {
           pausedRemainingSeconds: isPaused ? effectivePausedRemaining : null,
           seriesNumber: effectiveSeries,
           seriesSeed: effectiveSeed,
+          bots: botsForState,
           stunnedUntil: {},
         };
       } else if (numericGameMode) {
+        if (validGameUuid) {
+          basePayload.game_id = validGameUuid;
+        }
         basePayload.game_state = {
           mode: "juste-chiffre",
           bots: botsForState,
@@ -1200,7 +1207,10 @@ export default function AdminConsolePage() {
           revealed: false,
           ...(shouldResetAnswers ? { estimates: {}, answers: {} } : {}),
         };
-      } else if (isQuizGame) {
+      } else {
+        if (validGameUuid) {
+          basePayload.game_id = validGameUuid;
+        }
         basePayload.game_state = {
           mode: "quiz",
           bots: botsForState,
@@ -1233,7 +1243,7 @@ export default function AdminConsolePage() {
             .from("game_sessions")
             .update({
               code: params.code,
-              game_id: validGameUuid,
+              ...(validGameUuid ? { game_id: validGameUuid } : {}),
               status: params.nextStatus,
               show_qr: params.qrVisible,
             })
@@ -1257,7 +1267,7 @@ export default function AdminConsolePage() {
             .from("game_sessions")
             .insert({
               code: params.code,
-              game_id: validGameUuid,
+              ...(validGameUuid ? { game_id: validGameUuid } : {}),
               status: params.nextStatus,
               show_qr: params.qrVisible,
             })
@@ -1489,6 +1499,7 @@ export default function AdminConsolePage() {
         game: currentGame,
         nextStatus: "playing",
         qrVisible: showQrOnTv,
+        nextQuestionIndex: isTargetBlitzGame(currentGame) ? -1 : questionIndex,
         nextBlitzRoundNumber: isTargetBlitzGame(currentGame)
           ? 0
           : blitzRoundNumber,
@@ -1515,19 +1526,12 @@ export default function AdminConsolePage() {
       game: currentGame,
       nextStatus: "playing",
       qrVisible: showQrOnTv,
+      nextQuestionIndex: -1,
       nextBlitzRoundNumber: nextRound,
       nextQuestionStartedAt: startedIso,
       nextPausedRemaining: null,
       resetAnswers: false,
     });
-
-    if (typeof window !== "undefined") {
-      window.open(
-        `/tv/${sessionCode}/target`,
-        "_blank",
-        "noopener,noreferrer"
-      );
-    }
   };
 
   const handleRestartNewSeries = async () => {
