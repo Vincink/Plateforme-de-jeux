@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Flame, Swords, Timer, Trophy } from "lucide-react";
+import { Award, Crown, Flame, Medal, Swords, Timer, Trophy } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import type { GameSession, PlayerScore, SessionPlayer } from "@/types/game.types";
@@ -95,8 +95,9 @@ interface SvgSpriteAssets {
 
 const ROUND_DURATION_SECONDS = 60;
 const COUNTDOWN_SECONDS = 3;
+const ROUND_WINNER_DELAY_MS = 2000;
 const DEFAULT_TOTAL_ROUNDS = 5;
-const MAX_SPAWNED_TARGETS = 10;
+const MAX_SPAWNED_TARGETS = 11;
 const TARGET_COLORS = ["#22d3ee", "#4ade80", "#fb923c", "#f472b6", "#a78bfa"];
 
 function isBotPlayer(player: SessionPlayer): boolean {
@@ -110,9 +111,70 @@ function isBotPlayer(player: SessionPlayer): boolean {
   return String(player.nickname ?? "").trim().toUpperCase().startsWith("[BOT]");
 }
 
+function createTopDownTarget(index: number): BlitzTarget {
+  const roll = Math.random();
+  const baseId = `${Date.now()}-top-${index}-${Math.random().toString(36).slice(2, 6)}`;
+  const startX = 12 + Math.random() * 76;
+  const startY = -6 - Math.random() * 10;
+  const horizontalSpeed =
+    (Math.random() < 0.5 ? -1 : 1) * (6 + Math.random() * 14);
+
+  if (roll < 0.24) {
+    return {
+      id: `bomb-${baseId}`,
+      x: startX,
+      y: startY,
+      radiusPct: 4.3,
+      kind: "bomb",
+      points: -5,
+      vx: horizontalSpeed,
+      vy: 12 + Math.random() * 9,
+      gravity: 0,
+      canSplit: false,
+      hueColor: "#f43f5e",
+      fusePhase: Math.random() * Math.PI * 2,
+    };
+  }
+
+  if (roll < 0.44) {
+    return {
+      id: `bonus-${baseId}`,
+      x: startX,
+      y: startY,
+      radiusPct: 4.0,
+      kind: "bonus",
+      points: 10,
+      vx: horizontalSpeed * 1.25,
+      vy: 23 + Math.random() * 13,
+      gravity: 0,
+      canSplit: false,
+      hueColor: "#fbbf24",
+      fusePhase: Math.random() * Math.PI * 2,
+    };
+  }
+
+  const paletteColor =
+    TARGET_COLORS[Math.floor(Math.random() * TARGET_COLORS.length)] ?? "#4ade80";
+
+  return {
+    id: `target-${baseId}`,
+    x: startX,
+    y: startY,
+    radiusPct: 5.0,
+    kind: "target",
+    points: 5,
+    vx: horizontalSpeed,
+    vy: 11 + Math.random() * 11,
+    gravity: 0,
+    canSplit: true,
+    hueColor: paletteColor,
+    fusePhase: Math.random() * Math.PI * 2,
+  };
+}
+
 function createFruitNinjaLaunchTarget(index: number): BlitzTarget {
   const roll = Math.random();
-  const baseId = `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`;
+  const baseId = `${Date.now()}-fn-${index}-${Math.random().toString(36).slice(2, 6)}`;
   const startX = 18 + Math.random() * 64;
   const startY = 104 + Math.random() * 6;
   const centerBias = startX < 50 ? 1 : -1;
@@ -174,6 +236,12 @@ function createFruitNinjaLaunchTarget(index: number): BlitzTarget {
   };
 }
 
+function createSpawnTarget(index: number): BlitzTarget {
+  return Math.random() < 0.5
+    ? createTopDownTarget(index)
+    : createFruitNinjaLaunchTarget(index);
+}
+
 function createSplitMiniTarget(
   parent: BlitzTarget,
   sideSign: -1 | 1,
@@ -182,6 +250,7 @@ function createSplitMiniTarget(
   const miniId = `${Date.now()}-mini-${subIndex}-${Math.random()
     .toString(36)
     .slice(2, 6)}`;
+  const hasGravity = parent.gravity > 0;
   return {
     id: `mini-${miniId}`,
     x: Math.max(10, Math.min(90, parent.x + sideSign * 2.2)),
@@ -190,7 +259,7 @@ function createSplitMiniTarget(
     kind: "target",
     points: 5,
     vx: sideSign * (14 + Math.random() * 14),
-    vy: -(28 + Math.random() * 18),
+    vy: hasGravity ? -(28 + Math.random() * 18) : 14 + Math.random() * 10,
     gravity: parent.gravity,
     canSplit: false,
     hueColor: parent.hueColor,
@@ -253,6 +322,10 @@ export default function TargetBlitzGamePage() {
   const [countdownValue, setCountdownValue] = useState<number | null>(null);
   const [isRoundRunning, setIsRoundRunning] = useState<boolean>(false);
   const [roundEnded, setRoundEnded] = useState<boolean>(false);
+  const [isWinnerBannerVisible, setIsWinnerBannerVisible] =
+    useState<boolean>(false);
+  const [isMatchPodiumVisible, setIsMatchPodiumVisible] =
+    useState<boolean>(false);
   const [lastRoundWinnerLabel, setLastRoundWinnerLabel] = useState<string | null>(
     null
   );
@@ -319,7 +392,8 @@ export default function TargetBlitzGamePage() {
   const blitzState = session?.game_state ?? {};
   const isPaused = statusLower === "paused" || Boolean(blitzState.isPaused);
   const isCountingDown = countdownValue !== null && countdownValue > 0;
-  const isActivePlay = isRoundRunning && !isCountingDown && !roundEnded && !isPaused;
+  const isActivePlay =
+    isRoundRunning && !isCountingDown && !roundEnded && !isPaused;
 
   const isRoundRunningRef = useRef<boolean>(isRoundRunning);
   isRoundRunningRef.current = isRoundRunning;
@@ -412,7 +486,6 @@ export default function TargetBlitzGamePage() {
       .upsert(rows, { onConflict: "session_id,player_id" });
   }, [supabase]);
 
-  // Démarre un compte à rebours de 3 secondes puis lance la manche
   const startCountdownAndRound = useCallback(
     async (targetRoundNum: number) => {
       setRoundNumber(targetRoundNum);
@@ -422,6 +495,8 @@ export default function TargetBlitzGamePage() {
       setRemainingSeconds(ROUND_DURATION_SECONDS);
       setIsRoundRunning(true);
       setRoundEnded(false);
+      setIsWinnerBannerVisible(false);
+      setIsMatchPodiumVisible(false);
       setLastRoundWinnerLabel(null);
       setCountdownValue(COUNTDOWN_SECONDS);
       targetsRef.current = [];
@@ -434,7 +509,6 @@ export default function TargetBlitzGamePage() {
     [resetRoundScores]
   );
 
-  // Décompte visuel 3 -> 2 -> 1
   useEffect(() => {
     if (countdownValue === null) return;
 
@@ -442,9 +516,12 @@ export default function TargetBlitzGamePage() {
       setCountdownValue(null);
       roundStartMsRef.current = Date.now();
       setRemainingSeconds(ROUND_DURATION_SECONDS);
-      targetsRef.current = Array.from({ length: 4 }, (_, i) =>
-        createFruitNinjaLaunchTarget(i)
-      );
+      targetsRef.current = [
+        createTopDownTarget(0),
+        createTopDownTarget(1),
+        createFruitNinjaLaunchTarget(2),
+        createFruitNinjaLaunchTarget(3),
+      ];
       return;
     }
 
@@ -455,7 +532,6 @@ export default function TargetBlitzGamePage() {
     return () => window.clearTimeout(timer);
   }, [countdownValue]);
 
-  // Détecte uniquement le clic admin sur "Lancer la manche"
   useEffect(() => {
     if (!session?.id) return;
 
@@ -497,6 +573,8 @@ export default function TargetBlitzGamePage() {
       } else {
         setIsRoundRunning(false);
         setRoundEnded(false);
+        setIsWinnerBannerVisible(false);
+        setIsMatchPodiumVisible(false);
         setCountdownValue(null);
         setRemainingSeconds(ROUND_DURATION_SECONDS);
         targetsRef.current = [];
@@ -520,6 +598,25 @@ export default function TargetBlitzGamePage() {
     blitzState.suddenDeathPlayerIds,
     startCountdownAndRound,
   ]);
+
+  // Délai de 2 secondes en fin de manche avant d'afficher le gagnant / le podium final
+  useEffect(() => {
+    if (!roundEnded) {
+      setIsWinnerBannerVisible(false);
+      setIsMatchPodiumVisible(false);
+      return;
+    }
+
+    const isMatchOver = roundNumber >= totalRounds && !isSuddenDeath;
+    const timerId = window.setTimeout(() => {
+      setIsWinnerBannerVisible(true);
+      if (isMatchOver) {
+        setIsMatchPodiumVisible(true);
+      }
+    }, ROUND_WINNER_DELAY_MS);
+
+    return () => window.clearTimeout(timerId);
+  }, [roundEnded, roundNumber, totalRounds, isSuddenDeath]);
 
   const spawnBurst = useCallback(
     (xPct: number, yPct: number, color: string, count = 22) => {
@@ -607,7 +704,6 @@ export default function TargetBlitzGamePage() {
       const nextTargets = [...targetsRef.current];
       nextTargets.splice(hitIndex, 1);
 
-      // Une cible standard explose en 2 cibles standard plus petites
       if (hitTarget.kind === "target" && hitTarget.canSplit) {
         nextTargets.push(
           createSplitMiniTarget(hitTarget, -1, 0),
@@ -968,7 +1064,6 @@ export default function TargetBlitzGamePage() {
 
       const canMove = isActivePlayRef.current;
 
-      // Étoiles qui descendent vers le bas -> sensation d'avancer vers le haut
       for (const star of starsRef.current) {
         if (canMove) {
           star.y += star.speed * dt;
@@ -989,19 +1084,18 @@ export default function TargetBlitzGamePage() {
         ctx.fill();
       }
 
-      // Lancement type Fruit Ninja avec gravité et rebond latéral uniquement
       if (isRoundRunningRef.current && !roundEndedRef.current) {
         if (canMove) {
           spawnAccumulatorRef.current += dt;
           if (
-            spawnAccumulatorRef.current >= 1.05 &&
+            spawnAccumulatorRef.current >= 1.0 &&
             targetsRef.current.length < MAX_SPAWNED_TARGETS
           ) {
             spawnAccumulatorRef.current = 0;
             const burstCount = Math.random() < 0.35 ? 2 : 1;
             for (let b = 0; b < burstCount; b++) {
               targetsRef.current.push(
-                createFruitNinjaLaunchTarget(targetsRef.current.length + b)
+                createSpawnTarget(targetsRef.current.length + b)
               );
             }
           }
@@ -1011,7 +1105,9 @@ export default function TargetBlitzGamePage() {
         for (const t of targetsRef.current) {
           if (canMove) {
             t.x += t.vx * dt;
-            t.vy += t.gravity * dt;
+            if (t.gravity > 0) {
+              t.vy += t.gravity * dt;
+            }
             t.y += t.vy * dt;
 
             if (t.x < 7) {
@@ -1022,7 +1118,6 @@ export default function TargetBlitzGamePage() {
               t.vx = -Math.abs(t.vx);
             }
 
-            // Disparaît dès qu'elle repasse sous le bas de l'écran après avoir été lancée
             if (t.vy > 0 && t.y > 108) {
               continue;
             }
@@ -1048,12 +1143,11 @@ export default function TargetBlitzGamePage() {
         targetsRef.current = survivingTargets;
       }
 
-      // Intelligence artificielle des bots
       if (canMove) {
         const nowMs = Date.now();
         const bots = playersRef.current.filter(isBotPlayer);
         const validTargets = targetsRef.current.filter(
-          (t) => t.kind !== "bomb" && t.y >= 10 && t.y <= 92
+          (t) => t.kind !== "bomb" && t.y >= 6 && t.y <= 92
         );
 
         for (let idx = 0; idx < bots.length; idx++) {
@@ -1096,7 +1190,7 @@ export default function TargetBlitzGamePage() {
 
           const goalX = chosen ? chosen.x : 50 + Math.sin(timeSec + idx) * 28;
           const goalY = chosen
-            ? Math.min(88, Math.max(14, chosen.y + chosen.vy * 0.12))
+            ? Math.min(88, Math.max(12, chosen.y + chosen.vy * 0.12))
             : 50 + Math.cos(timeSec * 0.8 + idx) * 20;
 
           const dx = goalX - state.x;
@@ -1216,7 +1310,6 @@ export default function TargetBlitzGamePage() {
     };
   }, []);
 
-  // Compte à rebours de 60 secondes une fois le décompte de 3 secondes terminé
   useEffect(() => {
     if (!isActivePlay) {
       if (!isRoundRunning && !roundEnded) {
@@ -1238,7 +1331,6 @@ export default function TargetBlitzGamePage() {
     return () => window.clearInterval(interval);
   }, [isActivePlay, isRoundRunning, roundEnded]);
 
-  // Fin de manche automatique après 60 secondes + affichage du vainqueur de la manche
   useEffect(() => {
     if (!isActivePlay || remainingSeconds > 0) return;
 
@@ -1459,8 +1551,30 @@ export default function TargetBlitzGamePage() {
     });
   }, [players, scores, roundWins]);
 
+  const rankedForPodium = useMemo(() => {
+    return [...players]
+      .map((p) => ({
+        player: p,
+        wins: roundWins[p.id] ?? 0,
+        score: scores[p.id] ?? 0,
+      }))
+      .sort((a, b) => {
+        if (b.wins !== a.wins) return b.wins - a.wins;
+        return b.score - a.score;
+      });
+  }, [players, roundWins, scores]);
+
+  const podiumSlots = useMemo(() => {
+    return {
+      first: rankedForPodium[0],
+      second: rankedForPodium[1],
+      third: rankedForPodium[2],
+    };
+  }, [rankedForPodium]);
+
   const overallLeader = useMemo(() => {
-    if (players.length === 0) return { winnerName: null, tiedNames: [] as string[] };
+    if (players.length === 0)
+      return { winnerName: null, tiedNames: [] as string[] };
     let maxWins = -1;
     let leaders: SessionPlayer[] = [];
     for (const p of players) {
@@ -1490,6 +1604,33 @@ export default function TargetBlitzGamePage() {
       ref={containerRef}
       className="relative w-screen h-screen overflow-hidden select-none bg-[#090516] text-white flex flex-col justify-between"
     >
+      <style jsx>{`
+        @keyframes podiumJump {
+          0%,
+          100% {
+            transform: translateY(0) scale(1);
+          }
+          25% {
+            transform: translateY(-16px) scale(1.03);
+          }
+          50% {
+            transform: translateY(0) scale(0.98);
+          }
+          75% {
+            transform: translateY(-9px) scale(1.015);
+          }
+        }
+        .podium-jump-1 {
+          animation: podiumJump 1.15s ease-in-out infinite;
+        }
+        .podium-jump-2 {
+          animation: podiumJump 1.15s ease-in-out 0.18s infinite;
+        }
+        .podium-jump-3 {
+          animation: podiumJump 1.15s ease-in-out 0.36s infinite;
+        }
+      `}</style>
+
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block" />
 
       {/* Haut de l'écran : manche + chrono */}
@@ -1555,59 +1696,198 @@ export default function TargetBlitzGamePage() {
         </div>
       )}
 
-      {/* Overlay avant lancement ou en fin de manche */}
-      {!isCountingDown && !isActivePlay && (
+      {/* Overlay avant lancement ou gagnant de la manche après 2 secondes */}
+      {!isCountingDown && !isActivePlay && !isMatchPodiumVisible && (
         <div className="absolute inset-0 z-20 bg-black/55 backdrop-blur-xs flex flex-col items-center justify-center text-center p-6 pointer-events-none">
-          <div className="rounded-3xl border border-white/15 bg-slate-950/90 px-8 py-6 shadow-2xl space-y-2.5 max-w-lg">
-            {roundEnded ? (
-              <>
-                <div className="inline-flex items-center gap-1.5 text-xs font-black uppercase tracking-widest text-amber-300">
-                  <Trophy className="w-4 h-4" />
-                  <span>Fin de la manche {roundNumber}</span>
-                </div>
-                <p className="text-3xl font-black tracking-tight text-white">
-                  Gagnant :{" "}
-                  <span className="text-amber-300">
-                    {lastRoundWinnerLabel ?? "—"}
-                  </span>
+          {roundEnded && isWinnerBannerVisible ? (
+            <div className="rounded-3xl border border-white/15 bg-slate-950/90 px-8 py-6 shadow-2xl space-y-2.5 max-w-lg">
+              <div className="inline-flex items-center gap-1.5 text-xs font-black uppercase tracking-widest text-amber-300">
+                <Trophy className="w-4 h-4" />
+                <span>Fin de la manche {roundNumber}</span>
+              </div>
+              <p className="text-3xl font-black tracking-tight text-white">
+                Gagnant :{" "}
+                <span className="text-amber-300">
+                  {lastRoundWinnerLabel ?? "—"}
+                </span>
+              </p>
+              {isSuddenDeath ? (
+                <p className="text-sm font-bold text-rose-300">
+                  Égalité ! Clique sur « Lancer la manche » pour la mort subite.
                 </p>
-                {roundNumber >= totalRounds &&
-                !isSuddenDeath &&
-                overallLeader.winnerName ? (
-                  <p className="text-base font-extrabold text-emerald-300">
-                    Champion de la partie : {overallLeader.winnerName} !
-                  </p>
-                ) : isSuddenDeath ? (
-                  <p className="text-sm font-bold text-rose-300">
-                    Égalité ! Clique sur « Lancer la manche » pour la mort subite.
-                  </p>
+              ) : (
+                <p className="text-sm text-neutral-300">
+                  Clique sur « Lancer la manche » dans l&apos;admin pour la
+                  manche suivante.
+                </p>
+              )}
+            </div>
+          ) : !roundEnded ? (
+            <div className="rounded-3xl border border-white/15 bg-slate-950/90 px-8 py-6 shadow-2xl space-y-2 max-w-lg">
+              <p className="text-3xl font-black tracking-tight text-amber-300">
+                {isPaused
+                  ? "PAUSE"
+                  : isSuddenDeath
+                  ? "MORT SUBITE"
+                  : "TARGET BLITZ PRÊT"}
+              </p>
+              <p className="text-sm text-neutral-300">
+                {isPaused
+                  ? "La manche est mise en pause."
+                  : "Clique sur « Lancer la manche » dans le panneau admin pour démarrer."}
+              </p>
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {/* Podium final après les 5 manches */}
+      {isMatchPodiumVisible && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-6 md:p-8 pointer-events-none">
+          <div className="w-full max-w-5xl h-[82vh] bg-neutral-900/95 border-2 border-amber-400/50 rounded-[2.5rem] p-6 md:p-8 flex flex-col justify-between shadow-2xl">
+            <div className="text-center shrink-0 border-b border-white/15 pb-4">
+              <div className="inline-flex items-center gap-2 px-5 py-1.5 rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-300 text-sm font-extrabold uppercase tracking-[0.22em] mb-2">
+                <Crown className="w-5 h-5 text-amber-400" />
+                <span>Fin des {totalRounds} manches</span>
+              </div>
+              <h2 className="text-4xl xl:text-6xl font-black uppercase tracking-[0.18em] text-amber-300">
+                PODIUM
+              </h2>
+            </div>
+
+            <div className="flex-1 min-h-0 grid grid-cols-3 items-end gap-4 md:gap-6 pt-8">
+              <div className="flex flex-col items-center gap-3 h-[78%]">
+                {podiumSlots.second ? (
+                  <>
+                    <div className="podium-jump-2 flex items-center gap-2.5 w-full">
+                      <div
+                        style={{
+                          backgroundColor: getUniquePlayerColor(
+                            podiumSlots.second.player.id,
+                            players
+                          ).bgHex,
+                          borderColor: getUniquePlayerColor(
+                            podiumSlots.second.player.id,
+                            players
+                          ).borderHex,
+                          color: getUniquePlayerColor(
+                            podiumSlots.second.player.id,
+                            players
+                          ).textHex,
+                        }}
+                        className="flex-1 min-w-0 rounded-2xl border-2 px-4 py-2.5 font-black text-xl xl:text-3xl truncate shadow-lg"
+                      >
+                        {podiumSlots.second.player.nickname}
+                      </div>
+                      <div className="w-12 h-12 rounded-2xl bg-slate-300/20 border-2 border-slate-300 flex items-center justify-center text-slate-200 shrink-0 shadow-md">
+                        <Medal className="w-7 h-7 text-slate-200" />
+                      </div>
+                    </div>
+                    <div className="w-full flex-1 rounded-t-3xl bg-slate-400/20 border-2 border-slate-300/50 flex flex-col items-center justify-center gap-1.5 p-4">
+                      <span className="text-3xl xl:text-4xl font-black text-slate-200">
+                        2e
+                      </span>
+                      <span className="font-mono text-xl xl:text-2xl font-black text-white">
+                        {podiumSlots.second.wins}{" "}
+                        {podiumSlots.second.wins > 1 ? "manches" : "manche"}
+                      </span>
+                    </div>
+                  </>
                 ) : (
-                  <p className="text-sm text-neutral-300">
-                    Clique sur « Lancer la manche » dans l&apos;admin pour la
-                    manche suivante.
-                  </p>
+                  <div className="w-full h-full rounded-t-3xl bg-white/5 border border-white/10 flex items-center justify-center text-neutral-500 font-bold">
+                    —
+                  </div>
                 )}
-              </>
-            ) : isPaused ? (
-              <>
-                <p className="text-3xl font-black tracking-tight text-amber-300">
-                  PAUSE
-                </p>
-                <p className="text-sm text-neutral-300">
-                  La manche est mise en pause.
-                </p>
-              </>
-            ) : (
-              <>
-                <p className="text-3xl font-black tracking-tight text-amber-300">
-                  {isSuddenDeath ? "MORT SUBITE" : "TARGET BLITZ PRÊT"}
-                </p>
-                <p className="text-sm text-neutral-300">
-                  Clique sur « Lancer la manche » dans le panneau admin pour
-                  démarrer.
-                </p>
-              </>
-            )}
+              </div>
+
+              <div className="flex flex-col items-center gap-3 h-full">
+                {podiumSlots.first ? (
+                  <>
+                    <div className="podium-jump-1 flex items-center gap-2.5 w-full">
+                      <div
+                        style={{
+                          backgroundColor: getUniquePlayerColor(
+                            podiumSlots.first.player.id,
+                            players
+                          ).bgHex,
+                          borderColor: getUniquePlayerColor(
+                            podiumSlots.first.player.id,
+                            players
+                          ).borderHex,
+                          color: getUniquePlayerColor(
+                            podiumSlots.first.player.id,
+                            players
+                          ).textHex,
+                        }}
+                        className="flex-1 min-w-0 rounded-2xl border-2 px-4 py-3 font-black text-2xl xl:text-4xl truncate shadow-xl"
+                      >
+                        {podiumSlots.first.player.nickname}
+                      </div>
+                      <div className="w-14 h-14 rounded-2xl bg-amber-400/25 border-2 border-amber-300 flex items-center justify-center text-amber-300 shrink-0 shadow-lg">
+                        <Trophy className="w-8 h-8 text-amber-300" />
+                      </div>
+                    </div>
+                    <div className="w-full flex-1 rounded-t-3xl bg-amber-400/20 border-2 border-amber-300/70 flex flex-col items-center justify-center gap-1.5 p-4 shadow-2xl">
+                      <span className="text-4xl xl:text-5xl font-black text-amber-300">
+                        1er
+                      </span>
+                      <span className="font-mono text-2xl xl:text-3xl font-black text-white">
+                        {podiumSlots.first.wins}{" "}
+                        {podiumSlots.first.wins > 1 ? "manches" : "manche"}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="w-full h-full rounded-t-3xl bg-white/5 border border-white/10 flex items-center justify-center text-neutral-500 font-bold">
+                    —
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col items-center gap-3 h-[64%]">
+                {podiumSlots.third ? (
+                  <>
+                    <div className="podium-jump-3 flex items-center gap-2.5 w-full">
+                      <div
+                        style={{
+                          backgroundColor: getUniquePlayerColor(
+                            podiumSlots.third.player.id,
+                            players
+                          ).bgHex,
+                          borderColor: getUniquePlayerColor(
+                            podiumSlots.third.player.id,
+                            players
+                          ).borderHex,
+                          color: getUniquePlayerColor(
+                            podiumSlots.third.player.id,
+                            players
+                          ).textHex,
+                        }}
+                        className="flex-1 min-w-0 rounded-2xl border-2 px-4 py-2.5 font-black text-xl xl:text-3xl truncate shadow-lg"
+                      >
+                        {podiumSlots.third.player.nickname}
+                      </div>
+                      <div className="w-12 h-12 rounded-2xl bg-orange-500/20 border-2 border-orange-400 flex items-center justify-center text-orange-300 shrink-0 shadow-md">
+                        <Award className="w-7 h-7 text-orange-300" />
+                      </div>
+                    </div>
+                    <div className="w-full flex-1 rounded-t-3xl bg-orange-500/15 border-2 border-orange-400/50 flex flex-col items-center justify-center gap-1.5 p-4">
+                      <span className="text-3xl xl:text-4xl font-black text-orange-300">
+                        3e
+                      </span>
+                      <span className="font-mono text-xl xl:text-2xl font-black text-white">
+                        {podiumSlots.third.wins}{" "}
+                        {podiumSlots.third.wins > 1 ? "manches" : "manche"}
+                      </span>
+                    </div>
+                  </>
+                ) : (
+                  <div className="w-full h-full rounded-t-3xl bg-white/5 border border-white/10 flex items-center justify-center text-neutral-500 font-bold">
+                    —
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -1641,7 +1921,9 @@ export default function TargetBlitzGamePage() {
                 <div className="flex items-center gap-1.5 min-w-0">
                   <span className="text-lg shrink-0">{p.avatar}</span>
                   <div className="min-w-0 leading-tight">
-                    <div className="font-black text-xs truncate">{p.nickname}</div>
+                    <div className="font-black text-xs truncate">
+                      {p.nickname}
+                    </div>
                     <div className="text-[10px] font-extrabold opacity-90">
                       {p.wins} {p.wins > 1 ? "manches" : "manche"}
                     </div>
