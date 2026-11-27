@@ -110,277 +110,6 @@ const DEFAULT_TOTAL_ROUNDS = 5;
 const MAX_SPAWNED_TARGETS = 11;
 const TARGET_COLORS = ["#22d3ee", "#4ade80", "#fb923c", "#f472b6", "#a78bfa"];
 
-function getAudioContext(soundEnabled: boolean): AudioContext | null {
-  if (!soundEnabled || typeof window === "undefined") return null;
-  const AudioCtx =
-    window.AudioContext ||
-    (window as unknown as { webkitAudioContext?: typeof AudioContext })
-      .webkitAudioContext;
-  if (!AudioCtx) return null;
-  try {
-    const ctx = new AudioCtx();
-    if (ctx.state === "suspended") {
-      void ctx.resume().catch(() => {});
-    }
-    return ctx;
-  } catch {
-    return null;
-  }
-}
-
-function playCountdownBeep(soundEnabled: boolean, isFinalGo: boolean): void {
-  const ctx = getAudioContext(soundEnabled);
-  if (!ctx) return;
-  try {
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = isFinalGo ? "triangle" : "sine";
-    osc.frequency.setValueAtTime(isFinalGo ? 880 : 520, now);
-    if (isFinalGo) {
-      osc.frequency.exponentialRampToValueAtTime(1174, now + 0.18);
-    }
-    gain.gain.setValueAtTime(0.001, now);
-    gain.gain.linearRampToValueAtTime(isFinalGo ? 0.28 : 0.18, now + 0.015);
-    gain.gain.exponentialRampToValueAtTime(
-      0.001,
-      now + (isFinalGo ? 0.24 : 0.14)
-    );
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + (isFinalGo ? 0.25 : 0.15));
-    window.setTimeout(() => {
-      if (ctx.state !== "closed") void ctx.close().catch(() => {});
-    }, 350);
-  } catch {
-    // Ignore audio errors
-  }
-}
-
-function playShotSound(soundEnabled: boolean): void {
-  const ctx = getAudioContext(soundEnabled);
-  if (!ctx) return;
-  try {
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "sawtooth";
-    osc.frequency.setValueAtTime(340, now);
-    osc.frequency.exponentialRampToValueAtTime(95, now + 0.065);
-    gain.gain.setValueAtTime(0.09, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.075);
-    window.setTimeout(() => {
-      if (ctx.state !== "closed") void ctx.close().catch(() => {});
-    }, 150);
-  } catch {
-    // Ignore audio errors
-  }
-}
-
-function playTargetHitSound(soundEnabled: boolean, didSplit: boolean): void {
-  const ctx = getAudioContext(soundEnabled);
-  if (!ctx) return;
-  try {
-    const now = ctx.currentTime;
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = "triangle";
-    osc.frequency.setValueAtTime(420, now);
-    osc.frequency.exponentialRampToValueAtTime(
-      didSplit ? 920 : 720,
-      now + 0.11
-    );
-    gain.gain.setValueAtTime(0.22, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(now);
-    osc.stop(now + 0.13);
-
-    if (didSplit) {
-      const pop = ctx.createOscillator();
-      const popGain = ctx.createGain();
-      pop.type = "sine";
-      pop.frequency.setValueAtTime(640, now + 0.05);
-      pop.frequency.exponentialRampToValueAtTime(1040, now + 0.14);
-      popGain.gain.setValueAtTime(0.14, now + 0.05);
-      popGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
-      pop.connect(popGain);
-      popGain.connect(ctx.destination);
-      pop.start(now + 0.05);
-      pop.stop(now + 0.16);
-    }
-
-    window.setTimeout(() => {
-      if (ctx.state !== "closed") void ctx.close().catch(() => {});
-    }, 250);
-  } catch {
-    // Ignore audio errors
-  }
-}
-
-function playBonusHitSound(soundEnabled: boolean): void {
-  const ctx = getAudioContext(soundEnabled);
-  if (!ctx) return;
-  try {
-    const now = ctx.currentTime;
-    const notes = [587.33, 783.99, 1046.5];
-    notes.forEach((freq, idx) => {
-      const start = now + idx * 0.045;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, start);
-      gain.gain.setValueAtTime(0.2, start);
-      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.14);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(start);
-      osc.stop(start + 0.15);
-    });
-    window.setTimeout(() => {
-      if (ctx.state !== "closed") void ctx.close().catch(() => {});
-    }, 350);
-  } catch {
-    // Ignore audio errors
-  }
-}
-
-function playBombExplosionSound(soundEnabled: boolean): void {
-  const ctx = getAudioContext(soundEnabled);
-  if (!ctx) return;
-  try {
-    const now = ctx.currentTime;
-    const duration = 0.34;
-    const bufferSize = Math.floor(ctx.sampleRate * duration);
-    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
-    const data = buffer.getChannelData(0);
-    for (let i = 0; i < bufferSize; i++) {
-      const t = i / bufferSize;
-      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, 1.8);
-    }
-
-    const noise = ctx.createBufferSource();
-    noise.buffer = buffer;
-
-    const filter = ctx.createBiquadFilter();
-    filter.type = "lowpass";
-    filter.frequency.setValueAtTime(420, now);
-    filter.frequency.exponentialRampToValueAtTime(75, now + duration);
-
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.36, now);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
-
-    noise.connect(filter);
-    filter.connect(gain);
-    gain.connect(ctx.destination);
-    noise.start(now);
-
-    window.setTimeout(() => {
-      if (ctx.state !== "closed") void ctx.close().catch(() => {});
-    }, 450);
-  } catch {
-    // Ignore audio errors
-  }
-}
-
-function playRoundEndSound(soundEnabled: boolean): void {
-  const ctx = getAudioContext(soundEnabled);
-  if (!ctx) return;
-  try {
-    const now = ctx.currentTime;
-    const freqs = [523.25, 392.0];
-    freqs.forEach((f, idx) => {
-      const t0 = now + idx * 0.16;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "triangle";
-      osc.frequency.setValueAtTime(f, t0);
-      gain.gain.setValueAtTime(0.2, t0);
-      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.24);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(t0);
-      osc.stop(t0 + 0.25);
-    });
-    window.setTimeout(() => {
-      if (ctx.state !== "closed") void ctx.close().catch(() => {});
-    }, 550);
-  } catch {
-    // Ignore audio errors
-  }
-}
-
-function playApplauseSound(soundEnabled: boolean): () => void {
-  const ctx = getAudioContext(soundEnabled);
-  if (!ctx) return () => {};
-  const timeouts: number[] = [];
-
-  try {
-    const totalDuration = 2.6;
-    const sampleRate = ctx.sampleRate;
-    const bufferSize = Math.floor(sampleRate * totalDuration);
-    const buffer = ctx.createBuffer(1, bufferSize, sampleRate);
-    const data = buffer.getChannelData(0);
-
-    for (let i = 0; i < bufferSize; i++) {
-      const t = i / sampleRate;
-      const env =
-        Math.sin(Math.min(1, t / 0.25) * (Math.PI / 2)) *
-        Math.pow(Math.max(0, 1 - t / totalDuration), 1.35);
-      const clapBurst = Math.pow(
-        0.5 + 0.5 * Math.sin(t * 2 * Math.PI * 11),
-        3
-      );
-      const white = Math.random() * 2 - 1;
-      data[i] = white * env * (0.35 + 0.65 * clapBurst);
-    }
-
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-
-    const bandpass = ctx.createBiquadFilter();
-    bandpass.type = "bandpass";
-    bandpass.frequency.value = 1650;
-    bandpass.Q.value = 0.7;
-
-    const gain = ctx.createGain();
-    gain.gain.setValueAtTime(0.01, ctx.currentTime);
-    gain.gain.linearRampToValueAtTime(0.45, ctx.currentTime + 0.2);
-    gain.gain.exponentialRampToValueAtTime(
-      0.001,
-      ctx.currentTime + totalDuration
-    );
-
-    source.connect(bandpass);
-    bandpass.connect(gain);
-    gain.connect(ctx.destination);
-    source.start();
-
-    const closeId = window.setTimeout(() => {
-      if (ctx.state !== "closed") {
-        void ctx.close().catch(() => {});
-      }
-    }, (totalDuration + 0.2) * 1000);
-    timeouts.push(closeId);
-  } catch {
-    // Ignore audio errors
-  }
-
-  return () => {
-    timeouts.forEach((id) => window.clearTimeout(id));
-    if (ctx.state !== "closed") {
-      void ctx.close().catch(() => {});
-    }
-  };
-}
-
 function isBotPlayer(player: SessionPlayer): boolean {
   const rec = player as unknown as {
     is_bot?: boolean;
@@ -618,6 +347,266 @@ export default function TargetBlitzGamePage() {
   const soundEnabledRef = useRef<boolean>(soundEnabled);
   soundEnabledRef.current = soundEnabled;
 
+  const audioCtxRef = useRef<AudioContext | null>(null);
+
+  const ensureAudioContext = useCallback((): AudioContext | null => {
+    if (!soundEnabledRef.current || typeof window === "undefined") return null;
+
+    let ctx = audioCtxRef.current;
+    if (!ctx || ctx.state === "closed") {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!AudioCtx) return null;
+      try {
+        ctx = new AudioCtx();
+        audioCtxRef.current = ctx;
+      } catch {
+        return null;
+      }
+    }
+
+    if (ctx.state === "suspended") {
+      void ctx.resume().catch(() => {});
+    }
+
+    return ctx;
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      const ctx = audioCtxRef.current;
+      audioCtxRef.current = null;
+      if (ctx && ctx.state !== "closed") {
+        void ctx.close().catch(() => {});
+      }
+    };
+  }, []);
+
+  const playCountdownBeep = useCallback(
+    (isFinalGo: boolean) => {
+      const ctx = ensureAudioContext();
+      if (!ctx) return;
+      try {
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = isFinalGo ? "triangle" : "sine";
+        osc.frequency.setValueAtTime(isFinalGo ? 880 : 520, now);
+        if (isFinalGo) {
+          osc.frequency.exponentialRampToValueAtTime(1174, now + 0.18);
+        }
+        gain.gain.setValueAtTime(0.001, now);
+        gain.gain.linearRampToValueAtTime(isFinalGo ? 0.28 : 0.18, now + 0.015);
+        gain.gain.exponentialRampToValueAtTime(
+          0.001,
+          now + (isFinalGo ? 0.24 : 0.14)
+        );
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + (isFinalGo ? 0.25 : 0.15));
+      } catch {
+        // Ignore audio errors
+      }
+    },
+    [ensureAudioContext]
+  );
+
+  const playShotSound = useCallback(() => {
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sawtooth";
+      osc.frequency.setValueAtTime(340, now);
+      osc.frequency.exponentialRampToValueAtTime(95, now + 0.065);
+      gain.gain.setValueAtTime(0.08, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.075);
+    } catch {
+      // Ignore audio errors
+    }
+  }, [ensureAudioContext]);
+
+  const playTargetHitSound = useCallback(
+    (didSplit: boolean) => {
+      const ctx = ensureAudioContext();
+      if (!ctx) return;
+      try {
+        const now = ctx.currentTime;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(420, now);
+        osc.frequency.exponentialRampToValueAtTime(
+          didSplit ? 920 : 720,
+          now + 0.11
+        );
+        gain.gain.setValueAtTime(0.22, now);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.13);
+
+        if (didSplit) {
+          const pop = ctx.createOscillator();
+          const popGain = ctx.createGain();
+          pop.type = "sine";
+          pop.frequency.setValueAtTime(640, now + 0.05);
+          pop.frequency.exponentialRampToValueAtTime(1040, now + 0.14);
+          popGain.gain.setValueAtTime(0.14, now + 0.05);
+          popGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+          pop.connect(popGain);
+          popGain.connect(ctx.destination);
+          pop.start(now + 0.05);
+          pop.stop(now + 0.16);
+        }
+      } catch {
+        // Ignore audio errors
+      }
+    },
+    [ensureAudioContext]
+  );
+
+  const playBonusHitSound = useCallback(() => {
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const notes = [587.33, 783.99, 1046.5];
+      notes.forEach((freq, idx) => {
+        const start = now + idx * 0.045;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freq, start);
+        gain.gain.setValueAtTime(0.2, start);
+        gain.gain.exponentialRampToValueAtTime(0.001, start + 0.14);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + 0.15);
+      });
+    } catch {
+      // Ignore audio errors
+    }
+  }, [ensureAudioContext]);
+
+  const playBombExplosionSound = useCallback(() => {
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const duration = 0.34;
+      const bufferSize = Math.floor(ctx.sampleRate * duration);
+      const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        const t = i / bufferSize;
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, 1.8);
+      }
+
+      const noise = ctx.createBufferSource();
+      noise.buffer = buffer;
+
+      const filter = ctx.createBiquadFilter();
+      filter.type = "lowpass";
+      filter.frequency.setValueAtTime(420, now);
+      filter.frequency.exponentialRampToValueAtTime(75, now + duration);
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.36, now);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+      noise.connect(filter);
+      filter.connect(gain);
+      gain.connect(ctx.destination);
+      noise.start(now);
+    } catch {
+      // Ignore audio errors
+    }
+  }, [ensureAudioContext]);
+
+  const playRoundEndSound = useCallback(() => {
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+    try {
+      const now = ctx.currentTime;
+      const freqs = [523.25, 392.0];
+      freqs.forEach((f, idx) => {
+        const t0 = now + idx * 0.16;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(f, t0);
+        gain.gain.setValueAtTime(0.2, t0);
+        gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.24);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(t0);
+        osc.stop(t0 + 0.25);
+      });
+    } catch {
+      // Ignore audio errors
+    }
+  }, [ensureAudioContext]);
+
+  const playApplauseSound = useCallback(() => {
+    const ctx = ensureAudioContext();
+    if (!ctx) return;
+    try {
+      const totalDuration = 2.6;
+      const sampleRate = ctx.sampleRate;
+      const bufferSize = Math.floor(sampleRate * totalDuration);
+      const buffer = ctx.createBuffer(1, bufferSize, sampleRate);
+      const data = buffer.getChannelData(0);
+
+      for (let i = 0; i < bufferSize; i++) {
+        const t = i / sampleRate;
+        const env =
+          Math.sin(Math.min(1, t / 0.25) * (Math.PI / 2)) *
+          Math.pow(Math.max(0, 1 - t / totalDuration), 1.35);
+        const clapBurst = Math.pow(
+          0.5 + 0.5 * Math.sin(t * 2 * Math.PI * 11),
+          3
+        );
+        const white = Math.random() * 2 - 1;
+        data[i] = white * env * (0.35 + 0.65 * clapBurst);
+      }
+
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+
+      const bandpass = ctx.createBiquadFilter();
+      bandpass.type = "bandpass";
+      bandpass.frequency.value = 1650;
+      bandpass.Q.value = 0.7;
+
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.01, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.45, ctx.currentTime + 0.2);
+      gain.gain.exponentialRampToValueAtTime(
+        0.001,
+        ctx.currentTime + totalDuration
+      );
+
+      source.connect(bandpass);
+      bandpass.connect(gain);
+      gain.connect(ctx.destination);
+      source.start();
+    } catch {
+      // Ignore audio errors
+    }
+  }, [ensureAudioContext]);
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const channelRef = useRef<ReturnType<
@@ -710,11 +699,12 @@ export default function TargetBlitzGamePage() {
     setSoundEnabled((prev) => {
       const next = !prev;
       if (next) {
-        playCountdownBeep(true, false);
+        soundEnabledRef.current = true;
+        playCountdownBeep(false);
       }
       return next;
     });
-  }, []);
+  }, [playCountdownBeep]);
 
   useEffect(() => {
     let active = true;
@@ -810,7 +800,7 @@ export default function TargetBlitzGamePage() {
     if (countdownValue === null) return;
 
     if (countdownValue <= 0) {
-      playCountdownBeep(soundEnabledRef.current, true);
+      playCountdownBeep(true);
       setCountdownValue(null);
       roundStartMsRef.current = Date.now();
       setRemainingSeconds(ROUND_DURATION_SECONDS);
@@ -823,13 +813,13 @@ export default function TargetBlitzGamePage() {
       return;
     }
 
-    playCountdownBeep(soundEnabledRef.current, false);
+    playCountdownBeep(false);
     const timer = window.setTimeout(() => {
       setCountdownValue((prev) => (prev === null ? null : prev - 1));
     }, 1000);
 
     return () => window.clearTimeout(timer);
-  }, [countdownValue]);
+  }, [countdownValue, playCountdownBeep]);
 
   useEffect(() => {
     if (!session?.id) return;
@@ -912,13 +902,13 @@ export default function TargetBlitzGamePage() {
         setIsMatchPodiumVisible(true);
         if (!hasPlayedApplauseRef.current) {
           hasPlayedApplauseRef.current = true;
-          playApplauseSound(soundEnabledRef.current);
+          playApplauseSound();
         }
       }
     }, ROUND_WINNER_DELAY_MS);
 
     return () => window.clearTimeout(timerId);
-  }, [roundEnded, roundNumber, totalRounds, isSuddenDeath]);
+  }, [roundEnded, roundNumber, totalRounds, isSuddenDeath, playApplauseSound]);
 
   const spawnBurst = useCallback(
     (xPct: number, yPct: number, color: string, count = 22) => {
@@ -990,7 +980,7 @@ export default function TargetBlitzGamePage() {
         getUniquePlayerColor(shot.playerId, playersRef.current).borderHex ||
         "#22d3ee";
 
-      playShotSound(soundEnabledRef.current);
+      playShotSound();
       spawnBurst(shot.x, shot.y, resolvedColor, 10);
 
       const hitIndex = targetsRef.current.findIndex((t) => {
@@ -1018,7 +1008,7 @@ export default function TargetBlitzGamePage() {
       targetsRef.current = nextTargets.slice(0, MAX_SPAWNED_TARGETS + 2);
 
       if (hitTarget.kind === "bomb") {
-        playBombExplosionSound(soundEnabledRef.current);
+        playBombExplosionSound();
         const currentScore = scoresRef.current[shot.playerId] ?? 0;
         const nextScore = Math.max(0, currentScore - 5);
         setScores((prev) => {
@@ -1048,9 +1038,9 @@ export default function TargetBlitzGamePage() {
       }
 
       if (hitTarget.kind === "bonus") {
-        playBonusHitSound(soundEnabledRef.current);
+        playBonusHitSound();
       } else {
-        playTargetHitSound(soundEnabledRef.current, didSplit);
+        playTargetHitSound(didSplit);
       }
 
       const deltaPts = hitTarget.kind === "bonus" ? 10 : 5;
@@ -1075,7 +1065,15 @@ export default function TargetBlitzGamePage() {
         hitTarget.kind === "bonus" ? "#fde047" : "#ffffff"
       );
     },
-    [persistScoreToDb, spawnBurst, spawnFloatingLabel]
+    [
+      persistScoreToDb,
+      spawnBurst,
+      spawnFloatingLabel,
+      playShotSound,
+      playBombExplosionSound,
+      playBonusHitSound,
+      playTargetHitSound,
+    ]
   );
 
   const handleShootPayloadRef = useRef(handleShootPayload);
@@ -1649,7 +1647,7 @@ export default function TargetBlitzGamePage() {
     if (finalizedRoundNumberRef.current === currentRound) return;
     finalizedRoundNumberRef.current = currentRound;
 
-    playRoundEndSound(soundEnabledRef.current);
+    playRoundEndSound();
     setIsRoundRunning(false);
     setRoundEnded(true);
     targetsRef.current = [];
@@ -1734,6 +1732,7 @@ export default function TargetBlitzGamePage() {
     isSuddenDeath,
     blitzState,
     supabase,
+    playRoundEndSound,
   ]);
 
   useEffect(() => {
