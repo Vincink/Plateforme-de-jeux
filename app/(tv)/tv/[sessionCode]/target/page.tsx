@@ -67,6 +67,8 @@ interface BlitzGameState {
   mode?: string;
   roundNumber?: number;
   totalRounds?: number;
+  roundTriggered?: boolean;
+  questionStarted?: boolean;
   isSuddenDeath?: boolean;
   suddenDeathPlayerIds?: string[];
   roundWins?: Record<string, number>;
@@ -89,10 +91,21 @@ interface SvgSpriteAssets {
   tintedCrosshairCache: Record<string, HTMLImageElement>;
 }
 
-const DEFAULT_DURATION_SECONDS = 60;
+const ROUND_DURATION_SECONDS = 60;
 const DEFAULT_TOTAL_ROUNDS = 5;
 const MAX_SPAWNED_TARGETS = 8;
 const TARGET_COLORS = ["#22d3ee", "#4ade80", "#fb923c", "#f472b6", "#a78bfa"];
+
+function isBotPlayer(player: SessionPlayer): boolean {
+  const rec = player as unknown as {
+    is_bot?: boolean;
+    player_token?: string | null;
+  };
+  if (rec.is_bot === true) return true;
+  const token = String(rec.player_token ?? "").toLowerCase();
+  if (token.startsWith("bot-") || token.startsWith("bot_")) return true;
+  return String(player.nickname ?? "").trim().toUpperCase().startsWith("[BOT]");
+}
 
 function createTopSpawnTarget(index: number): BlitzTarget {
   const roll = Math.random();
@@ -200,8 +213,14 @@ export default function TargetBlitzGamePage() {
   const [scores, setScores] = useState<Record<string, number>>({});
   const [roundWins, setRoundWins] = useState<Record<string, number>>({});
   const [suddenDeathPlayerIds, setSuddenDeathPlayerIds] = useState<string[]>([]);
+  const [roundNumber, setRoundNumber] = useState<number>(1);
+  const [isRoundRunning, setIsRoundRunning] = useState<boolean>(false);
+  const [roundEnded, setRoundEnded] = useState<boolean>(false);
+  const [lastRoundWinnerLabel, setLastRoundWinnerLabel] = useState<string | null>(
+    null
+  );
   const [remainingSeconds, setRemainingSeconds] = useState<number>(
-    DEFAULT_DURATION_SECONDS
+    ROUND_DURATION_SECONDS
   );
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -221,6 +240,18 @@ export default function TargetBlitzGamePage() {
   const targetsRef = useRef<BlitzTarget[]>([]);
   const spawnAccumulatorRef = useRef<number>(0);
   const cursorsRef = useRef<Record<string, BlitzCursorPayload>>({});
+  const botRuntimeRef = useRef<
+    Record<
+      string,
+      {
+        x: number;
+        y: number;
+        targetId: string | null;
+        cooldownSec: number;
+        stunnedUntilMs: number;
+      }
+    >
+  >({});
   const particlesRef = useRef<Particle[]>([]);
   const floatingTextsRef = useRef<FloatingScoreText[]>([]);
   const starsRef = useRef<BackgroundStar[]>(
@@ -228,7 +259,7 @@ export default function TargetBlitzGamePage() {
       x: Math.random() * 100,
       y: Math.random() * 100,
       size: 1 + Math.random() * 2.4,
-      speed: -3 - Math.random() * 6,
+      speed: 3 + Math.random() * 6,
       alpha: 0.35 + Math.random() * 0.65,
     }))
   );
@@ -243,42 +274,39 @@ export default function TargetBlitzGamePage() {
   roundWinsRef.current = roundWins;
   const suddenDeathIdsRef = useRef<string[]>(suddenDeathPlayerIds);
   suddenDeathIdsRef.current = suddenDeathPlayerIds;
+  const roundNumberRef = useRef<number>(roundNumber);
+  roundNumberRef.current = roundNumber;
 
   const roundStatus = session?.status ?? "lobby";
   const statusLower = String(roundStatus).toLowerCase();
   const blitzState = session?.game_state ?? {};
-  const isRoundLaunched = statusLower === "playing" || statusLower === "paused";
-  const isPlaying = statusLower === "playing";
   const isPaused = statusLower === "paused" || Boolean(blitzState.isPaused);
+  const isActivePlay = isRoundRunning && !roundEnded && !isPaused;
 
-  const isRoundLaunchedRef = useRef<boolean>(isRoundLaunched);
-  isRoundLaunchedRef.current = isRoundLaunched;
-  const isPlayingRef = useRef<boolean>(isPlaying);
-  isPlayingRef.current = isPlaying;
+  const isRoundRunningRef = useRef<boolean>(isRoundRunning);
+  isRoundRunningRef.current = isRoundRunning;
+  const roundEndedRef = useRef<boolean>(roundEnded);
+  roundEndedRef.current = roundEnded;
   const isPausedRef = useRef<boolean>(isPaused);
   isPausedRef.current = isPaused;
+  const isActivePlayRef = useRef<boolean>(isActivePlay);
+  isActivePlayRef.current = isActivePlay;
 
   const totalRounds = useMemo(() => {
     const raw = Number(blitzState.totalRounds);
-    return Number.isFinite(raw) && raw > 0 ? Math.round(raw) : DEFAULT_TOTAL_ROUNDS;
+    return Number.isFinite(raw) && raw > 0
+      ? Math.round(raw)
+      : DEFAULT_TOTAL_ROUNDS;
   }, [blitzState.totalRounds]);
-
-  const roundNumber = useMemo(() => {
-    const raw = Number(blitzState.roundNumber);
-    return Number.isFinite(raw) && raw >= 1 ? Math.round(raw) : 1;
-  }, [blitzState.roundNumber]);
 
   const isSuddenDeath = useMemo(() => {
     return Boolean(blitzState.isSuddenDeath) || suddenDeathPlayerIds.length > 0;
   }, [blitzState.isSuddenDeath, suddenDeathPlayerIds]);
 
-  const durationSeconds = useMemo(() => {
-    const d = Number(blitzState.durationSeconds);
-    return Number.isFinite(d) && d > 0 ? d : DEFAULT_DURATION_SECONDS;
-  }, [blitzState.durationSeconds]);
-
-  const lastRoundKeyRef = useRef<string>("");
-  const finalizedRoundKeyRef = useRef<string>("");
+  const roundStartMsRef = useRef<number | null>(null);
+  const seenTriggerTokenRef = useRef<string | null>(null);
+  const finalizedRoundNumberRef = useRef<number | null>(null);
+  const ignoreNextScoreFetchRef = useRef<boolean>(false);
 
   useEffect(() => {
     let active = true;
@@ -321,20 +349,8 @@ export default function TargetBlitzGamePage() {
     }
   }, [session, sessionCode, statusLower, router]);
 
-  useEffect(() => {
-    if (!isRoundLaunched) {
-      targetsRef.current = [];
-      spawnAccumulatorRef.current = 0;
-      particlesRef.current = [];
-      floatingTextsRef.current = [];
-    } else if (targetsRef.current.length === 0) {
-      targetsRef.current = Array.from({ length: 5 }, (_, i) =>
-        createTopSpawnTarget(i)
-      );
-    }
-  }, [isRoundLaunched]);
-
   const resetRoundScores = useCallback(async () => {
+    ignoreNextScoreFetchRef.current = true;
     const zeroMap: Record<string, number> = {};
     for (const p of playersRef.current) {
       zeroMap[p.id] = 0;
@@ -358,7 +374,25 @@ export default function TargetBlitzGamePage() {
       .upsert(rows, { onConflict: "session_id,player_id" });
   }, [supabase]);
 
+  // Détecte uniquement le clic admin sur "Lancer la manche" (pas le simple clic "Lancer")
   useEffect(() => {
+    if (!session?.id) return;
+
+    const explicitTrigger =
+      blitzState.roundTriggered === true || blitzState.questionStarted === true;
+    const startedAtStr = blitzState.questionStartedAt
+      ? String(blitzState.questionStartedAt)
+      : "";
+    const stateRoundNum =
+      typeof blitzState.roundNumber === "number" && blitzState.roundNumber >= 1
+        ? Math.round(blitzState.roundNumber)
+        : null;
+
+    if (stateRoundNum !== null && stateRoundNum !== roundNumberRef.current) {
+      setRoundNumber(stateRoundNum);
+      roundNumberRef.current = stateRoundNum;
+    }
+
     const stateWins = blitzState.roundWins;
     if (stateWins && typeof stateWins === "object") {
       const cleaned: Record<string, number> = {};
@@ -376,26 +410,70 @@ export default function TargetBlitzGamePage() {
       setSuddenDeathPlayerIds(ids);
       suddenDeathIdsRef.current = ids;
     }
-  }, [blitzState.roundWins, blitzState.suddenDeathPlayerIds]);
 
-  useEffect(() => {
-    if (!session?.id) return;
-    const roundTrigger = `${session.id}-r${roundNumber}-sd${
-      blitzState.isSuddenDeath ? 1 : 0
-    }`;
-    if (lastRoundKeyRef.current === "") {
-      lastRoundKeyRef.current = roundTrigger;
+    const triggerToken =
+      explicitTrigger || startedAtStr
+        ? `${startedAtStr}|${stateRoundNum ?? ""}|${
+            blitzState.roundTriggered ? "1" : "0"
+          }|${blitzState.questionStarted ? "1" : "0"}`
+        : "";
+
+    if (seenTriggerTokenRef.current === null) {
+      seenTriggerTokenRef.current = triggerToken;
+      if (explicitTrigger) {
+        const parsedStart = startedAtStr ? Date.parse(startedAtStr) : NaN;
+        roundStartMsRef.current = Number.isFinite(parsedStart)
+          ? parsedStart
+          : Date.now();
+        setIsRoundRunning(true);
+        setRoundEnded(false);
+        setLastRoundWinnerLabel(null);
+        targetsRef.current = Array.from({ length: 5 }, (_, i) =>
+          createTopSpawnTarget(i)
+        );
+      } else {
+        setIsRoundRunning(false);
+        setRoundEnded(false);
+        setRemainingSeconds(ROUND_DURATION_SECONDS);
+        targetsRef.current = [];
+      }
       return;
     }
-    if (lastRoundKeyRef.current !== roundTrigger) {
-      lastRoundKeyRef.current = roundTrigger;
-      targetsRef.current = [];
+
+    if (triggerToken && triggerToken !== seenTriggerTokenRef.current) {
+      seenTriggerTokenRef.current = triggerToken;
+
+      const nextRound = roundEndedRef.current
+        ? roundNumberRef.current + 1
+        : stateRoundNum ?? roundNumberRef.current;
+
+      setRoundNumber(nextRound);
+      roundNumberRef.current = nextRound;
+      finalizedRoundNumberRef.current = null;
+      roundStartMsRef.current = Date.now();
+      setRemainingSeconds(ROUND_DURATION_SECONDS);
+      setIsRoundRunning(true);
+      setRoundEnded(false);
+      setLastRoundWinnerLabel(null);
       spawnAccumulatorRef.current = 0;
       particlesRef.current = [];
       floatingTextsRef.current = [];
+      targetsRef.current = Array.from({ length: 5 }, (_, i) =>
+        createTopSpawnTarget(i)
+      );
+
       void resetRoundScores();
     }
-  }, [session?.id, roundNumber, blitzState.isSuddenDeath, resetRoundScores]);
+  }, [
+    session?.id,
+    blitzState.roundTriggered,
+    blitzState.questionStarted,
+    blitzState.questionStartedAt,
+    blitzState.roundNumber,
+    blitzState.roundWins,
+    blitzState.suddenDeathPlayerIds,
+    resetRoundScores,
+  ]);
 
   const spawnBurst = useCallback(
     (xPct: number, yPct: number, color: string, count = 22) => {
@@ -453,9 +531,7 @@ export default function TargetBlitzGamePage() {
 
   const handleShootPayload = useCallback(
     (shot: BlitzShootPayload) => {
-      if (!isRoundLaunchedRef.current || !isPlayingRef.current || isPausedRef.current) {
-        return;
-      }
+      if (!isActivePlayRef.current) return;
 
       if (
         suddenDeathIdsRef.current.length > 0 &&
@@ -499,6 +575,11 @@ export default function TargetBlitzGamePage() {
         spawnBurst(hitTarget.x, hitTarget.y, "#fbbf24", 16);
         spawnFloatingLabel(hitTarget.x, hitTarget.y, "-5", "#fb7185");
 
+        const botEntry = botRuntimeRef.current[shot.playerId];
+        if (botEntry) {
+          botEntry.stunnedUntilMs = Date.now() + 2000;
+        }
+
         void channelRef.current?.send({
           type: "broadcast",
           event: "player_stunned",
@@ -534,6 +615,9 @@ export default function TargetBlitzGamePage() {
     },
     [persistScoreToDb, spawnBurst, spawnFloatingLabel]
   );
+
+  const handleShootPayloadRef = useRef(handleShootPayload);
+  handleShootPayloadRef.current = handleShootPayload;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -827,13 +911,14 @@ export default function TargetBlitzGamePage() {
       ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, width, height);
 
-      const canMove = isRoundLaunchedRef.current && isPlayingRef.current && !isPausedRef.current;
+      const canMove = isActivePlayRef.current;
 
+      // Étoiles qui descendent vers le bas -> sensation d'avancer vers le haut
       for (const star of starsRef.current) {
         if (canMove) {
           star.y += star.speed * dt;
-          if (star.y < -2) {
-            star.y = 102;
+          if (star.y > 102) {
+            star.y = -2;
             star.x = Math.random() * 100;
           }
         }
@@ -849,11 +934,12 @@ export default function TargetBlitzGamePage() {
         ctx.fill();
       }
 
-      if (isRoundLaunchedRef.current) {
+      // Cibles et bombes visibles uniquement pendant une manche active
+      if (isRoundRunningRef.current && !roundEndedRef.current) {
         if (canMove) {
           spawnAccumulatorRef.current += dt;
           if (
-            spawnAccumulatorRef.current >= 1.15 &&
+            spawnAccumulatorRef.current >= 1.0 &&
             targetsRef.current.length < MAX_SPAWNED_TARGETS
           ) {
             spawnAccumulatorRef.current = 0;
@@ -900,6 +986,93 @@ export default function TargetBlitzGamePage() {
           }
         }
         targetsRef.current = survivingTargets;
+      }
+
+      // Intelligence artificielle des bots
+      if (canMove) {
+        const nowMs = Date.now();
+        const bots = playersRef.current.filter(isBotPlayer);
+        const validTargets = targetsRef.current.filter(
+          (t) => t.kind !== "bomb" && t.y >= 4 && t.y <= 92
+        );
+
+        for (let idx = 0; idx < bots.length; idx++) {
+          const bot = bots[idx];
+          if (!bot) continue;
+          if (
+            suddenDeathIdsRef.current.length > 0 &&
+            !suddenDeathIdsRef.current.includes(bot.id)
+          ) {
+            continue;
+          }
+
+          const colorStyle = getUniquePlayerColor(bot.id, playersRef.current);
+          let state = botRuntimeRef.current[bot.id];
+          if (!state) {
+            state = {
+              x: 20 + ((idx * 23) % 60),
+              y: 45 + ((idx * 13) % 30),
+              targetId: null,
+              cooldownSec: 0.4 + Math.random() * 0.6,
+              stunnedUntilMs: 0,
+            };
+            botRuntimeRef.current[bot.id] = state;
+          }
+
+          if (state.stunnedUntilMs > nowMs) {
+            continue;
+          }
+
+          state.cooldownSec = Math.max(0, state.cooldownSec - dt);
+
+          let chosen =
+            validTargets.find((t) => t.id === state.targetId) ?? null;
+          if (!chosen && validTargets.length > 0) {
+            chosen =
+              validTargets[Math.floor(Math.random() * validTargets.length)] ??
+              null;
+            state.targetId = chosen?.id ?? null;
+          }
+
+          const goalX = chosen ? chosen.x : 50 + Math.sin(timeSec + idx) * 28;
+          const goalY = chosen
+            ? Math.min(88, chosen.y + chosen.vy * 0.14)
+            : 50 + Math.cos(timeSec * 0.8 + idx) * 20;
+
+          const dx = goalX - state.x;
+          const dy = goalY - state.y;
+          const dist = Math.hypot(dx, dy);
+          const maxStep = 34 * dt;
+
+          if (dist > 0.1) {
+            const step = Math.min(dist, maxStep);
+            state.x += (dx / dist) * step;
+            state.y += (dy / dist) * step;
+          }
+
+          cursorsRef.current[bot.id] = {
+            playerId: bot.id,
+            playerName: bot.nickname,
+            color: colorStyle.bgHex,
+            x: state.x,
+            y: state.y,
+          };
+
+          if (chosen && dist < 4.2 && state.cooldownSec <= 0) {
+            state.cooldownSec = 0.75 + Math.random() * 0.75;
+            state.targetId = null;
+            const aimJitterX = (Math.random() - 0.5) * 3.2;
+            const aimJitterY = (Math.random() - 0.5) * 3.2;
+            handleShootPayloadRef.current({
+              playerId: bot.id,
+              playerName: bot.nickname,
+              color: colorStyle.bgHex,
+              x: Math.max(2, Math.min(98, state.x + aimJitterX)),
+              y: Math.max(4, Math.min(95, state.y + aimJitterY)),
+              timestamp: nowMs,
+            });
+          }
+        }
       }
 
       const aliveParticles: Particle[] = [];
@@ -983,48 +1156,43 @@ export default function TargetBlitzGamePage() {
     };
   }, []);
 
+  // Compte à rebours strictement de 60 secondes quand la manche est lancée
   useEffect(() => {
-    if (isPaused && typeof blitzState.pausedRemainingSeconds === "number") {
-      setRemainingSeconds(Math.max(0, blitzState.pausedRemainingSeconds));
+    if (!isRoundRunning || roundEnded) {
+      if (!roundEnded) {
+        setRemainingSeconds(ROUND_DURATION_SECONDS);
+      }
       return;
     }
 
-    if (!isPlaying || !blitzState.questionStartedAt) {
-      setRemainingSeconds(durationSeconds);
-      return;
-    }
+    if (isPaused) return;
 
-    const startMs =
-      typeof blitzState.questionStartedAt === "number"
-        ? blitzState.questionStartedAt
-        : Date.parse(String(blitzState.questionStartedAt));
-
-    if (Number.isNaN(startMs)) {
-      setRemainingSeconds(durationSeconds);
-      return;
-    }
+    const startMs = roundStartMsRef.current ?? Date.now();
+    roundStartMsRef.current = startMs;
 
     const updateTimer = () => {
       const elapsed = Math.max(0, (Date.now() - startMs) / 1000);
-      setRemainingSeconds(Math.max(0, durationSeconds - elapsed));
+      setRemainingSeconds(Math.max(0, ROUND_DURATION_SECONDS - elapsed));
     };
 
     updateTimer();
     const interval = window.setInterval(updateTimer, 200);
     return () => window.clearInterval(interval);
-  }, [
-    isPlaying,
-    isPaused,
-    blitzState.pausedRemainingSeconds,
-    blitzState.questionStartedAt,
-    durationSeconds,
-  ]);
+  }, [isRoundRunning, roundEnded, isPaused]);
 
+  // Fin de manche automatique après 60 secondes + affichage du vainqueur de la manche
   useEffect(() => {
-    if (!isPlaying || remainingSeconds > 0 || !session?.id) return;
-    const roundKey = `${session.id}-r${roundNumber}-sd${isSuddenDeath ? 1 : 0}`;
-    if (finalizedRoundKeyRef.current === roundKey) return;
-    finalizedRoundKeyRef.current = roundKey;
+    if (!isRoundRunning || roundEnded || remainingSeconds > 0) return;
+
+    const currentRound = roundNumberRef.current;
+    if (finalizedRoundNumberRef.current === currentRound) return;
+    finalizedRoundNumberRef.current = currentRound;
+
+    setIsRoundRunning(false);
+    setRoundEnded(true);
+    targetsRef.current = [];
+    particlesRef.current = [];
+    floatingTextsRef.current = [];
 
     const candidatePlayers =
       suddenDeathIdsRef.current.length > 0
@@ -1033,30 +1201,35 @@ export default function TargetBlitzGamePage() {
           )
         : playersRef.current;
 
-    if (candidatePlayers.length === 0) return;
-
     let bestScore = -1;
-    let winners: string[] = [];
+    let winners: SessionPlayer[] = [];
     for (const p of candidatePlayers) {
       const sc = scoresRef.current[p.id] ?? 0;
       if (sc > bestScore) {
         bestScore = sc;
-        winners = [p.id];
+        winners = [p];
       } else if (sc === bestScore) {
-        winners.push(p.id);
+        winners.push(p);
       }
     }
 
-    if (bestScore <= 0 || winners.length === 0) return;
-
     const nextWins = { ...roundWinsRef.current };
-    for (const wId of winners) {
-      nextWins[wId] = (nextWins[wId] ?? 0) + 1;
+    if (bestScore > 0 && winners.length > 0) {
+      for (const w of winners) {
+        nextWins[w.id] = (nextWins[w.id] ?? 0) + 1;
+      }
+      setRoundWins(nextWins);
+      roundWinsRef.current = nextWins;
     }
-    setRoundWins(nextWins);
-    roundWinsRef.current = nextWins;
 
-    if (roundNumber >= totalRounds || isSuddenDeath) {
+    const winnerNames =
+      bestScore > 0 && winners.length > 0
+        ? winners.map((w) => w.nickname).join(" & ")
+        : "Aucun point marqué";
+    setLastRoundWinnerLabel(winnerNames);
+
+    let nextSuddenDeathIds: string[] = [];
+    if (currentRound >= totalRounds || isSuddenDeath) {
       let maxWins = -1;
       let tiedIds: string[] = [];
       for (const p of playersRef.current) {
@@ -1068,43 +1241,34 @@ export default function TargetBlitzGamePage() {
           tiedIds.push(p.id);
         }
       }
-
       if (tiedIds.length > 1) {
-        setSuddenDeathPlayerIds(tiedIds);
-        suddenDeathIdsRef.current = tiedIds;
-        const nextState: BlitzGameState = {
-          ...blitzState,
-          roundNumber: roundNumber + 1,
-          isSuddenDeath: true,
-          suddenDeathPlayerIds: tiedIds,
-          roundWins: nextWins,
-          questionStartedAt: Date.now(),
-        };
-        if (supabase) {
-          void supabase
-            .from("game_sessions")
-            .update({ game_state: nextState })
-            .eq("id", session.id);
-        }
-        return;
+        nextSuddenDeathIds = tiedIds;
       }
     }
 
-    const nextState: BlitzGameState = {
-      ...blitzState,
-      roundWins: nextWins,
-    };
-    if (supabase) {
+    setSuddenDeathPlayerIds(nextSuddenDeathIds);
+    suddenDeathIdsRef.current = nextSuddenDeathIds;
+
+    const currentSession = sessionRef.current;
+    if (supabase && currentSession?.id) {
+      const nextState: BlitzGameState = {
+        ...blitzState,
+        roundTriggered: false,
+        questionStarted: false,
+        roundNumber: currentRound,
+        roundWins: nextWins,
+        isSuddenDeath: nextSuddenDeathIds.length > 1,
+        suddenDeathPlayerIds: nextSuddenDeathIds,
+      };
       void supabase
         .from("game_sessions")
         .update({ game_state: nextState })
-        .eq("id", session.id);
+        .eq("id", currentSession.id);
     }
   }, [
-    isPlaying,
+    isRoundRunning,
+    roundEnded,
     remainingSeconds,
-    session?.id,
-    roundNumber,
     totalRounds,
     isSuddenDeath,
     blitzState,
@@ -1132,7 +1296,7 @@ export default function TargetBlitzGamePage() {
       if (playersRows) {
         setPlayers(playersRows as SessionPlayer[]);
       }
-      if (scoreRows) {
+      if (scoreRows && !ignoreNextScoreFetchRef.current) {
         const map: Record<string, number> = {};
         for (const row of scoreRows as PlayerScore[]) {
           map[row.player_id] = extractScoreValue(row);
@@ -1140,6 +1304,7 @@ export default function TargetBlitzGamePage() {
         setScores(map);
         scoresRef.current = map;
       }
+      ignoreNextScoreFetchRef.current = false;
     };
 
     const initSession = async () => {
@@ -1237,7 +1402,7 @@ export default function TargetBlitzGamePage() {
     });
   }, [players, scores, roundWins]);
 
-  const matchSummary = useMemo(() => {
+  const overallLeader = useMemo(() => {
     if (players.length === 0) return { winnerName: null, tiedNames: [] as string[] };
     let maxWins = -1;
     let leaders: SessionPlayer[] = [];
@@ -1289,7 +1454,8 @@ export default function TargetBlitzGamePage() {
             )}
           </div>
           <div className="font-mono text-[11px] text-neutral-400 mt-0.5">
-            Salle {sessionCode || "----"} • {roundStatus.toUpperCase()}
+            Salle {sessionCode || "----"} •{" "}
+            {isActivePlay ? "EN COURS" : roundEnded ? "MANCHE FINIE" : "PRÊT"}
           </div>
         </div>
 
@@ -1300,38 +1466,73 @@ export default function TargetBlitzGamePage() {
               {formatClock(remainingSeconds)}
             </span>
           </div>
-          {matchSummary.winnerName && (
+          {overallLeader.winnerName && (
             <span className="mt-1.5 px-3 py-0.5 rounded-full text-xs font-black bg-amber-400/20 border border-amber-300/50 text-amber-200 flex items-center gap-1">
               <Trophy className="w-3.5 h-3.5 text-amber-300" />
-              En tête : {matchSummary.winnerName}
+              En tête : {overallLeader.winnerName}
             </span>
           )}
-          {matchSummary.tiedNames.length > 1 && (
+          {overallLeader.tiedNames.length > 1 && (
             <span className="mt-1.5 px-3 py-0.5 rounded-full text-xs font-black bg-rose-500/25 border border-rose-400/50 text-rose-200">
-              Égalité : {matchSummary.tiedNames.join(" vs ")}
+              Égalité : {overallLeader.tiedNames.join(" vs ")}
             </span>
           )}
         </div>
       </div>
 
-      {/* Overlay quand la manche n'est pas en cours de jeu */}
-      {!isPlaying && (
+      {/* Overlay avant lancement ou en fin de manche */}
+      {!isActivePlay && (
         <div className="absolute inset-0 z-20 bg-black/55 backdrop-blur-xs flex flex-col items-center justify-center text-center p-6 pointer-events-none">
-          <div className="rounded-3xl border border-white/15 bg-slate-950/90 px-8 py-6 shadow-2xl space-y-2 max-w-md">
-            <p className="text-3xl font-black tracking-tight text-amber-300">
-              {isPaused
-                ? "PAUSE"
-                : matchSummary.winnerName && roundNumber >= totalRounds
-                ? `VICTOIRE : ${matchSummary.winnerName}`
-                : isSuddenDeath
-                ? "MORT SUBITE"
-                : "EN ATTENTE DU LANCEMENT"}
-            </p>
-            <p className="text-sm text-neutral-300">
-              {isPaused
-                ? "La manche est mise en pause."
-                : "Clique sur Lancer la manche dans l'admin pour faire apparaître les cibles."}
-            </p>
+          <div className="rounded-3xl border border-white/15 bg-slate-950/90 px-8 py-6 shadow-2xl space-y-2.5 max-w-lg">
+            {roundEnded ? (
+              <>
+                <div className="inline-flex items-center gap-1.5 text-xs font-black uppercase tracking-widest text-amber-300">
+                  <Trophy className="w-4 h-4" />
+                  <span>Fin de la manche {roundNumber}</span>
+                </div>
+                <p className="text-3xl font-black tracking-tight text-white">
+                  Gagnant :{" "}
+                  <span className="text-amber-300">
+                    {lastRoundWinnerLabel ?? "—"}
+                  </span>
+                </p>
+                {roundNumber >= totalRounds &&
+                !isSuddenDeath &&
+                overallLeader.winnerName ? (
+                  <p className="text-base font-extrabold text-emerald-300">
+                    Champion de la partie : {overallLeader.winnerName} !
+                  </p>
+                ) : isSuddenDeath ? (
+                  <p className="text-sm font-bold text-rose-300">
+                    Égalité ! Clique sur « Lancer la manche » pour la mort subite.
+                  </p>
+                ) : (
+                  <p className="text-sm text-neutral-300">
+                    Clique sur « Lancer la manche » dans l&apos;admin pour la
+                    manche suivante.
+                  </p>
+                )}
+              </>
+            ) : isPaused ? (
+              <>
+                <p className="text-3xl font-black tracking-tight text-amber-300">
+                  PAUSE
+                </p>
+                <p className="text-sm text-neutral-300">
+                  La manche est mise en pause.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-3xl font-black tracking-tight text-amber-300">
+                  {isSuddenDeath ? "MORT SUBITE" : "TARGET BLITZ PRÊT"}
+                </p>
+                <p className="text-sm text-neutral-300">
+                  Clique sur « Lancer la manche » dans le panneau admin pour
+                  démarrer.
+                </p>
+              </>
+            )}
           </div>
         </div>
       )}
