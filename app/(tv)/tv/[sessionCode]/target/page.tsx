@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Timer, Trophy } from "lucide-react";
+import { Flame, Swords, Timer, Trophy } from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import type { GameSession, PlayerScore, SessionPlayer } from "@/types/game.types";
@@ -65,6 +65,11 @@ interface BackgroundStar {
 
 interface BlitzGameState {
   mode?: string;
+  roundNumber?: number;
+  totalRounds?: number;
+  isSuddenDeath?: boolean;
+  suddenDeathPlayerIds?: string[];
+  roundWins?: Record<string, number>;
   questionStartedAt?: string | number | null;
   durationSeconds?: number | null;
   isPaused?: boolean;
@@ -84,23 +89,29 @@ interface SvgSpriteAssets {
   tintedCrosshairCache: Record<string, HTMLImageElement>;
 }
 
-const DEFAULT_DURATION_SECONDS = 45;
+const DEFAULT_DURATION_SECONDS = 60;
+const DEFAULT_TOTAL_ROUNDS = 5;
+const MAX_SPAWNED_TARGETS = 8;
 const TARGET_COLORS = ["#22d3ee", "#4ade80", "#fb923c", "#f472b6", "#a78bfa"];
 
-function createRandomTarget(index: number): BlitzTarget {
+function createTopSpawnTarget(index: number): BlitzTarget {
   const roll = Math.random();
   const baseId = `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`;
+  const startX = 12 + Math.random() * 76;
+  const startY = -6 - Math.random() * 14;
+  const horizontalSpeed =
+    (Math.random() < 0.5 ? -1 : 1) * (6 + Math.random() * 14);
 
   if (roll < 0.24) {
     return {
       id: `bomb-${baseId}`,
-      x: 14 + Math.random() * 72,
-      y: 20 + Math.random() * 62,
+      x: startX,
+      y: startY,
       radiusPct: 4.3,
       kind: "bomb",
       points: -5,
-      vx: (Math.random() - 0.5) * 15,
-      vy: (Math.random() - 0.5) * 11,
+      vx: horizontalSpeed,
+      vy: 12 + Math.random() * 9,
       hueColor: "#f43f5e",
       fusePhase: Math.random() * Math.PI * 2,
     };
@@ -109,13 +120,13 @@ function createRandomTarget(index: number): BlitzTarget {
   if (roll < 0.44) {
     return {
       id: `bonus-${baseId}`,
-      x: 14 + Math.random() * 72,
-      y: 20 + Math.random() * 62,
+      x: startX,
+      y: startY,
       radiusPct: 4.1,
       kind: "bonus",
       points: 10,
-      vx: (Math.random() - 0.5) * 22,
-      vy: (Math.random() - 0.5) * 16,
+      vx: horizontalSpeed * 1.25,
+      vy: 23 + Math.random() * 13,
       hueColor: "#fbbf24",
       fusePhase: Math.random() * Math.PI * 2,
     };
@@ -126,13 +137,13 @@ function createRandomTarget(index: number): BlitzTarget {
 
   return {
     id: `target-${baseId}`,
-    x: 14 + Math.random() * 72,
-    y: 20 + Math.random() * 62,
+    x: startX,
+    y: startY,
     radiusPct: 4.9,
     kind: "target",
     points: 5,
-    vx: (Math.random() - 0.5) * 17,
-    vy: (Math.random() - 0.5) * 13,
+    vx: horizontalSpeed,
+    vy: 11 + Math.random() * 11,
     hueColor: paletteColor,
     fusePhase: Math.random() * Math.PI * 2,
   };
@@ -142,7 +153,7 @@ function extractScoreValue(row: PlayerScore | undefined): number {
   if (!row) return 0;
   const rec = row as unknown as { total_score?: number; score?: number };
   const val = rec.total_score ?? rec.score ?? 0;
-  return typeof val === "number" && Number.isFinite(val) ? val : 0;
+  return typeof val === "number" && Number.isFinite(val) ? Math.max(0, val) : 0;
 }
 
 function formatClock(seconds: number): string {
@@ -187,6 +198,8 @@ export default function TargetBlitzGamePage() {
   const [session, setSession] = useState<ExtendedGameSession | null>(null);
   const [players, setPlayers] = useState<SessionPlayer[]>([]);
   const [scores, setScores] = useState<Record<string, number>>({});
+  const [roundWins, setRoundWins] = useState<Record<string, number>>({});
+  const [suddenDeathPlayerIds, setSuddenDeathPlayerIds] = useState<string[]>([]);
   const [remainingSeconds, setRemainingSeconds] = useState<number>(
     DEFAULT_DURATION_SECONDS
   );
@@ -205,9 +218,8 @@ export default function TargetBlitzGamePage() {
     tintedCrosshairCache: {},
   });
 
-  const targetsRef = useRef<BlitzTarget[]>(
-    Array.from({ length: 7 }, (_, i) => createRandomTarget(i))
-  );
+  const targetsRef = useRef<BlitzTarget[]>([]);
+  const spawnAccumulatorRef = useRef<number>(0);
   const cursorsRef = useRef<Record<string, BlitzCursorPayload>>({});
   const particlesRef = useRef<Particle[]>([]);
   const floatingTextsRef = useRef<FloatingScoreText[]>([]);
@@ -216,7 +228,7 @@ export default function TargetBlitzGamePage() {
       x: Math.random() * 100,
       y: Math.random() * 100,
       size: 1 + Math.random() * 2.4,
-      speed: 1.5 + Math.random() * 4.5,
+      speed: -3 - Math.random() * 6,
       alpha: 0.35 + Math.random() * 0.65,
     }))
   );
@@ -227,13 +239,46 @@ export default function TargetBlitzGamePage() {
   sessionRef.current = session;
   const playersRef = useRef<SessionPlayer[]>(players);
   playersRef.current = players;
+  const roundWinsRef = useRef<Record<string, number>>(roundWins);
+  roundWinsRef.current = roundWins;
+  const suddenDeathIdsRef = useRef<string[]>(suddenDeathPlayerIds);
+  suddenDeathIdsRef.current = suddenDeathPlayerIds;
 
   const roundStatus = session?.status ?? "lobby";
+  const statusLower = String(roundStatus).toLowerCase();
   const blitzState = session?.game_state ?? {};
-  const roundStatusRef = useRef<string>(roundStatus);
-  roundStatusRef.current = roundStatus;
-  const isPausedRef = useRef<boolean>(Boolean(blitzState.isPaused));
-  isPausedRef.current = Boolean(blitzState.isPaused);
+  const isRoundLaunched = statusLower === "playing" || statusLower === "paused";
+  const isPlaying = statusLower === "playing";
+  const isPaused = statusLower === "paused" || Boolean(blitzState.isPaused);
+
+  const isRoundLaunchedRef = useRef<boolean>(isRoundLaunched);
+  isRoundLaunchedRef.current = isRoundLaunched;
+  const isPlayingRef = useRef<boolean>(isPlaying);
+  isPlayingRef.current = isPlaying;
+  const isPausedRef = useRef<boolean>(isPaused);
+  isPausedRef.current = isPaused;
+
+  const totalRounds = useMemo(() => {
+    const raw = Number(blitzState.totalRounds);
+    return Number.isFinite(raw) && raw > 0 ? Math.round(raw) : DEFAULT_TOTAL_ROUNDS;
+  }, [blitzState.totalRounds]);
+
+  const roundNumber = useMemo(() => {
+    const raw = Number(blitzState.roundNumber);
+    return Number.isFinite(raw) && raw >= 1 ? Math.round(raw) : 1;
+  }, [blitzState.roundNumber]);
+
+  const isSuddenDeath = useMemo(() => {
+    return Boolean(blitzState.isSuddenDeath) || suddenDeathPlayerIds.length > 0;
+  }, [blitzState.isSuddenDeath, suddenDeathPlayerIds]);
+
+  const durationSeconds = useMemo(() => {
+    const d = Number(blitzState.durationSeconds);
+    return Number.isFinite(d) && d > 0 ? d : DEFAULT_DURATION_SECONDS;
+  }, [blitzState.durationSeconds]);
+
+  const lastRoundKeyRef = useRef<string>("");
+  const finalizedRoundKeyRef = useRef<string>("");
 
   useEffect(() => {
     let active = true;
@@ -243,7 +288,9 @@ export default function TargetBlitzGamePage() {
         loadSvgImage("/cible.svg"),
         loadSvgImage("/cible_Bonus.svg"),
         loadSvgImage("/Bombes.svg"),
-        fetch("/viseur.svg").then((r) => (r.ok ? r.text() : null)).catch(() => null),
+        fetch("/viseur.svg")
+          .then((r) => (r.ok ? r.text() : null))
+          .catch(() => null),
       ]);
 
       if (!active) return;
@@ -264,21 +311,91 @@ export default function TargetBlitzGamePage() {
 
   useEffect(() => {
     if (!session) return;
-    const normalizedStatus = String(session.status ?? "").toLowerCase();
     if (
-      normalizedStatus === "finished" ||
-      normalizedStatus === "ended" ||
-      normalizedStatus === "completed"
+      statusLower === "finished" ||
+      statusLower === "ended" ||
+      statusLower === "completed"
     ) {
       const targetCode = (session.code || sessionCode || "").toUpperCase();
       router.replace(targetCode ? `/tv/${targetCode}` : "/tv");
     }
-  }, [session, sessionCode, router]);
+  }, [session, sessionCode, statusLower, router]);
 
-  const durationSeconds = useMemo(() => {
-    const d = Number(blitzState.durationSeconds);
-    return Number.isFinite(d) && d > 0 ? d : DEFAULT_DURATION_SECONDS;
-  }, [blitzState.durationSeconds]);
+  useEffect(() => {
+    if (!isRoundLaunched) {
+      targetsRef.current = [];
+      spawnAccumulatorRef.current = 0;
+      particlesRef.current = [];
+      floatingTextsRef.current = [];
+    } else if (targetsRef.current.length === 0) {
+      targetsRef.current = Array.from({ length: 5 }, (_, i) =>
+        createTopSpawnTarget(i)
+      );
+    }
+  }, [isRoundLaunched]);
+
+  const resetRoundScores = useCallback(async () => {
+    const zeroMap: Record<string, number> = {};
+    for (const p of playersRef.current) {
+      zeroMap[p.id] = 0;
+    }
+    setScores(zeroMap);
+    scoresRef.current = zeroMap;
+
+    const currentSession = sessionRef.current;
+    if (!supabase || !currentSession?.id || playersRef.current.length === 0) {
+      return;
+    }
+
+    const rows = playersRef.current.map((p) => ({
+      session_id: currentSession.id,
+      player_id: p.id,
+      total_score: 0,
+    }));
+
+    await supabase
+      .from("player_scores")
+      .upsert(rows, { onConflict: "session_id,player_id" });
+  }, [supabase]);
+
+  useEffect(() => {
+    const stateWins = blitzState.roundWins;
+    if (stateWins && typeof stateWins === "object") {
+      const cleaned: Record<string, number> = {};
+      for (const [k, v] of Object.entries(stateWins)) {
+        if (typeof v === "number" && Number.isFinite(v)) {
+          cleaned[k] = Math.max(0, Math.round(v));
+        }
+      }
+      setRoundWins(cleaned);
+      roundWinsRef.current = cleaned;
+    }
+
+    if (Array.isArray(blitzState.suddenDeathPlayerIds)) {
+      const ids = blitzState.suddenDeathPlayerIds.map(String);
+      setSuddenDeathPlayerIds(ids);
+      suddenDeathIdsRef.current = ids;
+    }
+  }, [blitzState.roundWins, blitzState.suddenDeathPlayerIds]);
+
+  useEffect(() => {
+    if (!session?.id) return;
+    const roundTrigger = `${session.id}-r${roundNumber}-sd${
+      blitzState.isSuddenDeath ? 1 : 0
+    }`;
+    if (lastRoundKeyRef.current === "") {
+      lastRoundKeyRef.current = roundTrigger;
+      return;
+    }
+    if (lastRoundKeyRef.current !== roundTrigger) {
+      lastRoundKeyRef.current = roundTrigger;
+      targetsRef.current = [];
+      spawnAccumulatorRef.current = 0;
+      particlesRef.current = [];
+      floatingTextsRef.current = [];
+      void resetRoundScores();
+    }
+  }, [session?.id, roundNumber, blitzState.isSuddenDeath, resetRoundScores]);
 
   const spawnBurst = useCallback(
     (xPct: number, yPct: number, color: string, count = 22) => {
@@ -336,7 +453,16 @@ export default function TargetBlitzGamePage() {
 
   const handleShootPayload = useCallback(
     (shot: BlitzShootPayload) => {
-      if (roundStatusRef.current !== "playing" || isPausedRef.current) return;
+      if (!isRoundLaunchedRef.current || !isPlayingRef.current || isPausedRef.current) {
+        return;
+      }
+
+      if (
+        suddenDeathIdsRef.current.length > 0 &&
+        !suddenDeathIdsRef.current.includes(shot.playerId)
+      ) {
+        return;
+      }
 
       const resolvedColor =
         shot.color ||
@@ -357,7 +483,7 @@ export default function TargetBlitzGamePage() {
       if (!hitTarget) return;
 
       const nextTargets = [...targetsRef.current];
-      nextTargets[hitIndex] = createRandomTarget(hitIndex);
+      nextTargets.splice(hitIndex, 1);
       targetsRef.current = nextTargets;
 
       if (hitTarget.kind === "bomb") {
@@ -701,11 +827,15 @@ export default function TargetBlitzGamePage() {
       ctx.fillStyle = bgGrad;
       ctx.fillRect(0, 0, width, height);
 
+      const canMove = isRoundLaunchedRef.current && isPlayingRef.current && !isPausedRef.current;
+
       for (const star of starsRef.current) {
-        star.y += star.speed * dt;
-        if (star.y > 102) {
-          star.y = -2;
-          star.x = Math.random() * 100;
+        if (canMove) {
+          star.y += star.speed * dt;
+          if (star.y < -2) {
+            star.y = 102;
+            star.x = Math.random() * 100;
+          }
         }
         ctx.beginPath();
         ctx.arc(
@@ -719,37 +849,57 @@ export default function TargetBlitzGamePage() {
         ctx.fill();
       }
 
-      const canMove =
-        roundStatusRef.current === "playing" && !isPausedRef.current;
-
-      for (const t of targetsRef.current) {
+      if (isRoundLaunchedRef.current) {
         if (canMove) {
-          t.x += t.vx * dt;
-          t.y += t.vy * dt;
-          if (t.x < 9 || t.x > 91) {
-            t.vx = -t.vx;
-            t.x = Math.max(9, Math.min(91, t.x));
-          }
-          if (t.y < 14 || t.y > 86) {
-            t.vy = -t.vy;
-            t.y = Math.max(14, Math.min(86, t.y));
+          spawnAccumulatorRef.current += dt;
+          if (
+            spawnAccumulatorRef.current >= 1.15 &&
+            targetsRef.current.length < MAX_SPAWNED_TARGETS
+          ) {
+            spawnAccumulatorRef.current = 0;
+            targetsRef.current.push(
+              createTopSpawnTarget(targetsRef.current.length)
+            );
           }
         }
 
-        const cx = (t.x / 100) * width;
-        const cy = (t.y / 100) * height;
-        const radiusPx = Math.max(
-          24,
-          (t.radiusPct / 100) * Math.min(width, height)
-        );
+        const survivingTargets: BlitzTarget[] = [];
+        for (const t of targetsRef.current) {
+          if (canMove) {
+            t.x += t.vx * dt;
+            t.y += t.vy * dt;
 
-        if (t.kind === "bomb") {
-          drawSpikedBomb(cx, cy, radiusPx, timeSec, t.fusePhase);
-        } else if (t.kind === "bonus") {
-          drawBonusCoin(cx, cy, radiusPx);
-        } else {
-          drawConcenticTarget(cx, cy, radiusPx, t.hueColor);
+            if (t.x < 7) {
+              t.x = 7;
+              t.vx = Math.abs(t.vx);
+            } else if (t.x > 93) {
+              t.x = 93;
+              t.vx = -Math.abs(t.vx);
+            }
+
+            if (t.y > 108) {
+              continue;
+            }
+          }
+
+          survivingTargets.push(t);
+
+          const cx = (t.x / 100) * width;
+          const cy = (t.y / 100) * height;
+          const radiusPx = Math.max(
+            24,
+            (t.radiusPct / 100) * Math.min(width, height)
+          );
+
+          if (t.kind === "bomb") {
+            drawSpikedBomb(cx, cy, radiusPx, timeSec, t.fusePhase);
+          } else if (t.kind === "bonus") {
+            drawBonusCoin(cx, cy, radiusPx);
+          } else {
+            drawConcenticTarget(cx, cy, radiusPx, t.hueColor);
+          }
         }
+        targetsRef.current = survivingTargets;
       }
 
       const aliveParticles: Particle[] = [];
@@ -834,12 +984,12 @@ export default function TargetBlitzGamePage() {
   }, []);
 
   useEffect(() => {
-    if (blitzState.isPaused && typeof blitzState.pausedRemainingSeconds === "number") {
+    if (isPaused && typeof blitzState.pausedRemainingSeconds === "number") {
       setRemainingSeconds(Math.max(0, blitzState.pausedRemainingSeconds));
       return;
     }
 
-    if (roundStatus !== "playing" || !blitzState.questionStartedAt) {
+    if (!isPlaying || !blitzState.questionStartedAt) {
       setRemainingSeconds(durationSeconds);
       return;
     }
@@ -863,11 +1013,102 @@ export default function TargetBlitzGamePage() {
     const interval = window.setInterval(updateTimer, 200);
     return () => window.clearInterval(interval);
   }, [
-    roundStatus,
-    blitzState.isPaused,
+    isPlaying,
+    isPaused,
     blitzState.pausedRemainingSeconds,
     blitzState.questionStartedAt,
     durationSeconds,
+  ]);
+
+  useEffect(() => {
+    if (!isPlaying || remainingSeconds > 0 || !session?.id) return;
+    const roundKey = `${session.id}-r${roundNumber}-sd${isSuddenDeath ? 1 : 0}`;
+    if (finalizedRoundKeyRef.current === roundKey) return;
+    finalizedRoundKeyRef.current = roundKey;
+
+    const candidatePlayers =
+      suddenDeathIdsRef.current.length > 0
+        ? playersRef.current.filter((p) =>
+            suddenDeathIdsRef.current.includes(p.id)
+          )
+        : playersRef.current;
+
+    if (candidatePlayers.length === 0) return;
+
+    let bestScore = -1;
+    let winners: string[] = [];
+    for (const p of candidatePlayers) {
+      const sc = scoresRef.current[p.id] ?? 0;
+      if (sc > bestScore) {
+        bestScore = sc;
+        winners = [p.id];
+      } else if (sc === bestScore) {
+        winners.push(p.id);
+      }
+    }
+
+    if (bestScore <= 0 || winners.length === 0) return;
+
+    const nextWins = { ...roundWinsRef.current };
+    for (const wId of winners) {
+      nextWins[wId] = (nextWins[wId] ?? 0) + 1;
+    }
+    setRoundWins(nextWins);
+    roundWinsRef.current = nextWins;
+
+    if (roundNumber >= totalRounds || isSuddenDeath) {
+      let maxWins = -1;
+      let tiedIds: string[] = [];
+      for (const p of playersRef.current) {
+        const w = nextWins[p.id] ?? 0;
+        if (w > maxWins) {
+          maxWins = w;
+          tiedIds = [p.id];
+        } else if (w === maxWins) {
+          tiedIds.push(p.id);
+        }
+      }
+
+      if (tiedIds.length > 1) {
+        setSuddenDeathPlayerIds(tiedIds);
+        suddenDeathIdsRef.current = tiedIds;
+        const nextState: BlitzGameState = {
+          ...blitzState,
+          roundNumber: roundNumber + 1,
+          isSuddenDeath: true,
+          suddenDeathPlayerIds: tiedIds,
+          roundWins: nextWins,
+          questionStartedAt: Date.now(),
+        };
+        if (supabase) {
+          void supabase
+            .from("game_sessions")
+            .update({ game_state: nextState })
+            .eq("id", session.id);
+        }
+        return;
+      }
+    }
+
+    const nextState: BlitzGameState = {
+      ...blitzState,
+      roundWins: nextWins,
+    };
+    if (supabase) {
+      void supabase
+        .from("game_sessions")
+        .update({ game_state: nextState })
+        .eq("id", session.id);
+    }
+  }, [
+    isPlaying,
+    remainingSeconds,
+    session?.id,
+    roundNumber,
+    totalRounds,
+    isSuddenDeath,
+    blitzState,
+    supabase,
   ]);
 
   useEffect(() => {
@@ -892,12 +1133,9 @@ export default function TargetBlitzGamePage() {
         setPlayers(playersRows as SessionPlayer[]);
       }
       if (scoreRows) {
-        const map: Record<string, number> = { ...scoresRef.current };
+        const map: Record<string, number> = {};
         for (const row of scoreRows as PlayerScore[]) {
-          map[row.player_id] = Math.max(
-            map[row.player_id] ?? 0,
-            extractScoreValue(row)
-          );
+          map[row.player_id] = extractScoreValue(row);
         }
         setScores(map);
         scoresRef.current = map;
@@ -980,105 +1218,167 @@ export default function TargetBlitzGamePage() {
     };
   }, [supabase, sessionCode, handleShootPayload]);
 
-  const leaderboard = useMemo(() => {
-    const entries = players.map((p) => ({
-      id: p.id,
-      nickname: p.nickname,
-      avatar: p.avatar ?? "🎮",
-      score: scores[p.id] ?? 0,
-    }));
-    return entries.sort((a, b) => b.score - a.score);
-  }, [players, scores]);
+  const sixPlayersRow = useMemo(() => {
+    const sorted = [...players].sort((a, b) => {
+      const winsDiff = (roundWins[b.id] ?? 0) - (roundWins[a.id] ?? 0);
+      if (winsDiff !== 0) return winsDiff;
+      return (scores[b.id] ?? 0) - (scores[a.id] ?? 0);
+    });
+    return sorted.slice(0, 6).map((p) => {
+      const colorStyle = getUniquePlayerColor(p.id, players);
+      return {
+        id: p.id,
+        nickname: p.nickname,
+        avatar: p.avatar ?? "🎮",
+        score: scores[p.id] ?? 0,
+        wins: roundWins[p.id] ?? 0,
+        colorStyle,
+      };
+    });
+  }, [players, scores, roundWins]);
+
+  const matchSummary = useMemo(() => {
+    if (players.length === 0) return { winnerName: null, tiedNames: [] as string[] };
+    let maxWins = -1;
+    let leaders: SessionPlayer[] = [];
+    for (const p of players) {
+      const w = roundWins[p.id] ?? 0;
+      if (w > maxWins) {
+        maxWins = w;
+        leaders = [p];
+      } else if (w === maxWins) {
+        leaders.push(p);
+      }
+    }
+    if (maxWins <= 0) return { winnerName: null, tiedNames: [] as string[] };
+    if (leaders.length > 1) {
+      return {
+        winnerName: null,
+        tiedNames: leaders.map((l) => l.nickname),
+      };
+    }
+    return {
+      winnerName: leaders[0]?.nickname ?? null,
+      tiedNames: [] as string[],
+    };
+  }, [players, roundWins]);
 
   return (
     <div
       ref={containerRef}
-      className="relative w-screen h-screen overflow-hidden select-none bg-[#090516] text-white"
+      className="relative w-screen h-screen overflow-hidden select-none bg-[#090516] text-white flex flex-col justify-between"
     >
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block" />
 
+      {/* Haut de l'écran : manche + chrono */}
       <div className="relative z-10 pointer-events-none flex items-start justify-between gap-4 p-4 md:p-6">
-        <div className="w-64 sm:w-72 rounded-2xl border border-cyan-400/40 bg-slate-950/75 backdrop-blur-md p-3 shadow-[0_0_25px_rgba(34,211,238,0.2)]">
-          <div className="flex items-center justify-between border-b border-white/10 pb-1.5 mb-2">
-            <span className="text-[11px] font-black uppercase tracking-widest text-cyan-300 flex items-center gap-1.5">
-              <Trophy className="w-3.5 h-3.5 text-amber-400" />
-              Live Leaderboard
-            </span>
-            <span className="font-mono text-[11px] text-amber-300 font-bold">
-              {sessionCode || "----"}
-            </span>
+        <div className="rounded-2xl border border-cyan-400/40 bg-slate-950/80 backdrop-blur-md px-4 py-2.5 shadow-[0_0_25px_rgba(34,211,238,0.2)]">
+          <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-cyan-300">
+            {isSuddenDeath ? (
+              <>
+                <Swords className="w-4 h-4 text-rose-400" />
+                <span className="text-rose-300">Mort Subite</span>
+              </>
+            ) : (
+              <>
+                <Flame className="w-4 h-4 text-amber-400" />
+                <span>
+                  Manche {Math.min(roundNumber, totalRounds)} / {totalRounds}
+                </span>
+              </>
+            )}
           </div>
-
-          {leaderboard.length === 0 ? (
-            <p className="text-xs text-neutral-400 py-2 text-center">
-              En attente des joueurs...
-            </p>
-          ) : (
-            <div className="space-y-1">
-              {leaderboard.slice(0, 5).map((entry, idx) => (
-                <div
-                  key={entry.id}
-                  className="flex items-center justify-between rounded-lg bg-white/5 px-2.5 py-1 text-xs"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="font-mono font-bold text-amber-400 w-4">
-                      #{idx + 1}
-                    </span>
-                    <span className="truncate font-bold">{entry.nickname}</span>
-                  </div>
-                  <span className="font-mono font-black text-cyan-200">
-                    {entry.score}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
+          <div className="font-mono text-[11px] text-neutral-400 mt-0.5">
+            Salle {sessionCode || "----"} • {roundStatus.toUpperCase()}
+          </div>
         </div>
 
-        <div className="flex flex-col items-center">
+        <div className="flex flex-col items-end">
           <div className="rounded-2xl border-2 border-fuchsia-400/60 bg-slate-950/80 backdrop-blur-md px-6 py-2.5 shadow-[0_0_30px_rgba(217,70,239,0.3)] flex items-center gap-3">
             <Timer className="w-6 h-6 text-amber-400" />
             <span className="font-mono text-3xl sm:text-4xl font-black tracking-wider text-amber-300">
               {formatClock(remainingSeconds)}
             </span>
           </div>
-          <span className="mt-1.5 px-3 py-0.5 rounded-full text-[11px] font-black uppercase tracking-widest bg-fuchsia-500/25 border border-fuchsia-400/40 text-fuchsia-200">
-            Target Blitz • {roundStatus}
-          </span>
-        </div>
-
-        <div className="hidden md:block rounded-2xl border border-amber-400/35 bg-slate-950/75 backdrop-blur-md px-4 py-3 text-right shadow-[0_0_25px_rgba(251,191,36,0.18)]">
-          <div className="text-xs font-black uppercase tracking-widest text-amber-300">
-            Multiplayer Target Blitz
-          </div>
-          <div className="text-[11px] text-neutral-300 mt-1 space-y-0.5">
-            <div>
-              Cible : <span className="text-emerald-300 font-bold">+5</span> •
-              Bonus : <span className="text-amber-300 font-bold">+10</span>
-            </div>
-            <div>
-              Bombe : <span className="text-rose-400 font-bold">-5</span>
-            </div>
-          </div>
+          {matchSummary.winnerName && (
+            <span className="mt-1.5 px-3 py-0.5 rounded-full text-xs font-black bg-amber-400/20 border border-amber-300/50 text-amber-200 flex items-center gap-1">
+              <Trophy className="w-3.5 h-3.5 text-amber-300" />
+              En tête : {matchSummary.winnerName}
+            </span>
+          )}
+          {matchSummary.tiedNames.length > 1 && (
+            <span className="mt-1.5 px-3 py-0.5 rounded-full text-xs font-black bg-rose-500/25 border border-rose-400/50 text-rose-200">
+              Égalité : {matchSummary.tiedNames.join(" vs ")}
+            </span>
+          )}
         </div>
       </div>
 
-      {roundStatus !== "playing" && (
-        <div className="absolute inset-0 z-20 bg-black/55 backdrop-blur-xs flex flex-col items-center justify-center text-center p-6">
-          <div className="rounded-3xl border border-white/15 bg-slate-950/85 px-8 py-6 shadow-2xl space-y-2">
+      {/* Overlay quand la manche n'est pas en cours de jeu */}
+      {!isPlaying && (
+        <div className="absolute inset-0 z-20 bg-black/55 backdrop-blur-xs flex flex-col items-center justify-center text-center p-6 pointer-events-none">
+          <div className="rounded-3xl border border-white/15 bg-slate-950/90 px-8 py-6 shadow-2xl space-y-2 max-w-md">
             <p className="text-3xl font-black tracking-tight text-amber-300">
-              {roundStatus === "paused"
+              {isPaused
                 ? "PAUSE"
-                : roundStatus === "finished"
-                ? "MANCHE TERMINÉE"
-                : "PRÊT POUR TARGET BLITZ"}
+                : matchSummary.winnerName && roundNumber >= totalRounds
+                ? `VICTOIRE : ${matchSummary.winnerName}`
+                : isSuddenDeath
+                ? "MORT SUBITE"
+                : "EN ATTENTE DU LANCEMENT"}
             </p>
             <p className="text-sm text-neutral-300">
-              Vise avec le trackpad de ton téléphone et appuie sur TIRER.
+              {isPaused
+                ? "La manche est mise en pause."
+                : "Clique sur Lancer la manche dans l'admin pour faire apparaître les cibles."}
             </p>
           </div>
         </div>
       )}
+
+      {/* Bas de l'écran : pastilles des 6 joueurs sur une seule ligne */}
+      <div className="relative z-10 pointer-events-none px-3 pb-3 pt-2">
+        <div className="grid grid-cols-6 gap-2 max-w-6xl mx-auto">
+          {Array.from({ length: 6 }, (_, idx) => {
+            const p = sixPlayersRow[idx];
+            if (!p) {
+              return (
+                <div
+                  key={`empty-slot-${idx}`}
+                  className="h-14 rounded-2xl border border-white/10 bg-slate-950/45 flex items-center justify-center text-[11px] font-bold text-neutral-500"
+                >
+                  J{idx + 1}
+                </div>
+              );
+            }
+
+            return (
+              <div
+                key={p.id}
+                style={{
+                  backgroundColor: p.colorStyle.bgHex,
+                  borderColor: p.colorStyle.borderHex,
+                  color: p.colorStyle.textHex,
+                }}
+                className="h-14 rounded-2xl border-2 px-2.5 py-1.5 shadow-lg flex items-center justify-between gap-1.5 min-w-0"
+              >
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <span className="text-lg shrink-0">{p.avatar}</span>
+                  <div className="min-w-0 leading-tight">
+                    <div className="font-black text-xs truncate">{p.nickname}</div>
+                    <div className="text-[10px] font-extrabold opacity-90">
+                      {p.wins} {p.wins > 1 ? "manches" : "manche"}
+                    </div>
+                  </div>
+                </div>
+                <span className="font-mono font-black text-base shrink-0 bg-black/25 px-2 py-0.5 rounded-lg">
+                  {p.score}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </div>
   );
 }
