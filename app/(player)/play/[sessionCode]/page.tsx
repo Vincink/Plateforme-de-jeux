@@ -344,6 +344,7 @@ export default function PlayerControllerPage() {
   const [isFiring, setIsFiring] = useState<boolean>(false);
   const [stunnedUntilMs, setStunnedUntilMs] = useState<number>(0);
   const [nowTickMs, setNowTickMs] = useState<number>(() => Date.now());
+  const [isPortraitViewport, setIsPortraitViewport] = useState<boolean>(false);
   const trackpadRef = useRef<HTMLDivElement | null>(null);
   const lastTouchRef = useRef<{ x: number; y: number; time: number } | null>(
     null
@@ -379,6 +380,20 @@ export default function PlayerControllerPage() {
   identityRef.current = identity;
   sessionRef.current = session;
   scoresRef.current = scores;
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const checkOrientation = () => {
+      setIsPortraitViewport(window.innerHeight > window.innerWidth);
+    };
+    checkOrientation();
+    window.addEventListener("resize", checkOrientation);
+    window.addEventListener("orientationchange", checkOrientation);
+    return () => {
+      window.removeEventListener("resize", checkOrientation);
+      window.removeEventListener("orientationchange", checkOrientation);
+    };
+  }, []);
 
   const persistPlayerScore = async (
     targetSessionId: string,
@@ -1688,25 +1703,64 @@ export default function PlayerControllerPage() {
     }
   };
 
+  const isBlitzLandscapeActive = Boolean(identity) && isTargetBlitzMode;
+
   return (
     <div
-      style={isTargetBlitzMode ? { touchAction: "none" } : undefined}
-      className={`min-h-screen bg-neutral-950 text-white flex flex-col justify-between p-4 sm:p-5 select-none ${
-        isTargetBlitzMode ? "fixed inset-0 overflow-hidden" : ""
+      style={isBlitzLandscapeActive ? { touchAction: "none" } : undefined}
+      className={`min-h-[100dvh] bg-neutral-950 text-white flex flex-col justify-between select-none ${
+        isBlitzLandscapeActive
+          ? "fixed inset-0 overflow-hidden p-3 sm:p-4"
+          : "p-4 sm:p-5"
       }`}
     >
-      <div className="max-w-md w-full mx-auto flex-1 flex flex-col space-y-4">
-        <header className="flex items-center justify-between border-b border-white/10 pb-3.5 shrink-0">
-          <div>
-            <div className="text-[11px] uppercase tracking-widest text-neutral-400">
-              Salle
+      <div
+        className={`w-full mx-auto flex-1 flex flex-col ${
+          isBlitzLandscapeActive ? "max-w-none gap-2.5 min-h-0" : "max-w-md space-y-4"
+        }`}
+      >
+        <header
+          className={`flex items-center justify-between border-b border-white/10 shrink-0 ${
+            isBlitzLandscapeActive ? "pb-2 gap-3" : "pb-3.5"
+          }`}
+        >
+          <div className="flex items-center gap-3 min-w-0">
+            <div>
+              <div className="text-[10px] uppercase tracking-widest text-neutral-400">
+                Salle
+              </div>
+              <div className="font-mono text-lg sm:text-xl font-bold tracking-widest text-amber-400 leading-none">
+                {sessionCode || "----"}
+              </div>
             </div>
-            <div className="font-mono text-xl font-bold tracking-widest text-amber-400">
-              {sessionCode || "----"}
-            </div>
+
+            {isBlitzLandscapeActive && identity && (
+              <div
+                style={{
+                  backgroundColor: myColor.bgHex,
+                  borderColor: myColor.borderHex,
+                  color: myColor.textHex,
+                }}
+                className="border rounded-2xl px-3 py-1 flex items-center gap-2 min-w-0"
+              >
+                <span className="text-base">{identity.avatar ?? "🎮"}</span>
+                <span className="font-black text-xs sm:text-sm truncate">
+                  {identity.nickname}
+                </span>
+                <span className="text-[10px] uppercase font-extrabold px-1.5 py-0.5 rounded bg-black/25">
+                  {roundStatus}
+                </span>
+              </div>
+            )}
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5 shrink-0">
+            {isBlitzLandscapeActive && isPortraitViewport && (
+              <span className="text-[11px] font-bold text-amber-300 bg-amber-400/15 border border-amber-400/35 rounded-xl px-2.5 py-1">
+                Tourne en paysage
+              </span>
+            )}
+
             <div className="flex items-center gap-1.5 bg-white/5 border border-white/10 rounded-xl px-3 py-1.5">
               <Trophy className="w-4 h-4 text-amber-400" />
               <span className="font-mono font-bold text-sm">{myScore} pts</span>
@@ -1758,6 +1812,112 @@ export default function PlayerControllerPage() {
               {isJoining ? "Connexion..." : "Entrer dans la salle"}
             </button>
           </form>
+        ) : isTargetBlitzMode ? (
+          <main className="flex-1 min-h-0 flex flex-row items-stretch gap-3 sm:gap-5">
+            {/* Trackpad à gauche */}
+            <section className="flex-1 min-w-0 min-h-0 bg-white/5 border border-white/10 rounded-3xl p-3 flex flex-col gap-2">
+              <div className="flex items-center justify-between shrink-0 px-1">
+                <span className="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
+                  <Crosshair className="w-4 h-4" />
+                  Trackpad Viseur
+                </span>
+                <button
+                  type="button"
+                  onClick={handleRecenterBlitz}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl bg-white/10 active:bg-white/25 border border-white/15 text-xs font-bold text-white transition"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Recentrer
+                </button>
+              </div>
+
+              <div
+                ref={trackpadRef}
+                onTouchStart={handleTrackpadTouchStart}
+                onTouchMove={handleTrackpadTouchMove}
+                onTouchEnd={handleTrackpadTouchEnd}
+                className={`relative flex-1 min-h-0 rounded-2xl border-2 transition-colors flex items-center justify-center overflow-hidden ${
+                  roundStatus !== "playing"
+                    ? "border-white/15 bg-black/50"
+                    : isBlitzStunned
+                    ? "border-rose-500/80 bg-rose-950/35"
+                    : "border-cyan-400/45 bg-black/40 active:border-cyan-300"
+                }`}
+              >
+                <div
+                  className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 transition-transform duration-75"
+                  style={{
+                    left: `${cursorPos.x}%`,
+                    top: `${cursorPos.y}%`,
+                  }}
+                >
+                  <div
+                    className={`w-9 h-9 rounded-full border-2 flex items-center justify-center ${
+                      isFiring ? "scale-150" : "scale-100"
+                    } transition-transform`}
+                    style={{ borderColor: myColor.bgHex }}
+                  >
+                    <div
+                      className="w-2.5 h-2.5 rounded-full"
+                      style={{ backgroundColor: myColor.bgHex }}
+                    />
+                  </div>
+                </div>
+
+                <div className="pointer-events-none text-center px-4 opacity-65">
+                  {roundStatus !== "playing" ? (
+                    <p className="text-amber-300 font-black text-sm uppercase tracking-wider">
+                      {roundStatus === "paused"
+                        ? "Partie en pause"
+                        : roundStatus === "finished"
+                        ? "Partie terminée"
+                        : "En attente du lancement..."}
+                    </p>
+                  ) : isBlitzStunned ? (
+                    <p className="text-rose-300 font-black text-sm uppercase tracking-wider">
+                      Bombe touchée ! Patiente...
+                    </p>
+                  ) : (
+                    <>
+                      <p className="text-xs sm:text-sm font-extrabold uppercase tracking-widest text-cyan-200">
+                        Glisse pour viser
+                      </p>
+                      <p className="text-[11px] text-neutral-300 mt-0.5">
+                        Tape ici ou utilise le bouton rond
+                      </p>
+                    </>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            {/* Gros bouton rond à droite */}
+            <aside className="w-36 sm:w-44 shrink-0 bg-white/5 border border-white/10 rounded-3xl p-3 flex flex-col items-center justify-center gap-2">
+              <button
+                type="button"
+                disabled={isBlitzStunned || roundStatus !== "playing"}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  triggerBlitzShoot();
+                }}
+                aria-label="Tirer"
+                className={`w-28 h-28 sm:w-32 sm:h-32 rounded-full font-black text-lg tracking-widest uppercase shadow-2xl flex flex-col items-center justify-center gap-1 transition-transform active:scale-90 ${
+                  isBlitzStunned || roundStatus !== "playing"
+                    ? "bg-neutral-800 text-neutral-500 border-2 border-white/10"
+                    : "bg-gradient-to-br from-amber-400 via-orange-500 to-rose-500 text-slate-950 border-4 border-amber-200/80 shadow-[0_0_30px_rgba(251,146,60,0.45)]"
+                }`}
+              >
+                <Flame className="w-8 h-8" />
+                <span>
+                  {roundStatus !== "playing"
+                    ? "OFF"
+                    : isBlitzStunned
+                    ? "BLOQUÉ"
+                    : "TIRER"}
+                </span>
+              </button>
+            </aside>
+          </main>
         ) : (
           <main className="flex-1 flex flex-col space-y-4">
             <div
@@ -1778,9 +1938,7 @@ export default function PlayerControllerPage() {
                 <div>
                   <div className="font-black text-lg">{identity.nickname}</div>
                   <div className="text-xs opacity-90 font-semibold">
-                    {isTargetBlitzMode
-                      ? "Target Blitz"
-                      : activeQuestionIndex !== null
+                    {activeQuestionIndex !== null
                       ? `Question ${activeQuestionIndex + 1}`
                       : isJusteChiffreMode
                       ? "Le Juste Chiffre"
@@ -1789,11 +1947,7 @@ export default function PlayerControllerPage() {
                   </div>
                 </div>
               </div>
-              {isTargetBlitzMode ? (
-                <Crosshair className="w-6 h-6 opacity-90" />
-              ) : (
-                <Gamepad2 className="w-6 h-6 opacity-90" />
-              )}
+              <Gamepad2 className="w-6 h-6 opacity-90" />
             </div>
 
             <div className="flex-1 flex flex-col justify-between bg-white/5 border border-white/10 rounded-3xl p-4 sm:p-5 space-y-4">
@@ -1807,95 +1961,10 @@ export default function PlayerControllerPage() {
                       : "Regarde la télé pour la suite..."}
                   </p>
                   <p className="text-xs text-neutral-400">
-                    {isTargetBlitzMode
-                      ? "Prépare ton viseur !"
-                      : activeQuestionIndex !== null
+                    {activeQuestionIndex !== null
                       ? `Question ${activeQuestionIndex + 1}`
                       : "En attente"}
                   </p>
-                </div>
-              ) : isTargetBlitzMode ? (
-                <div className="flex-1 flex flex-col justify-between gap-3">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold uppercase tracking-wider text-cyan-300 flex items-center gap-1.5">
-                      <Crosshair className="w-4 h-4" />
-                      Trackpad Viseur
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleRecenterBlitz}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 active:bg-white/25 border border-white/15 text-xs font-bold text-white transition"
-                    >
-                      <RotateCcw className="w-3.5 h-3.5" />
-                      Recentrer
-                    </button>
-                  </div>
-
-                  <div
-                    ref={trackpadRef}
-                    onTouchStart={handleTrackpadTouchStart}
-                    onTouchMove={handleTrackpadTouchMove}
-                    onTouchEnd={handleTrackpadTouchEnd}
-                    className={`relative flex-1 min-h-[210px] rounded-2xl border-2 transition-colors flex items-center justify-center overflow-hidden ${
-                      isBlitzStunned
-                        ? "border-rose-500/80 bg-rose-950/35"
-                        : "border-cyan-400/45 bg-black/40 active:border-cyan-300"
-                    }`}
-                  >
-                    <div
-                      className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2 transition-transform duration-75"
-                      style={{
-                        left: `${cursorPos.x}%`,
-                        top: `${cursorPos.y}%`,
-                      }}
-                    >
-                      <div
-                        className={`w-9 h-9 rounded-full border-2 flex items-center justify-center ${
-                          isFiring ? "scale-150" : "scale-100"
-                        } transition-transform`}
-                        style={{ borderColor: myColor.bgHex }}
-                      >
-                        <div
-                          className="w-2.5 h-2.5 rounded-full"
-                          style={{ backgroundColor: myColor.bgHex }}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="pointer-events-none text-center px-5 opacity-55">
-                      {isBlitzStunned ? (
-                        <p className="text-rose-300 font-black text-base uppercase tracking-wider">
-                          Bombe touchée ! Patiente...
-                        </p>
-                      ) : (
-                        <>
-                          <p className="text-sm font-extrabold uppercase tracking-widest text-cyan-200">
-                            Glisse pour viser
-                          </p>
-                          <p className="text-xs text-neutral-300 mt-1">
-                            Tape ici ou appuie sur Tirer
-                          </p>
-                        </>
-                      )}
-                    </div>
-                  </div>
-
-                  <button
-                    type="button"
-                    disabled={isBlitzStunned}
-                    onPointerDown={(e) => {
-                      e.preventDefault();
-                      triggerBlitzShoot();
-                    }}
-                    className={`w-full h-16 rounded-2xl font-black text-xl tracking-widest uppercase shadow-xl flex items-center justify-center gap-2 transition-transform active:scale-95 ${
-                      isBlitzStunned
-                        ? "bg-neutral-800 text-neutral-500 border border-white/10"
-                        : "bg-gradient-to-r from-amber-400 via-orange-500 to-rose-500 text-slate-950 border-2 border-amber-200/70"
-                    }`}
-                  >
-                    <Flame className="w-6 h-6" />
-                    {isBlitzStunned ? "Bloqué" : "TIRER"}
-                  </button>
                 </div>
               ) : isJusteChiffreMode ? (
                 <div className="flex-1 flex flex-col justify-between gap-3">
@@ -2041,9 +2110,11 @@ export default function PlayerControllerPage() {
         )}
       </div>
 
-      <footer className="text-center text-[11px] text-neutral-500 pt-4 shrink-0">
-        Manette Joueur • {sessionCode || "—"}
-      </footer>
+      {!isBlitzLandscapeActive && (
+        <footer className="text-center text-[11px] text-neutral-500 pt-4 shrink-0">
+          Manette Joueur • {sessionCode || "—"}
+        </footer>
+      )}
     </div>
   );
 }
