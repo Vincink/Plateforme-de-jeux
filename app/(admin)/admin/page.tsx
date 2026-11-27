@@ -767,11 +767,15 @@ export default function AdminConsolePage() {
     if (matchedBySlug?.id) {
       return matchedBySlug.id;
     }
+    // Pour Target Blitz, ne pas retomber sur un UUID d'un autre jeu (comme le Quiz)
+    if (isTargetBlitzGame(candidateGame)) {
+      return null;
+    }
     const firstDbUuidGame = games.find((g) => isUuid(g.id));
     if (firstDbUuidGame?.id) {
       return firstDbUuidGame.id;
     }
-    return isTargetBlitzGame(candidateGame) ? null : GRAND_QUIZ_UUID;
+    return GRAND_QUIZ_UUID;
   };
 
   const extractAnswersFromGameState = (
@@ -1083,10 +1087,11 @@ export default function AdminConsolePage() {
     const numericGameMode = !blitzGameMode && isJusteChiffreGame(activeTargetGame);
     const validGameUuid = resolveValidGameUuid(activeTargetGame);
 
-    const effectiveQuestionIndex =
-      params.nextQuestionIndex !== undefined
-        ? params.nextQuestionIndex
-        : questionIndex;
+    const effectiveQuestionIndex = blitzGameMode
+      ? -1
+      : params.nextQuestionIndex !== undefined
+      ? params.nextQuestionIndex
+      : questionIndex;
 
     const effectiveBlitzRound =
       params.nextBlitzRoundNumber !== undefined
@@ -1121,7 +1126,7 @@ export default function AdminConsolePage() {
         ? params.nextJusteChiffreQuestions
         : justeChiffreQuestions;
 
-    const hasQuestionStarted = effectiveQuestionIndex >= 0;
+    const hasQuestionStarted = !blitzGameMode && effectiveQuestionIndex >= 0;
     const isPaused = params.nextStatus === "paused";
     const shouldResetAnswers = params.resetAnswers !== false;
     const botsForState = extractBotsForState(players, scores);
@@ -1162,6 +1167,7 @@ export default function AdminConsolePage() {
           params.nextStatus === "playing" && effectiveBlitzRound > 0;
         basePayload.game_state = {
           mode: "target-blitz",
+          gameType: "target-blitz",
           gameSlug: "target-blitz",
           roundStarted: roundActive,
           roundNumber: effectiveBlitzRound,
@@ -1186,6 +1192,8 @@ export default function AdminConsolePage() {
         }
         basePayload.game_state = {
           mode: "juste-chiffre",
+          gameType: "juste-chiffre",
+          gameSlug: "juste-chiffre",
           bots: botsForState,
           minValue: JUSTE_CHIFFRE_MIN,
           maxValue: JUSTE_CHIFFRE_MAX,
@@ -1213,6 +1221,8 @@ export default function AdminConsolePage() {
         }
         basePayload.game_state = {
           mode: "quiz",
+          gameType: "quiz",
+          gameSlug: "quiz",
           bots: botsForState,
           questionStarted: hasQuestionStarted,
           roundTriggered: hasQuestionStarted,
