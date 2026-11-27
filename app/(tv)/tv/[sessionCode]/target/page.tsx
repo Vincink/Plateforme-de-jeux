@@ -28,6 +28,8 @@ interface BlitzTarget {
   points: number;
   vx: number;
   vy: number;
+  gravity: number;
+  canSplit: boolean;
   hueColor: string;
   fusePhase: number;
 }
@@ -92,8 +94,9 @@ interface SvgSpriteAssets {
 }
 
 const ROUND_DURATION_SECONDS = 60;
+const COUNTDOWN_SECONDS = 3;
 const DEFAULT_TOTAL_ROUNDS = 5;
-const MAX_SPAWNED_TARGETS = 8;
+const MAX_SPAWNED_TARGETS = 10;
 const TARGET_COLORS = ["#22d3ee", "#4ade80", "#fb923c", "#f472b6", "#a78bfa"];
 
 function isBotPlayer(player: SessionPlayer): boolean {
@@ -107,15 +110,18 @@ function isBotPlayer(player: SessionPlayer): boolean {
   return String(player.nickname ?? "").trim().toUpperCase().startsWith("[BOT]");
 }
 
-function createTopSpawnTarget(index: number): BlitzTarget {
+function createFruitNinjaLaunchTarget(index: number): BlitzTarget {
   const roll = Math.random();
   const baseId = `${Date.now()}-${index}-${Math.random().toString(36).slice(2, 6)}`;
-  const startX = 12 + Math.random() * 76;
-  const startY = -6 - Math.random() * 14;
+  const startX = 18 + Math.random() * 64;
+  const startY = 104 + Math.random() * 6;
+  const centerBias = startX < 50 ? 1 : -1;
   const horizontalSpeed =
-    (Math.random() < 0.5 ? -1 : 1) * (6 + Math.random() * 14);
+    centerBias * (6 + Math.random() * 14) + (Math.random() - 0.5) * 8;
+  const upwardImpulse = -(66 + Math.random() * 24);
+  const gravity = 46 + Math.random() * 10;
 
-  if (roll < 0.24) {
+  if (roll < 0.22) {
     return {
       id: `bomb-${baseId}`,
       x: startX,
@@ -124,22 +130,26 @@ function createTopSpawnTarget(index: number): BlitzTarget {
       kind: "bomb",
       points: -5,
       vx: horizontalSpeed,
-      vy: 12 + Math.random() * 9,
+      vy: upwardImpulse,
+      gravity,
+      canSplit: false,
       hueColor: "#f43f5e",
       fusePhase: Math.random() * Math.PI * 2,
     };
   }
 
-  if (roll < 0.44) {
+  if (roll < 0.42) {
     return {
       id: `bonus-${baseId}`,
       x: startX,
       y: startY,
-      radiusPct: 4.1,
+      radiusPct: 4.0,
       kind: "bonus",
       points: 10,
-      vx: horizontalSpeed * 1.25,
-      vy: 23 + Math.random() * 13,
+      vx: horizontalSpeed * 1.2,
+      vy: upwardImpulse * 1.12,
+      gravity,
+      canSplit: false,
       hueColor: "#fbbf24",
       fusePhase: Math.random() * Math.PI * 2,
     };
@@ -152,12 +162,38 @@ function createTopSpawnTarget(index: number): BlitzTarget {
     id: `target-${baseId}`,
     x: startX,
     y: startY,
-    radiusPct: 4.9,
+    radiusPct: 5.0,
     kind: "target",
     points: 5,
     vx: horizontalSpeed,
-    vy: 11 + Math.random() * 11,
+    vy: upwardImpulse,
+    gravity,
+    canSplit: true,
     hueColor: paletteColor,
+    fusePhase: Math.random() * Math.PI * 2,
+  };
+}
+
+function createSplitMiniTarget(
+  parent: BlitzTarget,
+  sideSign: -1 | 1,
+  subIndex: number
+): BlitzTarget {
+  const miniId = `${Date.now()}-mini-${subIndex}-${Math.random()
+    .toString(36)
+    .slice(2, 6)}`;
+  return {
+    id: `mini-${miniId}`,
+    x: Math.max(10, Math.min(90, parent.x + sideSign * 2.2)),
+    y: parent.y,
+    radiusPct: Math.max(2.6, parent.radiusPct * 0.62),
+    kind: "target",
+    points: 5,
+    vx: sideSign * (14 + Math.random() * 14),
+    vy: -(28 + Math.random() * 18),
+    gravity: parent.gravity,
+    canSplit: false,
+    hueColor: parent.hueColor,
     fusePhase: Math.random() * Math.PI * 2,
   };
 }
@@ -214,6 +250,7 @@ export default function TargetBlitzGamePage() {
   const [roundWins, setRoundWins] = useState<Record<string, number>>({});
   const [suddenDeathPlayerIds, setSuddenDeathPlayerIds] = useState<string[]>([]);
   const [roundNumber, setRoundNumber] = useState<number>(1);
+  const [countdownValue, setCountdownValue] = useState<number | null>(null);
   const [isRoundRunning, setIsRoundRunning] = useState<boolean>(false);
   const [roundEnded, setRoundEnded] = useState<boolean>(false);
   const [lastRoundWinnerLabel, setLastRoundWinnerLabel] = useState<string | null>(
@@ -281,7 +318,8 @@ export default function TargetBlitzGamePage() {
   const statusLower = String(roundStatus).toLowerCase();
   const blitzState = session?.game_state ?? {};
   const isPaused = statusLower === "paused" || Boolean(blitzState.isPaused);
-  const isActivePlay = isRoundRunning && !roundEnded && !isPaused;
+  const isCountingDown = countdownValue !== null && countdownValue > 0;
+  const isActivePlay = isRoundRunning && !isCountingDown && !roundEnded && !isPaused;
 
   const isRoundRunningRef = useRef<boolean>(isRoundRunning);
   isRoundRunningRef.current = isRoundRunning;
@@ -374,7 +412,50 @@ export default function TargetBlitzGamePage() {
       .upsert(rows, { onConflict: "session_id,player_id" });
   }, [supabase]);
 
-  // Détecte uniquement le clic admin sur "Lancer la manche" (pas le simple clic "Lancer")
+  // Démarre un compte à rebours de 3 secondes puis lance la manche
+  const startCountdownAndRound = useCallback(
+    async (targetRoundNum: number) => {
+      setRoundNumber(targetRoundNum);
+      roundNumberRef.current = targetRoundNum;
+      finalizedRoundNumberRef.current = null;
+      roundStartMsRef.current = null;
+      setRemainingSeconds(ROUND_DURATION_SECONDS);
+      setIsRoundRunning(true);
+      setRoundEnded(false);
+      setLastRoundWinnerLabel(null);
+      setCountdownValue(COUNTDOWN_SECONDS);
+      targetsRef.current = [];
+      spawnAccumulatorRef.current = 0;
+      particlesRef.current = [];
+      floatingTextsRef.current = [];
+
+      await resetRoundScores();
+    },
+    [resetRoundScores]
+  );
+
+  // Décompte visuel 3 -> 2 -> 1
+  useEffect(() => {
+    if (countdownValue === null) return;
+
+    if (countdownValue <= 0) {
+      setCountdownValue(null);
+      roundStartMsRef.current = Date.now();
+      setRemainingSeconds(ROUND_DURATION_SECONDS);
+      targetsRef.current = Array.from({ length: 4 }, (_, i) =>
+        createFruitNinjaLaunchTarget(i)
+      );
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setCountdownValue((prev) => (prev === null ? null : prev - 1));
+    }, 1000);
+
+    return () => window.clearTimeout(timer);
+  }, [countdownValue]);
+
+  // Détecte uniquement le clic admin sur "Lancer la manche"
   useEffect(() => {
     if (!session?.id) return;
 
@@ -383,15 +464,6 @@ export default function TargetBlitzGamePage() {
     const startedAtStr = blitzState.questionStartedAt
       ? String(blitzState.questionStartedAt)
       : "";
-    const stateRoundNum =
-      typeof blitzState.roundNumber === "number" && blitzState.roundNumber >= 1
-        ? Math.round(blitzState.roundNumber)
-        : null;
-
-    if (stateRoundNum !== null && stateRoundNum !== roundNumberRef.current) {
-      setRoundNumber(stateRoundNum);
-      roundNumberRef.current = stateRoundNum;
-    }
 
     const stateWins = blitzState.roundWins;
     if (stateWins && typeof stateWins === "object") {
@@ -413,27 +485,19 @@ export default function TargetBlitzGamePage() {
 
     const triggerToken =
       explicitTrigger || startedAtStr
-        ? `${startedAtStr}|${stateRoundNum ?? ""}|${
-            blitzState.roundTriggered ? "1" : "0"
-          }|${blitzState.questionStarted ? "1" : "0"}`
+        ? `${startedAtStr}|${blitzState.roundTriggered ? "1" : "0"}|${
+            blitzState.questionStarted ? "1" : "0"
+          }`
         : "";
 
     if (seenTriggerTokenRef.current === null) {
       seenTriggerTokenRef.current = triggerToken;
       if (explicitTrigger) {
-        const parsedStart = startedAtStr ? Date.parse(startedAtStr) : NaN;
-        roundStartMsRef.current = Number.isFinite(parsedStart)
-          ? parsedStart
-          : Date.now();
-        setIsRoundRunning(true);
-        setRoundEnded(false);
-        setLastRoundWinnerLabel(null);
-        targetsRef.current = Array.from({ length: 5 }, (_, i) =>
-          createTopSpawnTarget(i)
-        );
+        void startCountdownAndRound(roundNumberRef.current);
       } else {
         setIsRoundRunning(false);
         setRoundEnded(false);
+        setCountdownValue(null);
         setRemainingSeconds(ROUND_DURATION_SECONDS);
         targetsRef.current = [];
       }
@@ -442,37 +506,19 @@ export default function TargetBlitzGamePage() {
 
     if (triggerToken && triggerToken !== seenTriggerTokenRef.current) {
       seenTriggerTokenRef.current = triggerToken;
-
       const nextRound = roundEndedRef.current
         ? roundNumberRef.current + 1
-        : stateRoundNum ?? roundNumberRef.current;
-
-      setRoundNumber(nextRound);
-      roundNumberRef.current = nextRound;
-      finalizedRoundNumberRef.current = null;
-      roundStartMsRef.current = Date.now();
-      setRemainingSeconds(ROUND_DURATION_SECONDS);
-      setIsRoundRunning(true);
-      setRoundEnded(false);
-      setLastRoundWinnerLabel(null);
-      spawnAccumulatorRef.current = 0;
-      particlesRef.current = [];
-      floatingTextsRef.current = [];
-      targetsRef.current = Array.from({ length: 5 }, (_, i) =>
-        createTopSpawnTarget(i)
-      );
-
-      void resetRoundScores();
+        : roundNumberRef.current;
+      void startCountdownAndRound(nextRound);
     }
   }, [
     session?.id,
     blitzState.roundTriggered,
     blitzState.questionStarted,
     blitzState.questionStartedAt,
-    blitzState.roundNumber,
     blitzState.roundWins,
     blitzState.suddenDeathPlayerIds,
-    resetRoundScores,
+    startCountdownAndRound,
   ]);
 
   const spawnBurst = useCallback(
@@ -560,7 +606,16 @@ export default function TargetBlitzGamePage() {
 
       const nextTargets = [...targetsRef.current];
       nextTargets.splice(hitIndex, 1);
-      targetsRef.current = nextTargets;
+
+      // Une cible standard explose en 2 cibles standard plus petites
+      if (hitTarget.kind === "target" && hitTarget.canSplit) {
+        nextTargets.push(
+          createSplitMiniTarget(hitTarget, -1, 0),
+          createSplitMiniTarget(hitTarget, 1, 1)
+        );
+      }
+
+      targetsRef.current = nextTargets.slice(0, MAX_SPAWNED_TARGETS + 2);
 
       if (hitTarget.kind === "bomb") {
         const currentScore = scoresRef.current[shot.playerId] ?? 0;
@@ -934,18 +989,21 @@ export default function TargetBlitzGamePage() {
         ctx.fill();
       }
 
-      // Cibles et bombes visibles uniquement pendant une manche active
+      // Lancement type Fruit Ninja avec gravité et rebond latéral uniquement
       if (isRoundRunningRef.current && !roundEndedRef.current) {
         if (canMove) {
           spawnAccumulatorRef.current += dt;
           if (
-            spawnAccumulatorRef.current >= 1.0 &&
+            spawnAccumulatorRef.current >= 1.05 &&
             targetsRef.current.length < MAX_SPAWNED_TARGETS
           ) {
             spawnAccumulatorRef.current = 0;
-            targetsRef.current.push(
-              createTopSpawnTarget(targetsRef.current.length)
-            );
+            const burstCount = Math.random() < 0.35 ? 2 : 1;
+            for (let b = 0; b < burstCount; b++) {
+              targetsRef.current.push(
+                createFruitNinjaLaunchTarget(targetsRef.current.length + b)
+              );
+            }
           }
         }
 
@@ -953,6 +1011,7 @@ export default function TargetBlitzGamePage() {
         for (const t of targetsRef.current) {
           if (canMove) {
             t.x += t.vx * dt;
+            t.vy += t.gravity * dt;
             t.y += t.vy * dt;
 
             if (t.x < 7) {
@@ -963,7 +1022,8 @@ export default function TargetBlitzGamePage() {
               t.vx = -Math.abs(t.vx);
             }
 
-            if (t.y > 108) {
+            // Disparaît dès qu'elle repasse sous le bas de l'écran après avoir été lancée
+            if (t.vy > 0 && t.y > 108) {
               continue;
             }
           }
@@ -973,7 +1033,7 @@ export default function TargetBlitzGamePage() {
           const cx = (t.x / 100) * width;
           const cy = (t.y / 100) * height;
           const radiusPx = Math.max(
-            24,
+            16,
             (t.radiusPct / 100) * Math.min(width, height)
           );
 
@@ -993,7 +1053,7 @@ export default function TargetBlitzGamePage() {
         const nowMs = Date.now();
         const bots = playersRef.current.filter(isBotPlayer);
         const validTargets = targetsRef.current.filter(
-          (t) => t.kind !== "bomb" && t.y >= 4 && t.y <= 92
+          (t) => t.kind !== "bomb" && t.y >= 10 && t.y <= 92
         );
 
         for (let idx = 0; idx < bots.length; idx++) {
@@ -1036,13 +1096,13 @@ export default function TargetBlitzGamePage() {
 
           const goalX = chosen ? chosen.x : 50 + Math.sin(timeSec + idx) * 28;
           const goalY = chosen
-            ? Math.min(88, chosen.y + chosen.vy * 0.14)
+            ? Math.min(88, Math.max(14, chosen.y + chosen.vy * 0.12))
             : 50 + Math.cos(timeSec * 0.8 + idx) * 20;
 
           const dx = goalX - state.x;
           const dy = goalY - state.y;
           const dist = Math.hypot(dx, dy);
-          const maxStep = 34 * dt;
+          const maxStep = 36 * dt;
 
           if (dist > 0.1) {
             const step = Math.min(dist, maxStep);
@@ -1058,11 +1118,11 @@ export default function TargetBlitzGamePage() {
             y: state.y,
           };
 
-          if (chosen && dist < 4.2 && state.cooldownSec <= 0) {
-            state.cooldownSec = 0.75 + Math.random() * 0.75;
+          if (chosen && dist < 4.5 && state.cooldownSec <= 0) {
+            state.cooldownSec = 0.7 + Math.random() * 0.7;
             state.targetId = null;
-            const aimJitterX = (Math.random() - 0.5) * 3.2;
-            const aimJitterY = (Math.random() - 0.5) * 3.2;
+            const aimJitterX = (Math.random() - 0.5) * 3.0;
+            const aimJitterY = (Math.random() - 0.5) * 3.0;
             handleShootPayloadRef.current({
               playerId: bot.id,
               playerName: bot.nickname,
@@ -1156,16 +1216,14 @@ export default function TargetBlitzGamePage() {
     };
   }, []);
 
-  // Compte à rebours strictement de 60 secondes quand la manche est lancée
+  // Compte à rebours de 60 secondes une fois le décompte de 3 secondes terminé
   useEffect(() => {
-    if (!isRoundRunning || roundEnded) {
-      if (!roundEnded) {
+    if (!isActivePlay) {
+      if (!isRoundRunning && !roundEnded) {
         setRemainingSeconds(ROUND_DURATION_SECONDS);
       }
       return;
     }
-
-    if (isPaused) return;
 
     const startMs = roundStartMsRef.current ?? Date.now();
     roundStartMsRef.current = startMs;
@@ -1178,11 +1236,11 @@ export default function TargetBlitzGamePage() {
     updateTimer();
     const interval = window.setInterval(updateTimer, 200);
     return () => window.clearInterval(interval);
-  }, [isRoundRunning, roundEnded, isPaused]);
+  }, [isActivePlay, isRoundRunning, roundEnded]);
 
   // Fin de manche automatique après 60 secondes + affichage du vainqueur de la manche
   useEffect(() => {
-    if (!isRoundRunning || roundEnded || remainingSeconds > 0) return;
+    if (!isActivePlay || remainingSeconds > 0) return;
 
     const currentRound = roundNumberRef.current;
     if (finalizedRoundNumberRef.current === currentRound) return;
@@ -1266,8 +1324,7 @@ export default function TargetBlitzGamePage() {
         .eq("id", currentSession.id);
     }
   }, [
-    isRoundRunning,
-    roundEnded,
+    isActivePlay,
     remainingSeconds,
     totalRounds,
     isSuddenDeath,
@@ -1455,7 +1512,13 @@ export default function TargetBlitzGamePage() {
           </div>
           <div className="font-mono text-[11px] text-neutral-400 mt-0.5">
             Salle {sessionCode || "----"} •{" "}
-            {isActivePlay ? "EN COURS" : roundEnded ? "MANCHE FINIE" : "PRÊT"}
+            {isCountingDown
+              ? "DÉCOMPTE"
+              : isActivePlay
+              ? "EN COURS"
+              : roundEnded
+              ? "MANCHE FINIE"
+              : "PRÊT"}
           </div>
         </div>
 
@@ -1480,8 +1543,20 @@ export default function TargetBlitzGamePage() {
         </div>
       </div>
 
+      {/* Compte à rebours 3 secondes plein écran */}
+      {isCountingDown && (
+        <div className="absolute inset-0 z-30 bg-slate-950/75 backdrop-blur-xs flex flex-col items-center justify-center text-center pointer-events-none">
+          <div className="text-sm font-black uppercase tracking-[0.35em] text-cyan-300 mb-2">
+            Manche {Math.min(roundNumber, totalRounds)}
+          </div>
+          <div className="text-8xl sm:text-9xl font-black font-mono text-amber-300 drop-shadow-[0_0_40px_rgba(251,191,36,0.65)] animate-pulse">
+            {countdownValue}
+          </div>
+        </div>
+      )}
+
       {/* Overlay avant lancement ou en fin de manche */}
-      {!isActivePlay && (
+      {!isCountingDown && !isActivePlay && (
         <div className="absolute inset-0 z-20 bg-black/55 backdrop-blur-xs flex flex-col items-center justify-center text-center p-6 pointer-events-none">
           <div className="rounded-3xl border border-white/15 bg-slate-950/90 px-8 py-6 shadow-2xl space-y-2.5 max-w-lg">
             {roundEnded ? (
