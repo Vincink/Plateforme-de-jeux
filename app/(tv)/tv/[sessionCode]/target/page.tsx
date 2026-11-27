@@ -76,6 +76,14 @@ type ExtendedGameSession = GameSession & {
   game_state?: BlitzGameState | null;
 };
 
+interface SvgSpriteAssets {
+  targetImg: HTMLImageElement | null;
+  bonusImg: HTMLImageElement | null;
+  bombImg: HTMLImageElement | null;
+  crosshairSvgText: string | null;
+  tintedCrosshairCache: Record<string, HTMLImageElement>;
+}
+
 const DEFAULT_DURATION_SECONDS = 45;
 const TARGET_COLORS = ["#22d3ee", "#4ade80", "#fb923c", "#f472b6", "#a78bfa"];
 
@@ -144,6 +152,31 @@ function formatClock(seconds: number): string {
   return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
+function loadSvgImage(src: string): Promise<HTMLImageElement | null> {
+  return new Promise((resolve) => {
+    if (typeof window === "undefined") {
+      resolve(null);
+      return;
+    }
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+function colorizeSvgWhite(svgText: string, hexColor: string): string {
+  return svgText
+    .replace(/fill\s*=\s*["']#fff(?:fff)?["']/gi, `fill="${hexColor}"`)
+    .replace(/fill\s*=\s*["']white["']/gi, `fill="${hexColor}"`)
+    .replace(/stroke\s*=\s*["']#fff(?:fff)?["']/gi, `stroke="${hexColor}"`)
+    .replace(/stroke\s*=\s*["']white["']/gi, `stroke="${hexColor}"`)
+    .replace(/fill\s*:\s*#fff(?:fff)?/gi, `fill:${hexColor}`)
+    .replace(/fill\s*:\s*white/gi, `fill:${hexColor}`)
+    .replace(/stroke\s*:\s*#fff(?:fff)?/gi, `stroke:${hexColor}`)
+    .replace(/stroke\s*:\s*white/gi, `stroke:${hexColor}`);
+}
+
 export default function TargetBlitzGamePage() {
   const params = useParams<{ sessionCode?: string; code?: string }>();
   const router = useRouter();
@@ -163,6 +196,14 @@ export default function TargetBlitzGamePage() {
   const channelRef = useRef<ReturnType<
     NonNullable<typeof supabase>["channel"]
   > | null>(null);
+
+  const spritesRef = useRef<SvgSpriteAssets>({
+    targetImg: null,
+    bonusImg: null,
+    bombImg: null,
+    crosshairSvgText: null,
+    tintedCrosshairCache: {},
+  });
 
   const targetsRef = useRef<BlitzTarget[]>(
     Array.from({ length: 7 }, (_, i) => createRandomTarget(i))
@@ -195,13 +236,39 @@ export default function TargetBlitzGamePage() {
   isPausedRef.current = Boolean(blitzState.isPaused);
 
   useEffect(() => {
+    let active = true;
+
+    const loadAllAssets = async () => {
+      const [targetImg, bonusImg, bombImg, crosshairRes] = await Promise.all([
+        loadSvgImage("/cible.svg"),
+        loadSvgImage("/cible_Bonus.svg"),
+        loadSvgImage("/Bombes.svg"),
+        fetch("/viseur.svg").then((r) => (r.ok ? r.text() : null)).catch(() => null),
+      ]);
+
+      if (!active) return;
+
+      spritesRef.current.targetImg = targetImg;
+      spritesRef.current.bonusImg = bonusImg;
+      spritesRef.current.bombImg = bombImg;
+      spritesRef.current.crosshairSvgText = crosshairRes;
+      spritesRef.current.tintedCrosshairCache = {};
+    };
+
+    void loadAllAssets();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!session) return;
     const normalizedStatus = String(session.status ?? "").toLowerCase();
     if (
       normalizedStatus === "finished" ||
       normalizedStatus === "ended" ||
-      normalizedStatus === "completed" ||
-      normalizedStatus === "lobby"
+      normalizedStatus === "completed"
     ) {
       const targetCode = (session.code || sessionCode || "").toUpperCase();
       router.replace(targetCode ? `/tv/${targetCode}` : "/tv");
@@ -365,12 +432,38 @@ export default function TargetBlitzGamePage() {
     const resizeObserver = new ResizeObserver(resizeCanvas);
     resizeObserver.observe(container);
 
+    const getTintedCrosshair = (color: string): HTMLImageElement | null => {
+      const rawSvg = spritesRef.current.crosshairSvgText;
+      if (!rawSvg) return null;
+      const cached = spritesRef.current.tintedCrosshairCache[color];
+      if (cached) return cached;
+
+      const coloredSvg = colorizeSvgWhite(rawSvg, color);
+      const img = new Image();
+      img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(
+        coloredSvg
+      )}`;
+      spritesRef.current.tintedCrosshairCache[color] = img;
+      return img;
+    };
+
     const drawConcenticTarget = (
       cx: number,
       cy: number,
       radiusPx: number,
       color: string
     ) => {
+      const customImg = spritesRef.current.targetImg;
+      if (customImg && customImg.complete && customImg.naturalWidth > 0) {
+        ctx.save();
+        ctx.shadowColor = color;
+        ctx.shadowBlur = 18;
+        const size = radiusPx * 2.2;
+        ctx.drawImage(customImg, cx - size / 2, cy - size / 2, size, size);
+        ctx.restore();
+        return;
+      }
+
       ctx.save();
       ctx.shadowColor = color;
       ctx.shadowBlur = 22;
@@ -391,6 +484,17 @@ export default function TargetBlitzGamePage() {
     };
 
     const drawBonusCoin = (cx: number, cy: number, radiusPx: number) => {
+      const customImg = spritesRef.current.bonusImg;
+      if (customImg && customImg.complete && customImg.naturalWidth > 0) {
+        ctx.save();
+        ctx.shadowColor = "#fbbf24";
+        ctx.shadowBlur = 20;
+        const size = radiusPx * 2.2;
+        ctx.drawImage(customImg, cx - size / 2, cy - size / 2, size, size);
+        ctx.restore();
+        return;
+      }
+
       ctx.save();
       ctx.shadowColor = "#fbbf24";
       ctx.shadowBlur = 24;
@@ -437,6 +541,17 @@ export default function TargetBlitzGamePage() {
       timeSec: number,
       phase: number
     ) => {
+      const customImg = spritesRef.current.bombImg;
+      if (customImg && customImg.complete && customImg.naturalWidth > 0) {
+        ctx.save();
+        ctx.shadowColor = "#ef4444";
+        ctx.shadowBlur = 18;
+        const size = radiusPx * 2.25;
+        ctx.drawImage(customImg, cx - size / 2, cy - size / 2, size, size);
+        ctx.restore();
+        return;
+      }
+
       ctx.save();
       ctx.shadowColor = "#ef4444";
       ctx.shadowBlur = 18;
@@ -503,37 +618,44 @@ export default function TargetBlitzGamePage() {
       label: string
     ) => {
       const r = 24;
+      const tintedImg = getTintedCrosshair(color);
+
       ctx.save();
       ctx.shadowColor = color;
       ctx.shadowBlur = 16;
 
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 3;
-      ctx.stroke();
-
-      ctx.beginPath();
-      ctx.arc(cx, cy, 5, 0, Math.PI * 2);
-      ctx.fillStyle = color;
-      ctx.fill();
-
-      const tickLen = 9;
-      const dirs: Array<[number, number]> = [
-        [0, -1],
-        [0, 1],
-        [-1, 0],
-        [1, 0],
-      ];
-      for (const dir of dirs) {
-        const dx = dir[0];
-        const dy = dir[1];
+      if (tintedImg && tintedImg.complete && tintedImg.naturalWidth > 0) {
+        const size = r * 2.3;
+        ctx.drawImage(tintedImg, cx - size / 2, cy - size / 2, size, size);
+      } else {
         ctx.beginPath();
-        ctx.moveTo(cx + dx * (r - 4), cy + dy * (r - 4));
-        ctx.lineTo(cx + dx * (r + tickLen), cy + dy * (r + tickLen));
-        ctx.strokeStyle = "#ffffff";
-        ctx.lineWidth = 2.5;
+        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 3;
         ctx.stroke();
+
+        ctx.beginPath();
+        ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+
+        const tickLen = 9;
+        const dirs: Array<[number, number]> = [
+          [0, -1],
+          [0, 1],
+          [-1, 0],
+          [1, 0],
+        ];
+        for (const dir of dirs) {
+          const dx = dir[0];
+          const dy = dir[1];
+          ctx.beginPath();
+          ctx.moveTo(cx + dx * (r - 4), cy + dy * (r - 4));
+          ctx.lineTo(cx + dx * (r + tickLen), cy + dy * (r + tickLen));
+          ctx.strokeStyle = "#ffffff";
+          ctx.lineWidth = 2.5;
+          ctx.stroke();
+        }
       }
 
       ctx.shadowBlur = 0;
