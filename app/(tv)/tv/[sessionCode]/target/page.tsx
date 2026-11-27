@@ -2,7 +2,17 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Award, Crown, Flame, Medal, Swords, Timer, Trophy } from "lucide-react";
+import {
+  Award,
+  Crown,
+  Flame,
+  Medal,
+  Swords,
+  Timer,
+  Trophy,
+  Volume2,
+  VolumeX,
+} from "lucide-react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import { getUniquePlayerColor } from "@/lib/colorsplayer";
 import type { GameSession, PlayerScore, SessionPlayer } from "@/types/game.types";
@@ -99,6 +109,277 @@ const ROUND_WINNER_DELAY_MS = 2000;
 const DEFAULT_TOTAL_ROUNDS = 5;
 const MAX_SPAWNED_TARGETS = 11;
 const TARGET_COLORS = ["#22d3ee", "#4ade80", "#fb923c", "#f472b6", "#a78bfa"];
+
+function getAudioContext(soundEnabled: boolean): AudioContext | null {
+  if (!soundEnabled || typeof window === "undefined") return null;
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+  if (!AudioCtx) return null;
+  try {
+    const ctx = new AudioCtx();
+    if (ctx.state === "suspended") {
+      void ctx.resume().catch(() => {});
+    }
+    return ctx;
+  } catch {
+    return null;
+  }
+}
+
+function playCountdownBeep(soundEnabled: boolean, isFinalGo: boolean): void {
+  const ctx = getAudioContext(soundEnabled);
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = isFinalGo ? "triangle" : "sine";
+    osc.frequency.setValueAtTime(isFinalGo ? 880 : 520, now);
+    if (isFinalGo) {
+      osc.frequency.exponentialRampToValueAtTime(1174, now + 0.18);
+    }
+    gain.gain.setValueAtTime(0.001, now);
+    gain.gain.linearRampToValueAtTime(isFinalGo ? 0.28 : 0.18, now + 0.015);
+    gain.gain.exponentialRampToValueAtTime(
+      0.001,
+      now + (isFinalGo ? 0.24 : 0.14)
+    );
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + (isFinalGo ? 0.25 : 0.15));
+    window.setTimeout(() => {
+      if (ctx.state !== "closed") void ctx.close().catch(() => {});
+    }, 350);
+  } catch {
+    // Ignore audio errors
+  }
+}
+
+function playShotSound(soundEnabled: boolean): void {
+  const ctx = getAudioContext(soundEnabled);
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(340, now);
+    osc.frequency.exponentialRampToValueAtTime(95, now + 0.065);
+    gain.gain.setValueAtTime(0.09, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.07);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.075);
+    window.setTimeout(() => {
+      if (ctx.state !== "closed") void ctx.close().catch(() => {});
+    }, 150);
+  } catch {
+    // Ignore audio errors
+  }
+}
+
+function playTargetHitSound(soundEnabled: boolean, didSplit: boolean): void {
+  const ctx = getAudioContext(soundEnabled);
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(420, now);
+    osc.frequency.exponentialRampToValueAtTime(
+      didSplit ? 920 : 720,
+      now + 0.11
+    );
+    gain.gain.setValueAtTime(0.22, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.13);
+
+    if (didSplit) {
+      const pop = ctx.createOscillator();
+      const popGain = ctx.createGain();
+      pop.type = "sine";
+      pop.frequency.setValueAtTime(640, now + 0.05);
+      pop.frequency.exponentialRampToValueAtTime(1040, now + 0.14);
+      popGain.gain.setValueAtTime(0.14, now + 0.05);
+      popGain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+      pop.connect(popGain);
+      popGain.connect(ctx.destination);
+      pop.start(now + 0.05);
+      pop.stop(now + 0.16);
+    }
+
+    window.setTimeout(() => {
+      if (ctx.state !== "closed") void ctx.close().catch(() => {});
+    }, 250);
+  } catch {
+    // Ignore audio errors
+  }
+}
+
+function playBonusHitSound(soundEnabled: boolean): void {
+  const ctx = getAudioContext(soundEnabled);
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const notes = [587.33, 783.99, 1046.5];
+    notes.forEach((freq, idx) => {
+      const start = now + idx * 0.045;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, start);
+      gain.gain.setValueAtTime(0.2, start);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + 0.14);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.15);
+    });
+    window.setTimeout(() => {
+      if (ctx.state !== "closed") void ctx.close().catch(() => {});
+    }, 350);
+  } catch {
+    // Ignore audio errors
+  }
+}
+
+function playBombExplosionSound(soundEnabled: boolean): void {
+  const ctx = getAudioContext(soundEnabled);
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const duration = 0.34;
+    const bufferSize = Math.floor(ctx.sampleRate * duration);
+    const buffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) {
+      const t = i / bufferSize;
+      data[i] = (Math.random() * 2 - 1) * Math.pow(1 - t, 1.8);
+    }
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = buffer;
+
+    const filter = ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(420, now);
+    filter.frequency.exponentialRampToValueAtTime(75, now + duration);
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.36, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
+
+    noise.connect(filter);
+    filter.connect(gain);
+    gain.connect(ctx.destination);
+    noise.start(now);
+
+    window.setTimeout(() => {
+      if (ctx.state !== "closed") void ctx.close().catch(() => {});
+    }, 450);
+  } catch {
+    // Ignore audio errors
+  }
+}
+
+function playRoundEndSound(soundEnabled: boolean): void {
+  const ctx = getAudioContext(soundEnabled);
+  if (!ctx) return;
+  try {
+    const now = ctx.currentTime;
+    const freqs = [523.25, 392.0];
+    freqs.forEach((f, idx) => {
+      const t0 = now + idx * 0.16;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.setValueAtTime(f, t0);
+      gain.gain.setValueAtTime(0.2, t0);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.24);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.25);
+    });
+    window.setTimeout(() => {
+      if (ctx.state !== "closed") void ctx.close().catch(() => {});
+    }, 550);
+  } catch {
+    // Ignore audio errors
+  }
+}
+
+function playApplauseSound(soundEnabled: boolean): () => void {
+  const ctx = getAudioContext(soundEnabled);
+  if (!ctx) return () => {};
+  const timeouts: number[] = [];
+
+  try {
+    const totalDuration = 2.6;
+    const sampleRate = ctx.sampleRate;
+    const bufferSize = Math.floor(sampleRate * totalDuration);
+    const buffer = ctx.createBuffer(1, bufferSize, sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < bufferSize; i++) {
+      const t = i / sampleRate;
+      const env =
+        Math.sin(Math.min(1, t / 0.25) * (Math.PI / 2)) *
+        Math.pow(Math.max(0, 1 - t / totalDuration), 1.35);
+      const clapBurst = Math.pow(
+        0.5 + 0.5 * Math.sin(t * 2 * Math.PI * 11),
+        3
+      );
+      const white = Math.random() * 2 - 1;
+      data[i] = white * env * (0.35 + 0.65 * clapBurst);
+    }
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+
+    const bandpass = ctx.createBiquadFilter();
+    bandpass.type = "bandpass";
+    bandpass.frequency.value = 1650;
+    bandpass.Q.value = 0.7;
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.01, ctx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.45, ctx.currentTime + 0.2);
+    gain.gain.exponentialRampToValueAtTime(
+      0.001,
+      ctx.currentTime + totalDuration
+    );
+
+    source.connect(bandpass);
+    bandpass.connect(gain);
+    gain.connect(ctx.destination);
+    source.start();
+
+    const closeId = window.setTimeout(() => {
+      if (ctx.state !== "closed") {
+        void ctx.close().catch(() => {});
+      }
+    }, (totalDuration + 0.2) * 1000);
+    timeouts.push(closeId);
+  } catch {
+    // Ignore audio errors
+  }
+
+  return () => {
+    timeouts.forEach((id) => window.clearTimeout(id));
+    if (ctx.state !== "closed") {
+      void ctx.close().catch(() => {});
+    }
+  };
+}
 
 function isBotPlayer(player: SessionPlayer): boolean {
   const rec = player as unknown as {
@@ -332,6 +613,10 @@ export default function TargetBlitzGamePage() {
   const [remainingSeconds, setRemainingSeconds] = useState<number>(
     ROUND_DURATION_SECONDS
   );
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(true);
+
+  const soundEnabledRef = useRef<boolean>(soundEnabled);
+  soundEnabledRef.current = soundEnabled;
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -386,6 +671,7 @@ export default function TargetBlitzGamePage() {
   suddenDeathIdsRef.current = suddenDeathPlayerIds;
   const roundNumberRef = useRef<number>(roundNumber);
   roundNumberRef.current = roundNumber;
+  const hasPlayedApplauseRef = useRef<boolean>(false);
 
   const roundStatus = session?.status ?? "lobby";
   const statusLower = String(roundStatus).toLowerCase();
@@ -419,6 +705,16 @@ export default function TargetBlitzGamePage() {
   const seenTriggerTokenRef = useRef<string | null>(null);
   const finalizedRoundNumberRef = useRef<number | null>(null);
   const ignoreNextScoreFetchRef = useRef<boolean>(false);
+
+  const handleToggleSound = useCallback(() => {
+    setSoundEnabled((prev) => {
+      const next = !prev;
+      if (next) {
+        playCountdownBeep(true, false);
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -491,6 +787,7 @@ export default function TargetBlitzGamePage() {
       setRoundNumber(targetRoundNum);
       roundNumberRef.current = targetRoundNum;
       finalizedRoundNumberRef.current = null;
+      hasPlayedApplauseRef.current = false;
       roundStartMsRef.current = null;
       setRemainingSeconds(ROUND_DURATION_SECONDS);
       setIsRoundRunning(true);
@@ -513,6 +810,7 @@ export default function TargetBlitzGamePage() {
     if (countdownValue === null) return;
 
     if (countdownValue <= 0) {
+      playCountdownBeep(soundEnabledRef.current, true);
       setCountdownValue(null);
       roundStartMsRef.current = Date.now();
       setRemainingSeconds(ROUND_DURATION_SECONDS);
@@ -525,6 +823,7 @@ export default function TargetBlitzGamePage() {
       return;
     }
 
+    playCountdownBeep(soundEnabledRef.current, false);
     const timer = window.setTimeout(() => {
       setCountdownValue((prev) => (prev === null ? null : prev - 1));
     }, 1000);
@@ -599,7 +898,6 @@ export default function TargetBlitzGamePage() {
     startCountdownAndRound,
   ]);
 
-  // Délai de 2 secondes en fin de manche avant d'afficher le gagnant / le podium final
   useEffect(() => {
     if (!roundEnded) {
       setIsWinnerBannerVisible(false);
@@ -612,6 +910,10 @@ export default function TargetBlitzGamePage() {
       setIsWinnerBannerVisible(true);
       if (isMatchOver) {
         setIsMatchPodiumVisible(true);
+        if (!hasPlayedApplauseRef.current) {
+          hasPlayedApplauseRef.current = true;
+          playApplauseSound(soundEnabledRef.current);
+        }
       }
     }, ROUND_WINNER_DELAY_MS);
 
@@ -688,6 +990,7 @@ export default function TargetBlitzGamePage() {
         getUniquePlayerColor(shot.playerId, playersRef.current).borderHex ||
         "#22d3ee";
 
+      playShotSound(soundEnabledRef.current);
       spawnBurst(shot.x, shot.y, resolvedColor, 10);
 
       const hitIndex = targetsRef.current.findIndex((t) => {
@@ -704,7 +1007,8 @@ export default function TargetBlitzGamePage() {
       const nextTargets = [...targetsRef.current];
       nextTargets.splice(hitIndex, 1);
 
-      if (hitTarget.kind === "target" && hitTarget.canSplit) {
+      const didSplit = Boolean(hitTarget.kind === "target" && hitTarget.canSplit);
+      if (didSplit) {
         nextTargets.push(
           createSplitMiniTarget(hitTarget, -1, 0),
           createSplitMiniTarget(hitTarget, 1, 1)
@@ -714,6 +1018,7 @@ export default function TargetBlitzGamePage() {
       targetsRef.current = nextTargets.slice(0, MAX_SPAWNED_TARGETS + 2);
 
       if (hitTarget.kind === "bomb") {
+        playBombExplosionSound(soundEnabledRef.current);
         const currentScore = scoresRef.current[shot.playerId] ?? 0;
         const nextScore = Math.max(0, currentScore - 5);
         setScores((prev) => {
@@ -740,6 +1045,12 @@ export default function TargetBlitzGamePage() {
           },
         });
         return;
+      }
+
+      if (hitTarget.kind === "bonus") {
+        playBonusHitSound(soundEnabledRef.current);
+      } else {
+        playTargetHitSound(soundEnabledRef.current, didSplit);
       }
 
       const deltaPts = hitTarget.kind === "bonus" ? 10 : 5;
@@ -1338,6 +1649,7 @@ export default function TargetBlitzGamePage() {
     if (finalizedRoundNumberRef.current === currentRound) return;
     finalizedRoundNumberRef.current = currentRound;
 
+    playRoundEndSound(soundEnabledRef.current);
     setIsRoundRunning(false);
     setRoundEnded(true);
     targetsRef.current = [];
@@ -1633,8 +1945,8 @@ export default function TargetBlitzGamePage() {
 
       <canvas ref={canvasRef} className="absolute inset-0 w-full h-full block" />
 
-      {/* Haut de l'écran : manche + chrono */}
-      <div className="relative z-10 pointer-events-none flex items-start justify-between gap-4 p-4 md:p-6">
+      {/* Haut de l'écran : manche + chrono + bouton son discret */}
+      <div className="relative z-20 flex items-start justify-between gap-4 p-4 md:p-6 pointer-events-none">
         <div className="rounded-2xl border border-cyan-400/40 bg-slate-950/80 backdrop-blur-md px-4 py-2.5 shadow-[0_0_25px_rgba(34,211,238,0.2)]">
           <div className="flex items-center gap-2 text-xs font-black uppercase tracking-widest text-cyan-300">
             {isSuddenDeath ? (
@@ -1664,12 +1976,38 @@ export default function TargetBlitzGamePage() {
         </div>
 
         <div className="flex flex-col items-end">
-          <div className="rounded-2xl border-2 border-fuchsia-400/60 bg-slate-950/80 backdrop-blur-md px-6 py-2.5 shadow-[0_0_30px_rgba(217,70,239,0.3)] flex items-center gap-3">
-            <Timer className="w-6 h-6 text-amber-400" />
-            <span className="font-mono text-3xl sm:text-4xl font-black tracking-wider text-amber-300">
-              {formatClock(remainingSeconds)}
-            </span>
+          <div className="flex items-center gap-2.5">
+            <button
+              type="button"
+              onClick={handleToggleSound}
+              title={soundEnabled ? "Couper le son" : "Activer le son"}
+              className={`pointer-events-auto h-12 px-3.5 rounded-2xl border backdrop-blur-md flex items-center gap-1.5 text-xs font-black uppercase tracking-wider transition ${
+                soundEnabled
+                  ? "bg-slate-950/75 border-white/15 text-cyan-200 hover:border-cyan-400/50"
+                  : "bg-slate-950/75 border-rose-400/35 text-rose-300 hover:border-rose-400/60"
+              }`}
+            >
+              {soundEnabled ? (
+                <>
+                  <Volume2 className="w-4 h-4 text-cyan-300" />
+                  <span>Son ON</span>
+                </>
+              ) : (
+                <>
+                  <VolumeX className="w-4 h-4 text-rose-400" />
+                  <span>Son OFF</span>
+                </>
+              )}
+            </button>
+
+            <div className="rounded-2xl border-2 border-fuchsia-400/60 bg-slate-950/80 backdrop-blur-md px-6 py-2.5 shadow-[0_0_30px_rgba(217,70,239,0.3)] flex items-center gap-3">
+              <Timer className="w-6 h-6 text-amber-400" />
+              <span className="font-mono text-3xl sm:text-4xl font-black tracking-wider text-amber-300">
+                {formatClock(remainingSeconds)}
+              </span>
+            </div>
           </div>
+
           {overallLeader.winnerName && (
             <span className="mt-1.5 px-3 py-0.5 rounded-full text-xs font-black bg-amber-400/20 border border-amber-300/50 text-amber-200 flex items-center gap-1">
               <Trophy className="w-3.5 h-3.5 text-amber-300" />
