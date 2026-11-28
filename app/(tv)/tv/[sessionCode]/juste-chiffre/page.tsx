@@ -283,6 +283,7 @@ export default function TvJusteChiffrePage() {
   const zeroSequenceRoundRef = useRef<string>("");
   const revealAnimRoundRef = useRef<string>("");
   const fxRoundSignatureRef = useRef<string>("");
+  const podiumLockedSeriesRef = useRef<string>("");
   const podiumConfettiRoundRef = useRef<string>("");
   const botTimersRef = useRef(new Map<string, number>());
   const botContextRef = useRef<{
@@ -628,6 +629,8 @@ export default function TvJusteChiffrePage() {
       ? statePayload.seriesSeed.trim()
       : `${session?.id ?? ""}-${sessionCode}-jc-${seriesNumber}`;
 
+  const seriesKey = `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}`;
+
   useEffect(() => {
     if (!session?.id) return;
 
@@ -657,6 +660,7 @@ export default function TvJusteChiffrePage() {
     lastResetSignatureRef.current = resetTrigger;
     isResettingScoresRef.current = true;
     scoredRoundsRef.current = new Set();
+    podiumLockedSeriesRef.current = "";
     podiumConfettiRoundRef.current = "";
     setShowAutoPodium(false);
     botTimersRef.current.forEach((timerId: number) => {
@@ -777,11 +781,12 @@ export default function TvJusteChiffrePage() {
   const isLastQuestionOfSeries =
     activeQuestionIndex !== null &&
     questions.length > 0 &&
-    activeQuestionIndex === questions.length - 1;
+    activeQuestionIndex >= questions.length - 1;
 
   const isSeriesCompleted =
     Boolean(statePayload.finished) ||
     showAutoPodium ||
+    podiumLockedSeriesRef.current === seriesKey ||
     (activeQuestionIndex !== null &&
       questions.length > 0 &&
       activeQuestionIndex >= questions.length);
@@ -829,11 +834,11 @@ export default function TvJusteChiffrePage() {
     parseTimestampMs(statePayload.question_started_at);
 
   const roundSignature = useMemo(() => {
-    if (activeQuestionIndex === null || !currentQuestion) return "";
+    if (activeQuestionIndex === null || isSeriesCompleted) return "";
     return `${session?.id ?? ""}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${remoteStartMs ?? 0}`;
   }, [
     activeQuestionIndex,
-    currentQuestion,
+    isSeriesCompleted,
     session?.id,
     seriesNumber,
     seriesSeed,
@@ -842,6 +847,9 @@ export default function TvJusteChiffrePage() {
 
   useEffect(() => {
     if (!roundSignature) {
+      if (isSeriesCompleted) {
+        return;
+      }
       activeRoundSignatureRef.current = "";
       zeroSequenceRoundRef.current = "";
       revealAnimRoundRef.current = "";
@@ -895,7 +903,7 @@ export default function TvJusteChiffrePage() {
     setShowAutoPodium(false);
     setLaserImpactFlash(false);
     setScreenShake(false);
-  }, [roundSignature, remoteStartMs]);
+  }, [roundSignature, remoteStartMs, isSeriesCompleted]);
 
   useEffect(() => {
     if (!isPaused || activeQuestionIndex === null) {
@@ -926,13 +934,22 @@ export default function TvJusteChiffrePage() {
   ]);
 
   useEffect(() => {
-    if (activeQuestionIndex === null || !currentQuestion || isPaused) return;
+    if (
+      activeQuestionIndex === null ||
+      !currentQuestion ||
+      isPaused ||
+      isSeriesCompleted
+    ) {
+      return;
+    }
     const timer = window.setInterval(() => setNowMs(Date.now()), 200);
     return () => window.clearInterval(timer);
-  }, [activeQuestionIndex, currentQuestion, isPaused]);
+  }, [activeQuestionIndex, currentQuestion, isPaused, isSeriesCompleted]);
 
   const remainingSeconds = useMemo<number | null>(() => {
-    if (activeQuestionIndex === null || !currentQuestion) return null;
+    if (activeQuestionIndex === null || !currentQuestion || isSeriesCompleted) {
+      return null;
+    }
     if (isPaused && frozenRemaining !== null) return frozenRemaining;
     const effStart = remoteStartMs ?? localStartMs ?? nowMs;
     const elapsed = Math.max(0, (nowMs - effStart) / 1000);
@@ -940,6 +957,7 @@ export default function TvJusteChiffrePage() {
   }, [
     activeQuestionIndex,
     currentQuestion,
+    isSeriesCompleted,
     isPaused,
     frozenRemaining,
     remoteStartMs,
@@ -950,6 +968,7 @@ export default function TvJusteChiffrePage() {
 
   const isTimerZero =
     !isPaused &&
+    !isSeriesCompleted &&
     activeQuestionIndex !== null &&
     currentQuestion !== null &&
     remainingSeconds !== null &&
@@ -958,7 +977,7 @@ export default function TvJusteChiffrePage() {
   const isQuestionEnded = Boolean(isTimerZero || statePayload.revealed);
 
   useEffect(() => {
-    if (!isQuestionEnded || !roundSignature) return;
+    if (!isQuestionEnded || !roundSignature || isSeriesCompleted) return;
     if (zeroSequenceRoundRef.current === roundSignature) return;
     zeroSequenceRoundRef.current = roundSignature;
 
@@ -976,7 +995,7 @@ export default function TvJusteChiffrePage() {
       window.clearTimeout(hideQuestionTimer);
       window.clearTimeout(revealWaitTimer);
     };
-  }, [isQuestionEnded, roundSignature]);
+  }, [isQuestionEnded, roundSignature, isSeriesCompleted]);
 
   const shouldReveal = canStartRevealSequence;
 
@@ -1249,21 +1268,21 @@ export default function TvJusteChiffrePage() {
   estimatesRef.current = estimatesByPlayerId;
   const playersRef = useRef(players);
   playersRef.current = players;
-
-  const targetPercent =
-    targetNumber !== null
-      ? Math.max(0, Math.min(100, (targetNumber / MAX_VALUE) * 100))
-      : null;
+  const targetNumberRef = useRef(targetNumber);
+  targetNumberRef.current = targetNumber;
 
   useEffect(() => {
     if (!shouldReveal || !roundSignature) return;
+    if (revealAnimRoundRef.current === roundSignature) return;
+    revealAnimRoundRef.current = roundSignature;
 
     const snapshotGuesses: Record<string, number> = { ...estimatesRef.current };
     const playerIds = playersRef.current.map((p) => String(p.id));
-    const animSignature = `${roundSignature}-${estimatesKey}-${targetNumber ?? "none"}`;
-
-    if (revealAnimRoundRef.current === animSignature) return;
-    revealAnimRoundRef.current = animSignature;
+    const snapshotTarget = targetNumberRef.current;
+    const snapshotTargetPercent =
+      snapshotTarget !== null
+        ? Math.max(0, Math.min(100, (snapshotTarget / MAX_VALUE) * 100))
+        : null;
 
     setBarsExpanded(false);
     setTargetLineVisible(false);
@@ -1339,8 +1358,8 @@ export default function TvJusteChiffrePage() {
       if (isCancelled) return;
       setDisplayCounters(snapshotGuesses);
 
-      if (targetNumber !== null && targetPercent !== null) {
-        const clampedTarget = Math.max(0, Math.min(MAX_VALUE, targetNumber));
+      if (snapshotTarget !== null && snapshotTargetPercent !== null) {
+        const clampedTarget = Math.max(0, Math.min(MAX_VALUE, snapshotTarget));
         const computedTargetDurationMs = Math.max(
           250,
           Math.round((clampedTarget / MAX_VALUE) * FULL_SCALE_TARGET_MS)
@@ -1363,12 +1382,12 @@ export default function TvJusteChiffrePage() {
           if (isCancelled) return;
           const elapsed = now - targetStart;
           const progress = Math.min(1, elapsed / computedTargetDurationMs);
-          setTargetCounterValue(Math.round(targetNumber * progress));
+          setTargetCounterValue(Math.round(snapshotTarget * progress));
 
           if (progress < 1) {
             targetCounterRaf = window.requestAnimationFrame(tickTargetCounter);
           } else {
-            setTargetCounterValue(targetNumber);
+            setTargetCounterValue(snapshotTarget);
           }
         };
         targetCounterRaf = window.requestAnimationFrame(tickTargetCounter);
@@ -1378,7 +1397,8 @@ export default function TvJusteChiffrePage() {
           setLaserImpactFlash(true);
           if (targetTrackRef.current) {
             const rect = targetTrackRef.current.getBoundingClientRect();
-            const impactX = rect.left + (rect.width * targetPercent) / 100;
+            const impactX =
+              rect.left + (rect.width * snapshotTargetPercent) / 100;
             const impactY = rect.top + rect.height / 2;
             spawnSparks(
               impactX,
@@ -1414,27 +1434,27 @@ export default function TvJusteChiffrePage() {
       if (targetExpandRaf2) window.cancelAnimationFrame(targetExpandRaf2);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shouldReveal, roundSignature, estimatesKey, targetNumber]);
+  }, [shouldReveal, roundSignature]);
 
   useEffect(() => {
     if (phase !== "revealed" || !roundSignature) return;
-    const fxKey = `${roundSignature}-${targetNumber ?? "none"}-${estimatesKey}`;
-    if (fxRoundSignatureRef.current === fxKey) return;
-    fxRoundSignatureRef.current = fxKey;
+    if (fxRoundSignatureRef.current === roundSignature) return;
+    fxRoundSignatureRef.current = roundSignature;
 
     const currentPlayers = playersRef.current;
     const currentEstimates = estimatesRef.current;
+    const snapshotTarget = targetNumberRef.current;
 
     const candidates = currentPlayers
       .map((player) => {
         const pid = String(player.id);
         const guess = currentEstimates[pid] ?? null;
         const diff =
-          guess !== null && targetNumber !== null
-            ? Math.abs(guess - targetNumber)
+          guess !== null && snapshotTarget !== null
+            ? Math.abs(guess - snapshotTarget)
             : null;
         const isExact =
-          guess !== null && targetNumber !== null && guess === targetNumber;
+          guess !== null && snapshotTarget !== null && guess === snapshotTarget;
         return { player, pid, guess, diff, isExact };
       })
       .filter((c) => c.guess !== null && c.diff !== null);
@@ -1507,7 +1527,7 @@ export default function TvJusteChiffrePage() {
       window.clearTimeout(badgeFinishTimer);
       window.clearTimeout(flyResetTimer);
     };
-  }, [phase, roundSignature, targetNumber, estimatesKey]);
+  }, [phase, roundSignature]);
 
   // Addition cumulative des points APRÈS l'animation de la pastille (+3 ou +5 si exact)
   useEffect(() => {
@@ -1709,22 +1729,27 @@ export default function TvJusteChiffrePage() {
     }
 
     const podiumTimer = window.setTimeout(() => {
+      podiumLockedSeriesRef.current = seriesKey;
       setShowAutoPodium(true);
     }, PODIUM_DELAY_AFTER_LAST_QUESTION_MS);
 
     return () => {
       window.clearTimeout(podiumTimer);
     };
-  }, [isLastQuestionOfSeries, phase, badgeAnimationDone]);
+  }, [isLastQuestionOfSeries, phase, badgeAnimationDone, seriesKey]);
 
   useEffect(() => {
     if (!isSeriesCompleted) return;
-    const confettiKey = `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}`;
-    if (podiumConfettiRoundRef.current === confettiKey) return;
-    podiumConfettiRoundRef.current = confettiKey;
+    if (podiumConfettiRoundRef.current === seriesKey) return;
+    podiumConfettiRoundRef.current = seriesKey;
     spawnConfetti(140);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSeriesCompleted, session?.id, sessionCode, seriesNumber, seriesSeed]);
+  }, [isSeriesCompleted, seriesKey]);
+
+  const targetPercent =
+    targetNumber !== null
+      ? Math.max(0, Math.min(100, (targetNumber / MAX_VALUE) * 100))
+      : null;
 
   return (
     <div
