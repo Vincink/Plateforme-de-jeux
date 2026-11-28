@@ -31,6 +31,7 @@ const DEFAULT_DURATION_SECONDS = 20;
 const QUESTIONS_PER_GAME = 15;
 const REVEAL_DELAY_AFTER_BARS_MS = 900;
 const FLY_BADGE_ANIMATION_MS = 1200;
+const PODIUM_DELAY_AFTER_LAST_QUESTION_MS = 2500;
 
 type BotLevel = "cool" | "normal" | "expert";
 
@@ -264,6 +265,7 @@ export default function TvJusteChiffrePage() {
   >({});
   const [launchFlyBadges, setLaunchFlyBadges] = useState<boolean>(false);
   const [badgeAnimationDone, setBadgeAnimationDone] = useState<boolean>(false);
+  const [showAutoPodium, setShowAutoPodium] = useState<boolean>(false);
   const [laserImpactFlash, setLaserImpactFlash] = useState<boolean>(false);
   const [screenShake, setScreenShake] = useState<boolean>(false);
 
@@ -281,6 +283,7 @@ export default function TvJusteChiffrePage() {
   const zeroSequenceRoundRef = useRef<string>("");
   const revealAnimRoundRef = useRef<string>("");
   const fxRoundSignatureRef = useRef<string>("");
+  const podiumConfettiRoundRef = useRef<string>("");
   const botTimersRef = useRef(new Map<string, number>());
   const botContextRef = useRef<{
     sessionId: string;
@@ -654,6 +657,8 @@ export default function TvJusteChiffrePage() {
     lastResetSignatureRef.current = resetTrigger;
     isResettingScoresRef.current = true;
     scoredRoundsRef.current = new Set();
+    podiumConfettiRoundRef.current = "";
+    setShowAutoPodium(false);
     botTimersRef.current.forEach((timerId: number) => {
       window.clearTimeout(timerId);
     });
@@ -769,8 +774,14 @@ export default function TvJusteChiffrePage() {
     return startedFlag ? 0 : null;
   }, [statePayload]);
 
+  const isLastQuestionOfSeries =
+    activeQuestionIndex !== null &&
+    questions.length > 0 &&
+    activeQuestionIndex === questions.length - 1;
+
   const isSeriesCompleted =
     Boolean(statePayload.finished) ||
+    showAutoPodium ||
     (activeQuestionIndex !== null &&
       questions.length > 0 &&
       activeQuestionIndex >= questions.length);
@@ -851,6 +862,7 @@ export default function TvJusteChiffrePage() {
       setExactPlayersByRound({});
       setLaunchFlyBadges(false);
       setBadgeAnimationDone(false);
+      setShowAutoPodium(false);
       setLaserImpactFlash(false);
       setScreenShake(false);
       return;
@@ -880,6 +892,7 @@ export default function TvJusteChiffrePage() {
     setExactPlayersByRound({});
     setLaunchFlyBadges(false);
     setBadgeAnimationDone(false);
+    setShowAutoPodium(false);
     setLaserImpactFlash(false);
     setScreenShake(false);
   }, [roundSignature, remoteStartMs]);
@@ -1187,10 +1200,46 @@ export default function TvJusteChiffrePage() {
     [rankedPlayers, topRank]
   );
 
-  const podiumEntries = useMemo(
-    () => rankedPlayers.filter((item) => item.rank <= 3),
-    [rankedPlayers]
-  );
+  // Regroupement par marche de podium (1er, 2e, 3e) avec gestion des ex æquo
+  const podiumSteps = useMemo(() => {
+    const rank1 = rankedPlayers.filter((p) => p.rank === 1);
+    const rank2 = rankedPlayers.filter((p) => p.rank === 2);
+    const rank3 = rankedPlayers.filter((p) => p.rank === 3);
+
+    const steps: Array<{
+      rank: 1 | 2 | 3;
+      label: string;
+      heightClass: string;
+      entries: typeof rankedPlayers;
+    }> = [];
+
+    if (rank2.length > 0) {
+      steps.push({
+        rank: 2,
+        label: "2e",
+        heightClass: "h-36 xl:h-44",
+        entries: rank2,
+      });
+    }
+    if (rank1.length > 0) {
+      steps.push({
+        rank: 1,
+        label: "1er",
+        heightClass: "h-48 xl:h-56",
+        entries: rank1,
+      });
+    }
+    if (rank3.length > 0) {
+      steps.push({
+        rank: 3,
+        label: "3e",
+        heightClass: "h-28 xl:h-36",
+        entries: rank3,
+      });
+    }
+
+    return steps;
+  }, [rankedPlayers]);
 
   const rankedPlayersRef = useRef(rankedPlayers);
   rankedPlayersRef.current = rankedPlayers;
@@ -1653,6 +1702,30 @@ export default function TvJusteChiffrePage() {
     estimatesKey,
   ]);
 
+  // Affichage automatique du podium après la fin de la 15e question
+  useEffect(() => {
+    if (!isLastQuestionOfSeries || phase !== "revealed" || !badgeAnimationDone) {
+      return;
+    }
+
+    const podiumTimer = window.setTimeout(() => {
+      setShowAutoPodium(true);
+    }, PODIUM_DELAY_AFTER_LAST_QUESTION_MS);
+
+    return () => {
+      window.clearTimeout(podiumTimer);
+    };
+  }, [isLastQuestionOfSeries, phase, badgeAnimationDone]);
+
+  useEffect(() => {
+    if (!isSeriesCompleted) return;
+    const confettiKey = `${session?.id ?? sessionCode}-s${seriesNumber}-${seriesSeed}`;
+    if (podiumConfettiRoundRef.current === confettiKey) return;
+    podiumConfettiRoundRef.current = confettiKey;
+    spawnConfetti(140);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSeriesCompleted, session?.id, sessionCode, seriesNumber, seriesSeed]);
+
   return (
     <div
       className={`relative h-[100dvh] w-screen overflow-hidden bg-neutral-950 text-white px-6 py-4 flex flex-col justify-between select-none ${
@@ -1695,6 +1768,12 @@ export default function TvJusteChiffrePage() {
           100% { opacity: 0; transform: translate(-220px, -34px) scale(0.75); }
         }
 
+        @keyframes jcPodiumRise {
+          0% { opacity: 0; transform: translateY(48px) scale(0.92); }
+          70% { opacity: 1; transform: translateY(-6px) scale(1.02); }
+          100% { opacity: 1; transform: translateY(0) scale(1); }
+        }
+
         .jc-screen-shake {
           animation: jcScreenShake 0.45s cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
         }
@@ -1721,6 +1800,10 @@ export default function TvJusteChiffrePage() {
 
         .jc-fly-points {
           animation: jcFlyPoints 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+        }
+
+        .jc-podium-rise {
+          animation: jcPodiumRise 0.65s cubic-bezier(0.22, 1, 0.36, 1) both;
         }
       `}</style>
 
@@ -1839,15 +1922,15 @@ export default function TvJusteChiffrePage() {
 
         <div className="relative flex-1 min-w-0 flex flex-col">
           {isSeriesCompleted ? (
-            <section className="flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl p-8 flex flex-col items-center justify-center text-center gap-6">
-              <div className="w-20 h-20 rounded-3xl bg-amber-400/20 border-2 border-amber-400 flex items-center justify-center">
-                <Trophy className="w-11 h-11 text-amber-300" />
-              </div>
-              <div>
-                <div className="text-sm uppercase tracking-[0.22em] text-amber-300 font-extrabold">
-                  Fin des {questions.length} questions
+            <section className="flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl p-8 flex flex-col items-center justify-between text-center gap-6 overflow-hidden">
+              <div className="flex flex-col items-center gap-2 pt-2">
+                <div className="w-16 h-16 rounded-2xl bg-amber-400/20 border-2 border-amber-400 flex items-center justify-center shadow-lg">
+                  <Trophy className="w-9 h-9 text-amber-300" />
                 </div>
-                <h2 className="text-3xl xl:text-5xl font-black mt-1">
+                <div className="text-sm uppercase tracking-[0.22em] text-amber-300 font-extrabold">
+                  Podium Final • {questions.length} questions
+                </div>
+                <h2 className="text-3xl xl:text-5xl font-black">
                   {topWinners.length > 0
                     ? `Victoire de ${topWinners
                         .map((w) => w.player.nickname)
@@ -1855,34 +1938,73 @@ export default function TvJusteChiffrePage() {
                     : "Partie terminée !"}
                 </h2>
               </div>
-              <div className="flex flex-wrap items-center justify-center gap-4 max-w-4xl">
-                {podiumEntries.map((item) => {
-                  const pColor = getUniquePlayerColor(item.player.id, players);
-                  const isTieAtRank =
-                    podiumEntries.filter((e) => e.rank === item.rank).length > 1;
+
+              <div className="flex-1 w-full max-w-5xl flex items-end justify-center gap-4 xl:gap-8 pb-2">
+                {podiumSteps.map((step, stepIdx) => {
+                  const isTie = step.entries.length > 1;
+                  const stepGlow =
+                    step.rank === 1
+                      ? "border-amber-300 bg-gradient-to-t from-amber-500/35 to-amber-300/15 shadow-[0_0_40px_rgba(251,191,36,0.28)]"
+                      : step.rank === 2
+                      ? "border-slate-300/70 bg-gradient-to-t from-slate-400/25 to-slate-200/10"
+                      : "border-amber-700/80 bg-gradient-to-t from-amber-800/30 to-amber-600/10";
+
                   return (
                     <div
-                      key={item.player.id}
-                      style={{
-                        backgroundColor: pColor.bgHex,
-                        color: pColor.textHex,
-                      }}
-                      className="px-6 py-4 rounded-2xl border border-white/30 flex items-center gap-3 shadow-xl"
+                      key={step.rank}
+                      style={{ animationDelay: `${stepIdx * 140}ms` }}
+                      className="flex-1 max-w-[300px] flex flex-col items-center justify-end gap-3 jc-podium-rise"
                     >
-                      <span className="font-mono font-black text-2xl">
-                        #{item.rank}
-                      </span>
-                      <span className="font-black text-3xl xl:text-4xl">
-                        {item.player.nickname}
-                      </span>
-                      {isTieAtRank && (
-                        <span className="text-xs font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-black/35">
-                          Ex æquo
+                      <div className="w-full flex flex-col items-center gap-2">
+                        {step.entries.map((entry) => {
+                          const pColor = getUniquePlayerColor(
+                            entry.player.id,
+                            players
+                          );
+                          return (
+                            <div
+                              key={entry.player.id}
+                              style={{
+                                backgroundColor: pColor.bgHex,
+                                color: pColor.textHex,
+                              }}
+                              className="w-full px-4 py-2.5 rounded-2xl border-2 border-white/35 shadow-xl flex flex-col items-center gap-1"
+                            >
+                              <div className="flex items-center justify-center gap-1.5 max-w-full">
+                                {step.rank === 1 && (
+                                  <Crown className="w-5 h-5 text-amber-300 shrink-0" />
+                                )}
+                                <span className="font-black text-xl xl:text-2xl truncate">
+                                  {entry.player.nickname}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="font-mono font-black text-base xl:text-lg px-2.5 py-0.5 rounded-lg bg-black/35">
+                                  {entry.score} pts
+                                </span>
+                                {isTie && (
+                                  <span className="text-[11px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-black/40">
+                                    Ex æquo
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+
+                      <div
+                        className={`w-full ${step.heightClass} rounded-t-3xl border-2 border-b-0 ${stepGlow} flex flex-col items-center justify-center gap-1`}
+                      >
+                        <span className="font-mono font-black text-4xl xl:text-5xl text-white">
+                          {step.label}
                         </span>
-                      )}
-                      <span className="font-mono font-black text-xl xl:text-2xl px-3 py-1 rounded-xl bg-black/30">
-                        {item.score} pts
-                      </span>
+                        {isTie && (
+                          <span className="text-xs uppercase tracking-widest font-bold text-white/80">
+                            {step.entries.length} ex æquo
+                          </span>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
