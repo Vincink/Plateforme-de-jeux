@@ -242,12 +242,9 @@ export default function TvJusteChiffrePage() {
   const [localStartMs, setLocalStartMs] = useState<number | null>(null);
   const [frozenRemaining, setFrozenRemaining] = useState<number | null>(null);
 
-  const [hasEndedForCurrentQuestion, setHasEndedForCurrentQuestion] =
-    useState<boolean>(false);
   const [showTopQuestion, setShowTopQuestion] = useState<boolean>(false);
   const [isQuestionFadingOut, setIsQuestionFadingOut] = useState<boolean>(false);
-  const [canStartRevealSequence, setCanStartRevealSequence] =
-    useState<boolean>(false);
+  const [revealTriggerCount, setRevealTriggerCount] = useState<number>(0);
 
   const [barsExpanded, setBarsExpanded] = useState<boolean>(false);
   const [targetLineVisible, setTargetLineVisible] = useState<boolean>(false);
@@ -282,8 +279,8 @@ export default function TvJusteChiffrePage() {
   const lastResetSignatureRef = useRef<string>("");
   const isResettingScoresRef = useRef<boolean>(false);
   const activeQuestionKeyRef = useRef<string>("");
-  const zeroSequenceQuestionKeyRef = useRef<string>("");
-  const revealAnimQuestionKeyRef = useRef<string>("");
+  const zeroSequenceRunIdRef = useRef<string>("");
+  const revealAnimRunIdRef = useRef<string>("");
   const fxQuestionKeyRef = useRef<string>("");
   const podiumLockedSeriesRef = useRef<string>("");
   const podiumConfettiRoundRef = useRef<string>("");
@@ -835,13 +832,12 @@ export default function TvJusteChiffrePage() {
     parseTimestampMs(statePayload.questionStartedAt) ??
     parseTimestampMs(statePayload.question_started_at);
 
+  // Clé unique par question (n'inclut pas remoteStartMs pour éviter de couper une manche en cours)
   const questionKey = useMemo(() => {
     if (activeQuestionIndex === null || !currentQuestion || isSeriesCompleted) {
       return "";
     }
-    const qText = currentQuestion.question ?? "";
-    const qAns = currentQuestion.answer ?? "";
-    return `${session?.id ?? ""}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}-${qText}-${qAns}`;
+    return `${session?.id ?? ""}-s${seriesNumber}-${seriesSeed}-q${activeQuestionIndex}`;
   }, [
     activeQuestionIndex,
     currentQuestion,
@@ -855,15 +851,14 @@ export default function TvJusteChiffrePage() {
     if (!questionKey) {
       if (isSeriesCompleted) return;
       activeQuestionKeyRef.current = "";
-      zeroSequenceQuestionKeyRef.current = "";
-      revealAnimQuestionKeyRef.current = "";
+      zeroSequenceRunIdRef.current = "";
+      revealAnimRunIdRef.current = "";
       fxQuestionKeyRef.current = "";
       setLocalStartMs(null);
       setFrozenRemaining(null);
-      setHasEndedForCurrentQuestion(false);
       setShowTopQuestion(false);
       setIsQuestionFadingOut(false);
-      setCanStartRevealSequence(false);
+      setRevealTriggerCount(0);
       setPhase("idle");
       setBarsExpanded(false);
       setTargetLineVisible(false);
@@ -883,18 +878,17 @@ export default function TvJusteChiffrePage() {
 
     if (activeQuestionKeyRef.current === questionKey) return;
     activeQuestionKeyRef.current = questionKey;
-    zeroSequenceQuestionKeyRef.current = "";
-    revealAnimQuestionKeyRef.current = "";
+    zeroSequenceRunIdRef.current = "";
+    revealAnimRunIdRef.current = "";
     fxQuestionKeyRef.current = "";
 
     const start = remoteStartMs ?? Date.now();
     setLocalStartMs(start);
     setFrozenRemaining(null);
     setNowMs(Date.now());
-    setHasEndedForCurrentQuestion(false);
     setShowTopQuestion(true);
     setIsQuestionFadingOut(false);
-    setCanStartRevealSequence(false);
+    setRevealTriggerCount(0);
     setPhase("playing");
     setBarsExpanded(false);
     setTargetLineVisible(false);
@@ -956,7 +950,7 @@ export default function TvJusteChiffrePage() {
       !currentQuestion ||
       isPaused ||
       isSeriesCompleted ||
-      hasEndedForCurrentQuestion
+      revealTriggerCount > 0
     ) {
       return;
     }
@@ -967,7 +961,7 @@ export default function TvJusteChiffrePage() {
     currentQuestion,
     isPaused,
     isSeriesCompleted,
-    hasEndedForCurrentQuestion,
+    revealTriggerCount,
   ]);
 
   const remainingSeconds = useMemo<number | null>(() => {
@@ -998,20 +992,13 @@ export default function TvJusteChiffrePage() {
     remainingSeconds !== null &&
     remainingSeconds <= 0;
 
-  useEffect(() => {
-    if (isTimerZero || statePayload.revealed) {
-      setHasEndedForCurrentQuestion(true);
-    }
-  }, [isTimerZero, statePayload.revealed]);
-
-  const isQuestionEnded = Boolean(
-    hasEndedForCurrentQuestion || isTimerZero || statePayload.revealed
-  );
+  const isQuestionEnded = Boolean(isTimerZero || statePayload.revealed);
 
   useEffect(() => {
     if (!isQuestionEnded || !questionKey || isSeriesCompleted) return;
-    if (zeroSequenceQuestionKeyRef.current === questionKey) return;
-    zeroSequenceQuestionKeyRef.current = questionKey;
+    const runId = `${questionKey}-${remoteStartMs ?? "auto"}-${statePayload.revealed ? "rev" : "t0"}`;
+    if (zeroSequenceRunIdRef.current === runId) return;
+    zeroSequenceRunIdRef.current = runId;
 
     setIsQuestionFadingOut(true);
 
@@ -1020,16 +1007,16 @@ export default function TvJusteChiffrePage() {
     }, POST_ZERO_FADE_MS);
 
     const revealWaitTimer = window.setTimeout(() => {
-      setCanStartRevealSequence(true);
+      setRevealTriggerCount((c) => c + 1);
     }, POST_ZERO_FADE_MS + POST_FADE_DELAY_MS);
 
     return () => {
       window.clearTimeout(hideQuestionTimer);
       window.clearTimeout(revealWaitTimer);
     };
-  }, [isQuestionEnded, questionKey, isSeriesCompleted]);
+  }, [isQuestionEnded, questionKey, isSeriesCompleted, remoteStartMs, statePayload.revealed]);
 
-  const shouldReveal = canStartRevealSequence;
+  const shouldReveal = revealTriggerCount > 0;
 
   const estimatesByPlayerId = useMemo<Record<string, number>>(() => {
     const rawMap =
@@ -1268,7 +1255,7 @@ export default function TvJusteChiffrePage() {
       steps.push({
         rank: 2,
         label: "2e",
-        heightClass: "h-36 xl:h-44",
+        heightClass: "h-28 xl:h-36",
         entries: rank2,
       });
     }
@@ -1276,7 +1263,7 @@ export default function TvJusteChiffrePage() {
       steps.push({
         rank: 1,
         label: "1er",
-        heightClass: "h-48 xl:h-56",
+        heightClass: "h-36 xl:h-44",
         entries: rank1,
       });
     }
@@ -1284,7 +1271,7 @@ export default function TvJusteChiffrePage() {
       steps.push({
         rank: 3,
         label: "3e",
-        heightClass: "h-28 xl:h-36",
+        heightClass: "h-24 xl:h-28",
         entries: rank3,
       });
     }
@@ -1303,8 +1290,9 @@ export default function TvJusteChiffrePage() {
 
   useEffect(() => {
     if (!shouldReveal || !questionKey) return;
-    if (revealAnimQuestionKeyRef.current === questionKey) return;
-    revealAnimQuestionKeyRef.current = questionKey;
+    const runId = `${questionKey}#${revealTriggerCount}`;
+    if (revealAnimRunIdRef.current === runId) return;
+    revealAnimRunIdRef.current = runId;
 
     const snapshotGuesses: Record<string, number> = { ...estimatesRef.current };
     const playerIds = playersRef.current.map((p) => String(p.id));
@@ -1464,7 +1452,7 @@ export default function TvJusteChiffrePage() {
       if (targetExpandRaf2) window.cancelAnimationFrame(targetExpandRaf2);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [shouldReveal, questionKey]);
+  }, [shouldReveal, questionKey, revealTriggerCount]);
 
   useEffect(() => {
     if (phase !== "revealed" || !questionKey) return;
@@ -1977,15 +1965,15 @@ export default function TvJusteChiffrePage() {
 
         <div className="relative flex-1 min-w-0 flex flex-col">
           {isSeriesCompleted ? (
-            <section className="flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl p-8 flex flex-col items-center justify-between text-center gap-6 overflow-hidden">
-              <div className="flex flex-col items-center gap-2 pt-2">
-                <div className="w-16 h-16 rounded-2xl bg-amber-400/20 border-2 border-amber-400 flex items-center justify-center shadow-lg">
-                  <Trophy className="w-9 h-9 text-amber-300" />
+            <section className="flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl px-6 py-4 flex flex-col items-center justify-between text-center gap-3 overflow-hidden">
+              <div className="flex flex-col items-center gap-1 shrink-0">
+                <div className="w-12 h-12 rounded-2xl bg-amber-400/20 border-2 border-amber-400 flex items-center justify-center shadow-lg">
+                  <Trophy className="w-6 h-6 text-amber-300" />
                 </div>
-                <div className="text-sm uppercase tracking-[0.22em] text-amber-300 font-extrabold">
+                <div className="text-xs uppercase tracking-[0.2em] text-amber-300 font-extrabold">
                   Podium Final • {questions.length} questions
                 </div>
-                <h2 className="text-3xl xl:text-5xl font-black">
+                <h2 className="text-2xl xl:text-4xl font-black leading-tight">
                   {topWinners.length > 0
                     ? `Victoire de ${topWinners
                         .map((w) => w.player.nickname)
@@ -1994,7 +1982,7 @@ export default function TvJusteChiffrePage() {
                 </h2>
               </div>
 
-              <div className="flex-1 w-full max-w-5xl flex items-end justify-center gap-4 xl:gap-8 pb-2">
+              <div className="flex-1 min-h-0 w-full max-w-5xl flex items-end justify-center gap-4 xl:gap-8">
                 {podiumSteps.map((step, stepIdx) => {
                   const isTie = step.entries.length > 1;
                   const stepGlow =
@@ -2008,9 +1996,9 @@ export default function TvJusteChiffrePage() {
                     <div
                       key={step.rank}
                       style={{ animationDelay: `${stepIdx * 140}ms` }}
-                      className="flex-1 max-w-[300px] flex flex-col items-center justify-end gap-3 jc-podium-rise"
+                      className="flex-1 max-w-[300px] max-h-full flex flex-col items-center justify-end gap-2 jc-podium-rise"
                     >
-                      <div className="w-full flex flex-col items-center gap-2">
+                      <div className="w-full flex flex-col items-center gap-1.5">
                         {step.entries.map((entry) => {
                           const pColor = getUniquePlayerColor(
                             entry.player.id,
@@ -2023,39 +2011,37 @@ export default function TvJusteChiffrePage() {
                                 backgroundColor: pColor.bgHex,
                                 color: pColor.textHex,
                               }}
-                              className="w-full px-4 py-2.5 rounded-2xl border-2 border-white/35 shadow-xl flex flex-col items-center gap-1"
+                              className="w-full px-3 py-1.5 rounded-xl border border-white/35 shadow-lg flex items-center justify-between gap-2"
                             >
-                              <div className="flex items-center justify-center gap-1.5 max-w-full">
+                              <div className="flex items-center gap-1.5 min-w-0">
                                 {step.rank === 1 && (
-                                  <Crown className="w-5 h-5 text-amber-300 shrink-0" />
+                                  <Crown className="w-4 h-4 text-amber-300 shrink-0" />
                                 )}
-                                <span className="font-black text-xl xl:text-2xl truncate">
+                                <span className="font-black text-base xl:text-lg truncate">
                                   {entry.player.nickname}
                                 </span>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="font-mono font-black text-base xl:text-lg px-2.5 py-0.5 rounded-lg bg-black/35">
-                                  {entry.score} pts
-                                </span>
                                 {isTie && (
-                                  <span className="text-[11px] font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-black/40">
+                                  <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/40 shrink-0">
                                     Ex æquo
                                   </span>
                                 )}
                               </div>
+                              <span className="font-mono font-black text-sm xl:text-base px-2 py-0.5 rounded-lg bg-black/35 shrink-0">
+                                {entry.score} pts
+                              </span>
                             </div>
                           );
                         })}
                       </div>
 
                       <div
-                        className={`w-full ${step.heightClass} rounded-t-3xl border-2 border-b-0 ${stepGlow} flex flex-col items-center justify-center gap-1`}
+                        className={`w-full ${step.heightClass} shrink-0 rounded-t-3xl border-2 border-b-0 ${stepGlow} flex flex-col items-center justify-center gap-0.5`}
                       >
-                        <span className="font-mono font-black text-4xl xl:text-5xl text-white">
+                        <span className="font-mono font-black text-3xl xl:text-4xl text-white leading-none">
                           {step.label}
                         </span>
                         {isTie && (
-                          <span className="text-xs uppercase tracking-widest font-bold text-white/80">
+                          <span className="text-[11px] uppercase tracking-widest font-bold text-white/80">
                             {step.entries.length} ex æquo
                           </span>
                         )}
