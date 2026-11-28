@@ -1153,16 +1153,23 @@ export default function TvJusteChiffrePage() {
       .filter((d): d is number => d !== null);
     const minDiff = validDiffs.length > 0 ? Math.min(...validDiffs) : null;
 
-    return withMeta
-      .map((item) => ({
+    const sorted = [...withMeta].sort((a, b) => b.score - a.score);
+
+    let currentRank = 1;
+    return sorted.map((item, idx) => {
+      if (idx > 0 && item.score < sorted[idx - 1]!.score) {
+        currentRank = idx + 1;
+      }
+      return {
         ...item,
+        rank: currentRank,
         isWinner:
           phase === "revealed" &&
           minDiff !== null &&
           item.diff !== null &&
           item.diff === minDiff,
-      }))
-      .sort((a, b) => b.score - a.score);
+      };
+    });
   }, [
     players,
     scoresRows,
@@ -1173,6 +1180,17 @@ export default function TvJusteChiffrePage() {
     targetNumber,
     phase,
   ]);
+
+  const topRank = rankedPlayers[0]?.rank ?? 1;
+  const topWinners = useMemo(
+    () => rankedPlayers.filter((item) => item.rank === topRank),
+    [rankedPlayers, topRank]
+  );
+
+  const podiumEntries = useMemo(
+    () => rankedPlayers.filter((item) => item.rank <= 3),
+    [rankedPlayers]
+  );
 
   const rankedPlayersRef = useRef(rankedPlayers);
   rankedPlayersRef.current = rankedPlayers;
@@ -1782,7 +1800,7 @@ export default function TvJusteChiffrePage() {
                 En attente des joueurs...
               </div>
             ) : (
-              rankedPlayers.map(({ player, score, isWinner }, idx) => {
+              rankedPlayers.map(({ player, score, rank, isWinner }) => {
                 const pColor = getUniquePlayerColor(player.id, players);
 
                 return (
@@ -1799,7 +1817,7 @@ export default function TvJusteChiffrePage() {
                         style={{ backgroundColor: pColor.badgeBgHex }}
                         className="w-7 h-7 rounded-lg flex items-center justify-center font-mono font-black text-sm shrink-0"
                       >
-                        {idx + 1}
+                        {rank}
                       </span>
                       <span className="font-black text-2xl xl:text-3xl truncate flex items-center gap-1.5 min-w-0">
                         {isWinner && (
@@ -1830,14 +1848,18 @@ export default function TvJusteChiffrePage() {
                   Fin des {questions.length} questions
                 </div>
                 <h2 className="text-3xl xl:text-5xl font-black mt-1">
-                  {rankedPlayers[0]
-                    ? `Victoire de ${rankedPlayers[0].player.nickname} !`
+                  {topWinners.length > 0
+                    ? `Victoire de ${topWinners
+                        .map((w) => w.player.nickname)
+                        .join(" et ")} !`
                     : "Partie terminée !"}
                 </h2>
               </div>
-              <div className="flex flex-wrap items-center justify-center gap-4 max-w-3xl">
-                {rankedPlayers.slice(0, 3).map((item, idx) => {
+              <div className="flex flex-wrap items-center justify-center gap-4 max-w-4xl">
+                {podiumEntries.map((item) => {
                   const pColor = getUniquePlayerColor(item.player.id, players);
+                  const isTieAtRank =
+                    podiumEntries.filter((e) => e.rank === item.rank).length > 1;
                   return (
                     <div
                       key={item.player.id}
@@ -1848,11 +1870,16 @@ export default function TvJusteChiffrePage() {
                       className="px-6 py-4 rounded-2xl border border-white/30 flex items-center gap-3 shadow-xl"
                     >
                       <span className="font-mono font-black text-2xl">
-                        #{idx + 1}
+                        #{item.rank}
                       </span>
                       <span className="font-black text-3xl xl:text-4xl">
                         {item.player.nickname}
                       </span>
+                      {isTieAtRank && (
+                        <span className="text-xs font-extrabold uppercase tracking-wider px-2 py-0.5 rounded-full bg-black/35">
+                          Ex æquo
+                        </span>
+                      )}
                       <span className="font-mono font-black text-xl xl:text-2xl px-3 py-1 rounded-xl bg-black/30">
                         {item.score} pts
                       </span>
