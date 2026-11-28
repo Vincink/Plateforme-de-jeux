@@ -239,7 +239,7 @@ export default function TvJusteChiffrePage() {
   const gameTitle = "Le Juste Chiffre";
 
   const [nowMs, setNowMs] = useState<number>(() => Date.now());
-  const [localStartMs, setLocalStartMs] = useState<number | null>(null);
+  const [roundStartMs, setRoundStartMs] = useState<number | null>(null);
   const [frozenRemaining, setFrozenRemaining] = useState<number | null>(null);
 
   const [showTopQuestion, setShowTopQuestion] = useState<boolean>(false);
@@ -279,6 +279,7 @@ export default function TvJusteChiffrePage() {
   const lastResetSignatureRef = useRef<string>("");
   const isResettingScoresRef = useRef<boolean>(false);
   const activeQuestionKeyRef = useRef<string>("");
+  const initialRemoteStartOnEnterRef = useRef<number | null>(null);
   const zeroSequenceRunIdRef = useRef<string>("");
   const revealAnimRunIdRef = useRef<string>("");
   const fxQuestionKeyRef = useRef<string>("");
@@ -832,7 +833,6 @@ export default function TvJusteChiffrePage() {
     parseTimestampMs(statePayload.questionStartedAt) ??
     parseTimestampMs(statePayload.question_started_at);
 
-  // Clé unique par question (n'inclut pas remoteStartMs pour éviter de couper une manche en cours)
   const questionKey = useMemo(() => {
     if (activeQuestionIndex === null || !currentQuestion || isSeriesCompleted) {
       return "";
@@ -851,10 +851,11 @@ export default function TvJusteChiffrePage() {
     if (!questionKey) {
       if (isSeriesCompleted) return;
       activeQuestionKeyRef.current = "";
+      initialRemoteStartOnEnterRef.current = null;
       zeroSequenceRunIdRef.current = "";
       revealAnimRunIdRef.current = "";
       fxQuestionKeyRef.current = "";
-      setLocalStartMs(null);
+      setRoundStartMs(null);
       setFrozenRemaining(null);
       setShowTopQuestion(false);
       setIsQuestionFadingOut(false);
@@ -878,14 +879,21 @@ export default function TvJusteChiffrePage() {
 
     if (activeQuestionKeyRef.current === questionKey) return;
     activeQuestionKeyRef.current = questionKey;
+    initialRemoteStartOnEnterRef.current = remoteStartMs;
     zeroSequenceRunIdRef.current = "";
     revealAnimRunIdRef.current = "";
     fxQuestionKeyRef.current = "";
 
-    const start = remoteStartMs ?? Date.now();
-    setLocalStartMs(start);
+    const now = Date.now();
+    // Si remoteStartMs est récent (< 5s), on le synchronise, sinon on démarre le chrono maintenant
+    const start =
+      remoteStartMs !== null && Math.abs(now - remoteStartMs) < 5000
+        ? remoteStartMs
+        : now;
+
+    setRoundStartMs(start);
     setFrozenRemaining(null);
-    setNowMs(Date.now());
+    setNowMs(now);
     setShowTopQuestion(true);
     setIsQuestionFadingOut(false);
     setRevealTriggerCount(0);
@@ -906,13 +914,31 @@ export default function TvJusteChiffrePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questionKey, isSeriesCompleted]);
 
+  // Si l'admin clique sur "Relancer" sur la même question (remoteStartMs change après l'entrée)
   useEffect(() => {
+    if (!questionKey || activeQuestionKeyRef.current !== questionKey) return;
     if (
-      questionKey &&
       remoteStartMs !== null &&
-      activeQuestionKeyRef.current === questionKey
+      remoteStartMs !== initialRemoteStartOnEnterRef.current
     ) {
-      setLocalStartMs(remoteStartMs);
+      initialRemoteStartOnEnterRef.current = remoteStartMs;
+      setRoundStartMs(remoteStartMs);
+      setNowMs(Date.now());
+      setShowTopQuestion(true);
+      setIsQuestionFadingOut(false);
+      setRevealTriggerCount(0);
+      setPhase("playing");
+      setBarsExpanded(false);
+      setTargetLineVisible(false);
+      setTargetLineExpanded(false);
+      setTargetCounterValue(0);
+      setDisplayCounters({});
+      setRoundPointsByPlayer({});
+      setExactPlayersByRound({});
+      setLaunchFlyBadges(false);
+      setBadgeAnimationDone(false);
+      setLaserImpactFlash(false);
+      setScreenShake(false);
     }
   }, [questionKey, remoteStartMs]);
 
@@ -928,7 +954,7 @@ export default function TvJusteChiffrePage() {
     }
     setFrozenRemaining((prev) => {
       if (prev !== null) return prev;
-      const effStart = remoteStartMs ?? localStartMs ?? nowMs;
+      const effStart = roundStartMs ?? nowMs;
       return Math.max(
         0,
         Math.ceil(durationSeconds - Math.max(0, (nowMs - effStart) / 1000))
@@ -938,8 +964,7 @@ export default function TvJusteChiffrePage() {
     isPaused,
     activeQuestionIndex,
     statePayload.pausedRemainingSeconds,
-    remoteStartMs,
-    localStartMs,
+    roundStartMs,
     nowMs,
     durationSeconds,
   ]);
@@ -969,7 +994,7 @@ export default function TvJusteChiffrePage() {
       return null;
     }
     if (isPaused && frozenRemaining !== null) return frozenRemaining;
-    const effStart = remoteStartMs ?? localStartMs ?? nowMs;
+    const effStart = roundStartMs ?? nowMs;
     const elapsed = Math.max(0, (nowMs - effStart) / 1000);
     return Math.max(0, Math.ceil(durationSeconds - elapsed));
   }, [
@@ -978,8 +1003,7 @@ export default function TvJusteChiffrePage() {
     isSeriesCompleted,
     isPaused,
     frozenRemaining,
-    remoteStartMs,
-    localStartMs,
+    roundStartMs,
     nowMs,
     durationSeconds,
   ]);
@@ -989,6 +1013,7 @@ export default function TvJusteChiffrePage() {
     !isSeriesCompleted &&
     activeQuestionIndex !== null &&
     currentQuestion !== null &&
+    roundStartMs !== null &&
     remainingSeconds !== null &&
     remainingSeconds <= 0;
 
@@ -996,7 +1021,7 @@ export default function TvJusteChiffrePage() {
 
   useEffect(() => {
     if (!isQuestionEnded || !questionKey || isSeriesCompleted) return;
-    const runId = `${questionKey}-${remoteStartMs ?? "auto"}-${statePayload.revealed ? "rev" : "t0"}`;
+    const runId = `${questionKey}-${roundStartMs ?? 0}`;
     if (zeroSequenceRunIdRef.current === runId) return;
     zeroSequenceRunIdRef.current = runId;
 
@@ -1014,7 +1039,7 @@ export default function TvJusteChiffrePage() {
       window.clearTimeout(hideQuestionTimer);
       window.clearTimeout(revealWaitTimer);
     };
-  }, [isQuestionEnded, questionKey, isSeriesCompleted, remoteStartMs, statePayload.revealed]);
+  }, [isQuestionEnded, questionKey, isSeriesCompleted, roundStartMs]);
 
   const shouldReveal = revealTriggerCount > 0;
 
@@ -1255,7 +1280,7 @@ export default function TvJusteChiffrePage() {
       steps.push({
         rank: 2,
         label: "2e",
-        heightClass: "h-28 xl:h-36",
+        heightClass: "h-24 xl:h-32",
         entries: rank2,
       });
     }
@@ -1263,7 +1288,7 @@ export default function TvJusteChiffrePage() {
       steps.push({
         rank: 1,
         label: "1er",
-        heightClass: "h-36 xl:h-44",
+        heightClass: "h-32 xl:h-40",
         entries: rank1,
       });
     }
@@ -1271,7 +1296,7 @@ export default function TvJusteChiffrePage() {
       steps.push({
         rank: 3,
         label: "3e",
-        heightClass: "h-24 xl:h-28",
+        heightClass: "h-20 xl:h-24",
         entries: rank3,
       });
     }
@@ -1742,7 +1767,7 @@ export default function TvJusteChiffrePage() {
 
   // Affichage automatique du podium après la fin de la 15e question
   useEffect(() => {
-    if (!isLastQuestionOfSeries || phase !== "revealed" || !badgeAnimationDone) {
+    if (!isLastQuestionOfSeries || phase !== "revealed") {
       return;
     }
 
@@ -1754,7 +1779,7 @@ export default function TvJusteChiffrePage() {
     return () => {
       window.clearTimeout(podiumTimer);
     };
-  }, [isLastQuestionOfSeries, phase, badgeAnimationDone, seriesKey]);
+  }, [isLastQuestionOfSeries, phase, seriesKey]);
 
   useEffect(() => {
     if (!isSeriesCompleted) return;
@@ -1967,7 +1992,7 @@ export default function TvJusteChiffrePage() {
           {isSeriesCompleted ? (
             <section className="flex-1 min-h-0 bg-white/[0.03] border border-white/15 rounded-r-3xl px-6 py-4 flex flex-col items-center justify-between text-center gap-3 overflow-hidden">
               <div className="flex flex-col items-center gap-1 shrink-0">
-                <div className="w-12 h-12 rounded-2xl bg-amber-400/20 border-2 border-amber-400 flex items-center justify-center shadow-lg">
+                <div className="w-11 h-11 rounded-2xl bg-amber-400/20 border-2 border-amber-400 flex items-center justify-center shadow-lg">
                   <Trophy className="w-6 h-6 text-amber-300" />
                 </div>
                 <div className="text-xs uppercase tracking-[0.2em] text-amber-300 font-extrabold">
@@ -1996,9 +2021,9 @@ export default function TvJusteChiffrePage() {
                     <div
                       key={step.rank}
                       style={{ animationDelay: `${stepIdx * 140}ms` }}
-                      className="flex-1 max-w-[300px] max-h-full flex flex-col items-center justify-end gap-2 jc-podium-rise"
+                      className="flex-1 max-w-[300px] max-h-full flex flex-col items-center justify-end gap-1.5 jc-podium-rise"
                     >
-                      <div className="w-full flex flex-col items-center gap-1.5">
+                      <div className="w-full flex flex-col items-center gap-1 overflow-y-auto max-h-[42vh] pr-0.5">
                         {step.entries.map((entry) => {
                           const pColor = getUniquePlayerColor(
                             entry.player.id,
@@ -2011,22 +2036,22 @@ export default function TvJusteChiffrePage() {
                                 backgroundColor: pColor.bgHex,
                                 color: pColor.textHex,
                               }}
-                              className="w-full px-3 py-1.5 rounded-xl border border-white/35 shadow-lg flex items-center justify-between gap-2"
+                              className="w-full px-2.5 py-1 rounded-lg border border-white/35 shadow-md flex items-center justify-between gap-1.5 shrink-0"
                             >
                               <div className="flex items-center gap-1.5 min-w-0">
                                 {step.rank === 1 && (
-                                  <Crown className="w-4 h-4 text-amber-300 shrink-0" />
+                                  <Crown className="w-3.5 h-3.5 text-amber-300 shrink-0" />
                                 )}
-                                <span className="font-black text-base xl:text-lg truncate">
+                                <span className="font-black text-sm xl:text-base truncate">
                                   {entry.player.nickname}
                                 </span>
                                 {isTie && (
-                                  <span className="text-[10px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/40 shrink-0">
+                                  <span className="text-[9px] font-extrabold uppercase tracking-wider px-1.5 py-0.5 rounded bg-black/40 shrink-0">
                                     Ex æquo
                                   </span>
                                 )}
                               </div>
-                              <span className="font-mono font-black text-sm xl:text-base px-2 py-0.5 rounded-lg bg-black/35 shrink-0">
+                              <span className="font-mono font-black text-xs xl:text-sm px-1.5 py-0.5 rounded bg-black/35 shrink-0">
                                 {entry.score} pts
                               </span>
                             </div>
