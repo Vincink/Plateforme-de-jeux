@@ -280,7 +280,7 @@ export default function TvJusteChiffrePage() {
   const isResettingScoresRef = useRef<boolean>(false);
   const activeQuestionKeyRef = useRef<string>("");
   const initialRemoteStartOnEnterRef = useRef<number | null>(null);
-  const zeroSequenceRunIdRef = useRef<string>("");
+  const roundEndScheduledRef = useRef<boolean>(false);
   const revealAnimRunIdRef = useRef<string>("");
   const fxQuestionKeyRef = useRef<string>("");
   const podiumLockedSeriesRef = useRef<string>("");
@@ -852,7 +852,7 @@ export default function TvJusteChiffrePage() {
       if (isSeriesCompleted) return;
       activeQuestionKeyRef.current = "";
       initialRemoteStartOnEnterRef.current = null;
-      zeroSequenceRunIdRef.current = "";
+      roundEndScheduledRef.current = false;
       revealAnimRunIdRef.current = "";
       fxQuestionKeyRef.current = "";
       setRoundStartMs(null);
@@ -880,12 +880,11 @@ export default function TvJusteChiffrePage() {
     if (activeQuestionKeyRef.current === questionKey) return;
     activeQuestionKeyRef.current = questionKey;
     initialRemoteStartOnEnterRef.current = remoteStartMs;
-    zeroSequenceRunIdRef.current = "";
+    roundEndScheduledRef.current = false;
     revealAnimRunIdRef.current = "";
     fxQuestionKeyRef.current = "";
 
     const now = Date.now();
-    // Si remoteStartMs est récent (< 5s), on le synchronise, sinon on démarre le chrono maintenant
     const start =
       remoteStartMs !== null && Math.abs(now - remoteStartMs) < 5000
         ? remoteStartMs
@@ -914,7 +913,6 @@ export default function TvJusteChiffrePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [questionKey, isSeriesCompleted]);
 
-  // Si l'admin clique sur "Relancer" sur la même question (remoteStartMs change après l'entrée)
   useEffect(() => {
     if (!questionKey || activeQuestionKeyRef.current !== questionKey) return;
     if (
@@ -922,6 +920,7 @@ export default function TvJusteChiffrePage() {
       remoteStartMs !== initialRemoteStartOnEnterRef.current
     ) {
       initialRemoteStartOnEnterRef.current = remoteStartMs;
+      roundEndScheduledRef.current = false;
       setRoundStartMs(remoteStartMs);
       setNowMs(Date.now());
       setShowTopQuestion(true);
@@ -975,7 +974,7 @@ export default function TvJusteChiffrePage() {
       !currentQuestion ||
       isPaused ||
       isSeriesCompleted ||
-      revealTriggerCount > 0
+      roundEndScheduledRef.current
     ) {
       return;
     }
@@ -986,7 +985,7 @@ export default function TvJusteChiffrePage() {
     currentQuestion,
     isPaused,
     isSeriesCompleted,
-    revealTriggerCount,
+    questionKey,
   ]);
 
   const remainingSeconds = useMemo<number | null>(() => {
@@ -1021,9 +1020,8 @@ export default function TvJusteChiffrePage() {
 
   useEffect(() => {
     if (!isQuestionEnded || !questionKey || isSeriesCompleted) return;
-    const runId = `${questionKey}-${roundStartMs ?? 0}`;
-    if (zeroSequenceRunIdRef.current === runId) return;
-    zeroSequenceRunIdRef.current = runId;
+    if (roundEndScheduledRef.current) return;
+    roundEndScheduledRef.current = true;
 
     setIsQuestionFadingOut(true);
 
@@ -1039,7 +1037,7 @@ export default function TvJusteChiffrePage() {
       window.clearTimeout(hideQuestionTimer);
       window.clearTimeout(revealWaitTimer);
     };
-  }, [isQuestionEnded, questionKey, isSeriesCompleted, roundStartMs]);
+  }, [isQuestionEnded, questionKey, isSeriesCompleted]);
 
   const shouldReveal = revealTriggerCount > 0;
 
