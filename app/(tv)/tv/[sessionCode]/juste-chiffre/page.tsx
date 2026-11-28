@@ -969,24 +969,12 @@ export default function TvJusteChiffrePage() {
   ]);
 
   useEffect(() => {
-    if (
-      activeQuestionIndex === null ||
-      !currentQuestion ||
-      isPaused ||
-      isSeriesCompleted ||
-      roundEndScheduledRef.current
-    ) {
+    if (!questionKey || isPaused || isSeriesCompleted) {
       return;
     }
     const timer = window.setInterval(() => setNowMs(Date.now()), 200);
     return () => window.clearInterval(timer);
-  }, [
-    activeQuestionIndex,
-    currentQuestion,
-    isPaused,
-    isSeriesCompleted,
-    questionKey,
-  ]);
+  }, [questionKey, isPaused, isSeriesCompleted]);
 
   const remainingSeconds = useMemo<number | null>(() => {
     if (activeQuestionIndex === null || !currentQuestion || isSeriesCompleted) {
