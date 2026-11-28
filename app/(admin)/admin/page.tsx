@@ -287,6 +287,24 @@ function isUuid(value: string | undefined | null): value is string {
   return typeof value === "string" && UUID_REGEX.test(value);
 }
 
+function isRemovedCatalogGame(game?: CatalogGame | null): boolean {
+  if (!game) return false;
+  const slug = (game.slug ?? "").toLowerCase();
+  const title = (game.title ?? "").toLowerCase();
+  return (
+    slug.includes("blind-test") ||
+    slug.includes("blind_test") ||
+    slug.includes("blindtest") ||
+    slug.includes("buzzer") ||
+    slug.includes("speed-rush") ||
+    slug.includes("speed_rush") ||
+    slug.includes("speedrush") ||
+    title.includes("blind test") ||
+    title.includes("buzzer") ||
+    title.includes("speed rush")
+  );
+}
+
 function isJusteChiffreGame(game?: CatalogGame | null): boolean {
   if (!game) return false;
   const slug = (game.slug ?? "").toLowerCase();
@@ -317,11 +335,13 @@ function isTargetBlitzGame(game?: CatalogGame | null): boolean {
 }
 
 function ensureCatalogGames(list: CatalogGame[]): CatalogGame[] {
-  let nextList = [...list];
+  let nextList = list.filter((g) => !isRemovedCatalogGame(g));
 
   const hasJc = nextList.some((g) => isJusteChiffreGame(g));
   if (!hasJc) {
-    const jcFromInitial = INITIAL_GAMES.find((g) => isJusteChiffreGame(g));
+    const jcFromInitial = INITIAL_GAMES.find(
+      (g) => !isRemovedCatalogGame(g) && isJusteChiffreGame(g)
+    );
     nextList = [
       ...nextList,
       jcFromInitial ??
@@ -339,7 +359,9 @@ function ensureCatalogGames(list: CatalogGame[]): CatalogGame[] {
 
   const hasBlitz = nextList.some((g) => isTargetBlitzGame(g));
   if (!hasBlitz) {
-    const blitzFromInitial = INITIAL_GAMES.find((g) => isTargetBlitzGame(g));
+    const blitzFromInitial = INITIAL_GAMES.find(
+      (g) => !isRemovedCatalogGame(g) && isTargetBlitzGame(g)
+    );
     nextList = [
       ...nextList,
       blitzFromInitial ??
@@ -552,6 +574,7 @@ export default function AdminConsolePage() {
   const [status, setStatus] = useState<SessionStatus>("lobby");
   const [questionIndex, setQuestionIndex] = useState<number>(-1);
   const [blitzRoundNumber, setBlitzRoundNumber] = useState<number>(0);
+  const [blitzLaunched, setBlitzLaunched] = useState<boolean>(false);
   const [questionStartedAt, setQuestionStartedAt] = useState<string | null>(
     null
   );
@@ -712,8 +735,11 @@ export default function AdminConsolePage() {
     games.find((g) => g.id === selectedGameId) ?? games[0];
   selectedGameRef.current = selectedGame ?? null;
 
-  const isGameLaunched = status === "playing" || status === "paused";
   const isTargetBlitz = isTargetBlitzGame(selectedGame);
+  const isGameLaunched = isTargetBlitz
+    ? blitzLaunched && (status === "playing" || status === "paused")
+    : status === "playing" || status === "paused";
+  const onlyLaunchActiveOnBlitz = isTargetBlitz && !blitzLaunched;
   const isJusteChiffre = !isTargetBlitz && isJusteChiffreGame(selectedGame);
   const activeDurationSeconds = isTargetBlitz
     ? TARGET_BLITZ_DURATION_SECONDS
@@ -767,7 +793,6 @@ export default function AdminConsolePage() {
     if (matchedBySlug?.id) {
       return matchedBySlug.id;
     }
-    // Pour Target Blitz, ne pas retomber sur un UUID d'un autre jeu (comme le Quiz)
     if (isTargetBlitzGame(candidateGame)) {
       return null;
     }
@@ -1067,6 +1092,7 @@ export default function AdminConsolePage() {
     qrVisible: boolean;
     nextQuestionIndex?: number;
     nextBlitzRoundNumber?: number;
+    nextBlitzLaunched?: boolean;
     nextQuestionStartedAt?: string | null;
     nextPausedRemaining?: number | null;
     nextSeriesNumber?: number;
@@ -1097,6 +1123,11 @@ export default function AdminConsolePage() {
       params.nextBlitzRoundNumber !== undefined
         ? params.nextBlitzRoundNumber
         : blitzRoundNumber;
+
+    const effectiveBlitzLaunched =
+      params.nextBlitzLaunched !== undefined
+        ? params.nextBlitzLaunched
+        : blitzLaunched;
 
     const effectiveStartedAt =
       params.nextQuestionStartedAt !== undefined
@@ -1164,7 +1195,9 @@ export default function AdminConsolePage() {
           basePayload.game_id = validGameUuid;
         }
         const roundActive =
-          params.nextStatus === "playing" && effectiveBlitzRound > 0;
+          effectiveBlitzLaunched &&
+          params.nextStatus === "playing" &&
+          effectiveBlitzRound > 0;
         basePayload.game_state = {
           mode: "target-blitz",
           gameType: "target-blitz",
@@ -1319,7 +1352,9 @@ export default function AdminConsolePage() {
         .order("title", { ascending: true });
 
       const rows = Array.isArray(dbGames) ? (dbGames as CatalogGame[]) : [];
-      const validRows = rows.filter((g) => isUuid(g.id));
+      const validRows = rows.filter(
+        (g) => isUuid(g.id) && !isRemovedCatalogGame(g)
+      );
       const mergedGames = ensureCatalogGames(
         validRows.length > 0 ? validRows : INITIAL_GAMES
       );
@@ -1341,6 +1376,7 @@ export default function AdminConsolePage() {
         if (initialGame) {
           setSelectedGameId(initialGame.id);
           selectedGameRef.current = initialGame;
+          setBlitzLaunched(false);
           setSeriesSeed(initialSeed);
           setSeriesQuestions(initialPicked);
           setJusteChiffreQuestions(initialJcPicked);
@@ -1352,6 +1388,7 @@ export default function AdminConsolePage() {
             qrVisible: showQrOnTv,
             nextQuestionIndex: -1,
             nextBlitzRoundNumber: 0,
+            nextBlitzLaunched: false,
             nextQuestionStartedAt: null,
             nextPausedRemaining: null,
             nextSeriesNumber: 1,
@@ -1403,6 +1440,7 @@ export default function AdminConsolePage() {
     setStatus("lobby");
     setQuestionIndex(-1);
     setBlitzRoundNumber(0);
+    setBlitzLaunched(false);
     setQuestionStartedAt(null);
     setPausedRemainingSeconds(null);
     setSeriesNumber(1);
@@ -1422,6 +1460,7 @@ export default function AdminConsolePage() {
       qrVisible: showQrOnTv,
       nextQuestionIndex: -1,
       nextBlitzRoundNumber: 0,
+      nextBlitzLaunched: false,
       nextQuestionStartedAt: null,
       nextPausedRemaining: null,
       nextSeriesNumber: 1,
@@ -1434,6 +1473,7 @@ export default function AdminConsolePage() {
   const handleStatusChange = async (nextStatus: SessionStatus) => {
     const nowMs = Date.now();
     const currentGame = selectedGameRef.current ?? selectedGame;
+    const blitzMode = isTargetBlitzGame(currentGame);
     const shouldResetQuestions =
       nextStatus === "lobby" || nextStatus === "finished";
 
@@ -1441,6 +1481,7 @@ export default function AdminConsolePage() {
       setStatus(nextStatus);
       setQuestionIndex(-1);
       setBlitzRoundNumber(0);
+      setBlitzLaunched(false);
       setQuestionStartedAt(null);
       setPausedRemainingSeconds(null);
       setRemoteCurrentQuestion(null);
@@ -1454,6 +1495,7 @@ export default function AdminConsolePage() {
         qrVisible: showQrOnTv,
         nextQuestionIndex: -1,
         nextBlitzRoundNumber: 0,
+        nextBlitzLaunched: false,
         nextQuestionStartedAt: null,
         nextPausedRemaining: null,
         resetAnswers: true,
@@ -1479,6 +1521,7 @@ export default function AdminConsolePage() {
         game: currentGame,
         nextStatus: "paused",
         qrVisible: showQrOnTv,
+        nextBlitzLaunched: blitzMode ? true : blitzLaunched,
         nextPausedRemaining: remaining,
         resetAnswers: false,
       });
@@ -1499,7 +1542,15 @@ export default function AdminConsolePage() {
         ).toISOString();
       }
 
+      const nextBlitzRound = blitzMode
+        ? Math.max(1, blitzRoundNumber)
+        : blitzRoundNumber;
+
       setStatus("playing");
+      if (blitzMode) {
+        setBlitzLaunched(true);
+        setBlitzRoundNumber(nextBlitzRound);
+      }
       setPausedRemainingSeconds(null);
       setQuestionStartedAt(resumedStartedAt);
 
@@ -1509,10 +1560,9 @@ export default function AdminConsolePage() {
         game: currentGame,
         nextStatus: "playing",
         qrVisible: showQrOnTv,
-        nextQuestionIndex: isTargetBlitzGame(currentGame) ? -1 : questionIndex,
-        nextBlitzRoundNumber: isTargetBlitzGame(currentGame)
-          ? 0
-          : blitzRoundNumber,
+        nextQuestionIndex: blitzMode ? -1 : questionIndex,
+        nextBlitzRoundNumber: nextBlitzRound,
+        nextBlitzLaunched: blitzMode ? true : blitzLaunched,
         nextQuestionStartedAt: resumedStartedAt,
         nextPausedRemaining: null,
         resetAnswers: false,
@@ -1526,6 +1576,7 @@ export default function AdminConsolePage() {
     const currentGame = selectedGameRef.current ?? selectedGame;
 
     setStatus("playing");
+    setBlitzLaunched(true);
     setBlitzRoundNumber(nextRound);
     setQuestionStartedAt(startedIso);
     setPausedRemainingSeconds(null);
@@ -1538,6 +1589,7 @@ export default function AdminConsolePage() {
       qrVisible: showQrOnTv,
       nextQuestionIndex: -1,
       nextBlitzRoundNumber: nextRound,
+      nextBlitzLaunched: true,
       nextQuestionStartedAt: startedIso,
       nextPausedRemaining: null,
       resetAnswers: false,
@@ -1681,6 +1733,7 @@ export default function AdminConsolePage() {
     );
 
     setSelectedGameId(gameId);
+    setBlitzLaunched(false);
     setSeriesSeed(nextSeed);
     setJusteChiffreQuestions(nextJcPicked);
     setQuestionIndex(-1);
@@ -1697,6 +1750,7 @@ export default function AdminConsolePage() {
       qrVisible: showQrOnTv,
       nextQuestionIndex: -1,
       nextBlitzRoundNumber: 0,
+      nextBlitzLaunched: false,
       nextQuestionStartedAt: null,
       nextPausedRemaining: null,
       nextSeriesSeed: nextSeed,
@@ -2095,7 +2149,7 @@ export default function AdminConsolePage() {
                   <span className="text-white font-medium">
                     {selectedGame?.title ?? "Aucun"}
                   </span>
-                  {isTargetBlitz && blitzRoundNumber > 0
+                  {isTargetBlitz && blitzLaunched && blitzRoundNumber > 0
                     ? ` • Manche ${blitzRoundNumber}`
                     : !isTargetBlitz && questionIndex >= 0
                     ? ` • Question ${questionIndex + 1} / ${totalQuestions}`
@@ -2139,7 +2193,9 @@ export default function AdminConsolePage() {
 
                   <span
                     className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wider shrink-0 ${
-                      status === "playing"
+                      onlyLaunchActiveOnBlitz
+                        ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
+                        : status === "playing"
                         ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
                         : status === "paused"
                         ? "bg-amber-500/20 text-amber-300 border border-amber-500/30"
@@ -2148,7 +2204,7 @@ export default function AdminConsolePage() {
                         : "bg-sky-500/20 text-sky-300 border border-sky-500/30"
                     }`}
                   >
-                    {status}
+                    {onlyLaunchActiveOnBlitz ? "prêt" : status}
                   </span>
                 </div>
               </div>
@@ -2157,7 +2213,11 @@ export default function AdminConsolePage() {
                 <div className="flex flex-col gap-3">
                   <button
                     type="button"
-                    disabled={!isGameLaunched || status !== "playing"}
+                    disabled={
+                      onlyLaunchActiveOnBlitz ||
+                      !isGameLaunched ||
+                      status !== "playing"
+                    }
                     onClick={() => void handleStatusChange("paused")}
                     className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-amber-500/20 hover:bg-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed text-amber-300 border border-amber-500/30 font-semibold transition"
                   >
@@ -2167,7 +2227,7 @@ export default function AdminConsolePage() {
 
                   <button
                     type="button"
-                    disabled={!isGameLaunched}
+                    disabled={onlyLaunchActiveOnBlitz || !isGameLaunched}
                     onClick={() => void handleStatusChange("finished")}
                     className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-rose-500/20 hover:bg-rose-500/30 disabled:opacity-40 disabled:cursor-not-allowed text-rose-300 border border-rose-500/30 font-semibold transition"
                   >
@@ -2180,8 +2240,9 @@ export default function AdminConsolePage() {
                   {isEndOfSeries ? (
                     <button
                       type="button"
+                      disabled={onlyLaunchActiveOnBlitz}
                       onClick={() => void handleRestartNewSeries()}
-                      className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-sky-500 hover:bg-sky-400 text-black font-semibold transition"
+                      className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-sky-500 hover:bg-sky-400 disabled:opacity-40 disabled:cursor-not-allowed text-black font-semibold transition"
                     >
                       <RotateCcw className="w-4 h-4" />
                       <span>Relancer</span>
@@ -2189,7 +2250,11 @@ export default function AdminConsolePage() {
                   ) : (
                     <button
                       type="button"
-                      disabled={status === "playing"}
+                      disabled={
+                        isTargetBlitz
+                          ? blitzLaunched && status === "playing"
+                          : status === "playing"
+                      }
                       onClick={() => void handleStatusChange("playing")}
                       className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-500/25 disabled:text-emerald-200/50 disabled:cursor-not-allowed text-black font-semibold transition"
                     >
@@ -2201,8 +2266,9 @@ export default function AdminConsolePage() {
                   {isTargetBlitz ? (
                     <button
                       type="button"
+                      disabled={onlyLaunchActiveOnBlitz}
                       onClick={() => void handleLaunchBlitzRound()}
-                      className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-fuchsia-500/25 hover:bg-fuchsia-500/35 text-fuchsia-200 border border-fuchsia-400/40 font-semibold transition"
+                      className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-fuchsia-500/25 hover:bg-fuchsia-500/35 disabled:opacity-40 disabled:cursor-not-allowed text-fuchsia-200 border border-fuchsia-400/40 font-semibold transition"
                     >
                       <SkipForward className="w-4 h-4" />
                       <span className="truncate">
@@ -2214,7 +2280,11 @@ export default function AdminConsolePage() {
                   ) : (
                     <button
                       type="button"
-                      disabled={!isGameLaunched || isEndOfSeries}
+                      disabled={
+                        onlyLaunchActiveOnBlitz ||
+                        !isGameLaunched ||
+                        isEndOfSeries
+                      }
                       onClick={() => void handleNextQuestion()}
                       className="flex items-center justify-center gap-2 py-3 px-4 rounded-2xl bg-white/10 hover:bg-white/20 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold transition"
                     >
@@ -2273,7 +2343,7 @@ export default function AdminConsolePage() {
             "catalog",
             "Catalogue des jeux",
             <Gamepad2 className="w-5 h-5 text-purple-400 shrink-0" />,
-            <div className="flex-1 flex flex-col gap-3">
+            <div className="flex-1 flex flex-col gap-2">
               <div className="flex items-center justify-between gap-2">
                 {isGameLaunched ? (
                   <span className="text-xs text-amber-300/90">
@@ -2288,7 +2358,7 @@ export default function AdminConsolePage() {
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex flex-col gap-1.5">
                 {games.map((game) => {
                   const isSelected = game.id === selectedGame?.id;
                   const isDisabledByGameRunning = isGameLaunched && !isSelected;
@@ -2302,7 +2372,7 @@ export default function AdminConsolePage() {
                         }
                       }}
                       aria-disabled={isDisabledByGameRunning}
-                      className={`rounded-2xl p-4 border transition flex flex-col justify-between gap-4 ${
+                      className={`rounded-xl px-3.5 py-2 border transition flex items-center justify-between gap-3 ${
                         isSelected
                           ? "bg-white/15 border-white/40 cursor-pointer"
                           : isDisabledByGameRunning
@@ -2310,53 +2380,44 @@ export default function AdminConsolePage() {
                           : "bg-black/30 border-white/10 hover:border-white/25 cursor-pointer"
                       }`}
                     >
-                      <div>
-                        <div className="flex items-center justify-between gap-2">
-                          <h3 className="font-semibold text-base">
-                            {game.title}
-                          </h3>
-                          <button
-                            type="button"
-                            disabled={isDisabledByGameRunning}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              if (!isDisabledByGameRunning) {
-                                handleToggleGameActive(game.id);
-                              }
-                            }}
-                            className="text-xs flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {game.is_active ? (
-                              <>
-                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                                <span className="text-emerald-300">Actif</span>
-                              </>
-                            ) : (
-                              <>
-                                <XCircle className="w-3.5 h-3.5 text-neutral-500" />
-                                <span className="text-neutral-400">
-                                  Inactif
-                                </span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                        {game.tagline && (
-                          <p className="text-xs text-neutral-400 mt-1">
-                            {game.tagline}
-                          </p>
-                        )}
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <span className="font-semibold text-sm truncate">
+                          {game.title}
+                        </span>
+                        <span className="text-xs text-neutral-400 shrink-0">
+                          • {game.min_players}–{game.max_players ?? "∞"} joueurs
+                        </span>
                       </div>
 
-                      <div className="flex items-center justify-between text-xs text-neutral-400 pt-2 border-t border-white/5">
-                        <span>
-                          {game.min_players}–{game.max_players ?? "∞"} joueurs
-                        </span>
+                      <div className="flex items-center gap-2 shrink-0">
                         {isSelected && (
-                          <span className="text-amber-400 font-medium">
+                          <span className="text-amber-400 font-medium text-xs">
                             Sélectionné
                           </span>
                         )}
+                        <button
+                          type="button"
+                          disabled={isDisabledByGameRunning}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (!isDisabledByGameRunning) {
+                              handleToggleGameActive(game.id);
+                            }
+                          }}
+                          className="text-xs flex items-center gap-1 px-2 py-1 rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {game.is_active ? (
+                            <>
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                              <span className="text-emerald-300">Actif</span>
+                            </>
+                          ) : (
+                            <>
+                              <XCircle className="w-3.5 h-3.5 text-neutral-500" />
+                              <span className="text-neutral-400">Inactif</span>
+                            </>
+                          )}
+                        </button>
                       </div>
                     </div>
                   );
