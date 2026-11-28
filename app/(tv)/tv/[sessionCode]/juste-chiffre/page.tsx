@@ -280,7 +280,7 @@ export default function TvJusteChiffrePage() {
   const isResettingScoresRef = useRef<boolean>(false);
   const activeQuestionKeyRef = useRef<string>("");
   const initialRemoteStartOnEnterRef = useRef<number | null>(null);
-  const roundEndScheduledRef = useRef<boolean>(false);
+  const revealTriggeredForQuestionRef = useRef<string>("");
   const revealAnimRunIdRef = useRef<string>("");
   const fxQuestionKeyRef = useRef<string>("");
   const podiumLockedSeriesRef = useRef<string>("");
@@ -852,7 +852,7 @@ export default function TvJusteChiffrePage() {
       if (isSeriesCompleted) return;
       activeQuestionKeyRef.current = "";
       initialRemoteStartOnEnterRef.current = null;
-      roundEndScheduledRef.current = false;
+      revealTriggeredForQuestionRef.current = "";
       revealAnimRunIdRef.current = "";
       fxQuestionKeyRef.current = "";
       setRoundStartMs(null);
@@ -880,7 +880,7 @@ export default function TvJusteChiffrePage() {
     if (activeQuestionKeyRef.current === questionKey) return;
     activeQuestionKeyRef.current = questionKey;
     initialRemoteStartOnEnterRef.current = remoteStartMs;
-    roundEndScheduledRef.current = false;
+    revealTriggeredForQuestionRef.current = "";
     revealAnimRunIdRef.current = "";
     fxQuestionKeyRef.current = "";
 
@@ -920,7 +920,7 @@ export default function TvJusteChiffrePage() {
       remoteStartMs !== initialRemoteStartOnEnterRef.current
     ) {
       initialRemoteStartOnEnterRef.current = remoteStartMs;
-      roundEndScheduledRef.current = false;
+      revealTriggeredForQuestionRef.current = "";
       setRoundStartMs(remoteStartMs);
       setNowMs(Date.now());
       setShowTopQuestion(true);
@@ -1008,8 +1008,7 @@ export default function TvJusteChiffrePage() {
 
   useEffect(() => {
     if (!isQuestionEnded || !questionKey || isSeriesCompleted) return;
-    if (roundEndScheduledRef.current) return;
-    roundEndScheduledRef.current = true;
+    if (revealTriggeredForQuestionRef.current === questionKey) return;
 
     setIsQuestionFadingOut(true);
 
@@ -1018,6 +1017,8 @@ export default function TvJusteChiffrePage() {
     }, POST_ZERO_FADE_MS);
 
     const revealWaitTimer = window.setTimeout(() => {
+      if (revealTriggeredForQuestionRef.current === questionKey) return;
+      revealTriggeredForQuestionRef.current = questionKey;
       setRevealTriggerCount((c) => c + 1);
     }, POST_ZERO_FADE_MS + POST_FADE_DELAY_MS);
 
